@@ -57,8 +57,16 @@ export type LlmResponse = {
   raw?: unknown;
 };
 
+type IdentityLimits = {
+  bindings: number;
+  labels: number;
+  idChars: number;
+  labelChars: number;
+};
+
 export class LlmClient {
   private maxOutputTokens = Number.POSITIVE_INFINITY;
+  private identityLimits: IdentityLimits | undefined;
 
   constructor(
     private readonly config: Config,
@@ -67,6 +75,7 @@ export class LlmClient {
 
   /** Checks capabilities and bounds shared config/output limits before Discord connects. */
   async initializeRemora() {
+    this.identityLimits = undefined;
     const response = await fetch(
       `${this.config.llmBaseUrl}/remora/capabilities`,
       {
@@ -80,6 +89,23 @@ export class LlmClient {
       );
     const capabilities = parseRemoraCapabilities(await response.json());
     const { features, limits } = capabilities;
+    let identityLimits: IdentityLimits | undefined;
+    if (features.entity_identity) {
+      const {
+        max_identity_bindings: bindings,
+        max_identity_labels: labels,
+        max_identity_id_chars: idChars,
+        max_identity_label_chars: labelChars,
+      } = limits;
+      if (
+        bindings === undefined ||
+        labels === undefined ||
+        idChars === undefined ||
+        labelChars === undefined
+      )
+        throw new Error("Remora entity identity requires all four limits");
+      identityLimits = { bindings, labels, idChars, labelChars };
+    }
     if (
       !features.memory ||
       !features.automatic_writes ||
@@ -124,6 +150,7 @@ export class LlmClient {
       this.config.llmThinkingMaxTokens,
       limits.max_output_tokens,
     );
+    this.identityLimits = identityLimits;
     return capabilities;
   }
 
@@ -146,6 +173,8 @@ export class LlmClient {
   }
 
   async complete(request: LlmRequest): Promise<LlmResponse> {
+    if (request.remora?.identity !== undefined)
+      this.validateIdentityLimits(request.remora.identity);
     const body: LlamaChatCompletionRequest = {
       model: this.settings?.getLlmModel() ?? this.config.llmModel,
       messages: request.messages,
@@ -202,6 +231,31 @@ export class LlmClient {
     if (json.timings) result.timings = json.timings;
     result.raw = json;
     return result;
+  }
+
+  private validateIdentityLimits(
+    identity: NonNullable<RemoraRequest["identity"]>,
+  ) {
+    const limits = this.identityLimits;
+    if (!limits)
+      throw new Error("Remora entity identity has not been negotiated");
+    const { bindings = [], labels = [] } = identity;
+    if (bindings.length > limits.bindings || labels.length > limits.labels)
+      throw new Error(
+        "Remora identity exceeds advertised binding or label limits",
+      );
+
+    const ids = bindings.flatMap(({ actor, entity }) => [actor.id, entity]);
+    if (identity.assistant) ids.push(identity.assistant.id);
+    for (const label of labels) {
+      ids.push(label.entity !== undefined ? label.entity : label.actor.id);
+      if (Array.from(label.label).length > limits.labelChars)
+        throw new Error(
+          "Remora identity label exceeds advertised character limit",
+        );
+    }
+    if (ids.some((id) => Array.from(id).length > limits.idChars))
+      throw new Error("Remora identity ID exceeds advertised character limit");
   }
 }
 

@@ -33,6 +33,7 @@
           "id": { "type": "string", "minLength": 1 }
         }
       },
+      "identity": { "$ref": "#/definitions/identity" },
       "turn": {
         "type": "object",
         "additionalProperties": false,
@@ -66,6 +67,83 @@
     "required": ["read_banks"]
   },
   "definitions": {
+    "identity_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "\\S"
+    },
+    "identity_label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "\\S"
+    },
+    "identity_speaker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bank", "id"],
+      "properties": {
+        "bank": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "id": { "$ref": "#/definitions/identity_id" }
+      }
+    },
+    "identity_actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bank", "role", "id"],
+      "properties": {
+        "bank": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "role": { "enum": ["human", "assistant"] },
+        "id": { "$ref": "#/definitions/identity_id" }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "assistant": { "$ref": "#/definitions/identity_speaker" },
+        "bindings": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["actor", "entity"],
+            "properties": {
+              "actor": { "$ref": "#/definitions/identity_actor" },
+              "entity": { "$ref": "#/definitions/identity_id" }
+            }
+          }
+        },
+        "labels": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["actor", "label"],
+                "properties": {
+                  "actor": { "$ref": "#/definitions/identity_actor" },
+                  "label": { "$ref": "#/definitions/identity_label" }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["entity", "label"],
+                "properties": {
+                  "entity": { "$ref": "#/definitions/identity_id" },
+                  "label": { "$ref": "#/definitions/identity_label" }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
     "fact_ref": {
       "type": "object",
       "additionalProperties": false,
@@ -80,6 +158,7 @@
     "write_bank_and_turn": "Both present or both absent. A writable destination must be independently granted; reading a bank grants no write permission.",
     "authorization": "Bearer-authenticated server policy grants banks and facts. Requests can only select or narrow those grants. speaker_id is attribution, never authentication.",
     "speaker": "Optional remora.speaker declares the current human's attribution scope: authenticated principal, speaker.bank and exact opaque speaker.id. IDs are not normalized or interpreted. Writable requests infer the same scope from write_bank and turn.speaker_id; an explicit conflicting bank or ID is a 400 speaker_binding_mismatch before inference or bank access. Speaker binding grants no reads, writes or flows and opens no additional bank. An unselected speaker bank can only supply an unmatched attribution scope. Missing identity remains unknown. Recall quotes preserve named third parties and grammatical subjects; a source author is not necessarily the subject. Attribution that changes rendered recall invalidates conditioned memory while compatible bare SYSTEM reuse remains possible.",
+    "identity": "Optional remora.identity requires features.entity_identity=true and all four valid advertised identity limits. Missing/false support forbids identity, including {}. Current human remains the existing local speaker; assistant={bank,id} separately designates the current local assistant. Explicit bindings map (principal,bank,role,id) to an entity ID in the server-derived principal namespace. Omitted bindings retain established targets; new bindings require a new writable source/revision for its current actors in the write bank and commit atomically with the receipt. Read-only calls cannot establish/retarget bindings; completed retries cannot retro-create them. Names are optional request-local labels, never identity joins or grants. Known conflicts reject before inference; commit rechecks conflicts atomically. Explicit assistant on a completed retry must match the recorded local bank/id exactly; legacy sources with no assistant record cannot acquire one through a retry. See entity-identity-proposal.md for the accepted lifecycle and source/subject distinction.",
     "recall": "Eligible refs are intersected with server grants and provenance restrictions before retrieval and every refresh. Missing allow means all otherwise permitted refs; allow=[] means none. deny further subtracts refs.",
     "cross_bank_writes": "Reading several banks does not authorize publishing their facts into the write bank. Server policy must grant source-bank to destination-bank flows; derived facts retain restrictive provenance. No implicit permission promotion.",
     "without_extension": "Ordinary generation with no bank access and no writes. No global default bank.",
@@ -132,6 +211,7 @@
           "source_revisions": { "type": "boolean" },
           "prefix_cache": { "type": "boolean" },
           "speaker_binding": { "type": "boolean" },
+          "entity_identity": { "type": "boolean" },
           "streaming": { "type": "boolean" },
           "tools": { "type": "boolean" },
           "thinking": { "type": "boolean" }
@@ -144,7 +224,49 @@
         "properties": {
           "context_tokens": { "type": "integer", "minimum": 1 },
           "max_output_tokens": { "type": "integer", "minimum": 1 },
-          "max_read_banks": { "const": 8 }
+          "max_read_banks": { "const": 8 },
+          "max_identity_bindings": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16
+          },
+          "max_identity_labels": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64
+          },
+          "max_identity_id_chars": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
+          },
+          "max_identity_label_chars": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 128
+          }
+        }
+      }
+    },
+    "if": {
+      "required": ["features"],
+      "properties": {
+        "features": {
+          "required": ["entity_identity"],
+          "properties": { "entity_identity": { "const": true } }
+        }
+      }
+    },
+    "then": {
+      "required": ["limits"],
+      "properties": {
+        "limits": {
+          "required": [
+            "max_identity_bindings",
+            "max_identity_labels",
+            "max_identity_id_chars",
+            "max_identity_label_chars"
+          ]
         }
       }
     }
@@ -173,6 +295,37 @@
       "context_tokens": 12288,
       "max_output_tokens": 256,
       "max_read_banks": 8
+    }
+  },
+  "identity_capabilities_example": {
+    "object": "remora.capabilities",
+    "version": 1,
+    "model": "gemma-4-e2b-it",
+    "backend": "transformers",
+    "profile": "gemma-reference-12288",
+    "source_binding": "final_user_message_exact",
+    "memory_delivery": "detached",
+    "features": {
+      "memory": true,
+      "automatic_writes": true,
+      "multi_bank": true,
+      "fact_filter": true,
+      "source_revisions": true,
+      "prefix_cache": true,
+      "speaker_binding": true,
+      "entity_identity": true,
+      "streaming": false,
+      "tools": false,
+      "thinking": false
+    },
+    "limits": {
+      "context_tokens": 12288,
+      "max_output_tokens": 256,
+      "max_read_banks": 8,
+      "max_identity_bindings": 16,
+      "max_identity_labels": 64,
+      "max_identity_id_chars": 256,
+      "max_identity_label_chars": 128
     }
   },
   "response_extension_schema": {
@@ -299,6 +452,33 @@
       "speaker": { "bank": "discord:dm:example", "id": "discord:user:example" }
     }
   },
+  "identity_request_example": {
+    "model": "gemma-4-e2b-it",
+    "messages": [{ "role": "user", "content": "I have a dog." }],
+    "temperature": 0,
+    "max_tokens": 64,
+    "cache_prompt": true,
+    "remora": {
+      "read_banks": ["place:a"],
+      "write_bank": "place:a",
+      "turn": {
+        "id": "event:1",
+        "revision": 0,
+        "speaker_id": "local:7",
+        "text": "I have a dog."
+      },
+      "identity": {
+        "assistant": { "bank": "place:a", "id": "account:helper" },
+        "bindings": [
+          {
+            "actor": { "bank": "place:a", "role": "human", "id": "local:7" },
+            "entity": "person:alpha"
+          }
+        ],
+        "labels": [{ "entity": "person:alpha", "label": "Alex" }]
+      }
+    }
+  },
   "response_example": {
     "id": "chatcmpl-example",
     "object": "chat.completion",
@@ -344,6 +524,72 @@
     }
   },
   "error_examples": [
+    {
+      "status": 400,
+      "body": {
+        "error": {
+          "message": "The writable assistant must belong to the write bank",
+          "type": "invalid_request_error",
+          "param": "remora.identity.assistant",
+          "code": "identity_actor_mismatch"
+        }
+      }
+    },
+    {
+      "status": 400,
+      "body": {
+        "error": {
+          "message": "The binding must refer to a selected read bank or the write bank",
+          "type": "invalid_request_error",
+          "param": "remora.identity.bindings",
+          "code": "identity_scope_invalid"
+        }
+      }
+    },
+    {
+      "status": 400,
+      "body": {
+        "error": {
+          "message": "Only one label may be supplied for a resolved identity",
+          "type": "invalid_request_error",
+          "param": "remora.identity.labels",
+          "code": "identity_label_conflict"
+        }
+      }
+    },
+    {
+      "status": 409,
+      "body": {
+        "error": {
+          "message": "The actor already has a different entity binding",
+          "type": "invalid_request_error",
+          "param": "remora.identity.bindings",
+          "code": "identity_binding_conflict"
+        }
+      }
+    },
+    {
+      "status": 409,
+      "body": {
+        "error": {
+          "message": "This request cannot establish the actor binding",
+          "type": "invalid_request_error",
+          "param": "remora.identity.bindings",
+          "code": "identity_binding_not_established"
+        }
+      }
+    },
+    {
+      "status": 409,
+      "body": {
+        "error": {
+          "message": "The completed source has a different assistant attribution",
+          "type": "invalid_request_error",
+          "param": "remora.identity.assistant",
+          "code": "source_identity_conflict"
+        }
+      }
+    },
     {
       "status": 400,
       "body": {

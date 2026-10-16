@@ -1,11 +1,28 @@
 import { Schema } from "effect";
 
+type IdentityActor = {
+  bank: string;
+  role: "human" | "assistant";
+  id: string;
+};
+
+/** Caller-owned actor associations and presentation labels; never grants access. */
+export type RemoraIdentity = {
+  assistant?: { bank: string; id: string };
+  bindings?: Array<{ actor: IdentityActor; entity: string }>;
+  labels?: Array<
+    | { actor: IdentityActor; entity?: never; label: string }
+    | { entity: string; actor?: never; label: string }
+  >;
+};
+
 /** Optional Remora controls; bank selection never grants recall permission. */
 export type RemoraRequest = {
   read_banks: string[];
   write_bank?: string;
   /** Current human attribution; inferred from write_bank + turn when writable. Never grants access. */
   speaker?: { bank: string; id: string };
+  identity?: RemoraIdentity;
   turn?: {
     id: string;
     revision: number;
@@ -92,6 +109,7 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     source_revisions: Schema.Boolean,
     prefix_cache: Schema.Boolean,
     speaker_binding: Schema.optional(Schema.Boolean),
+    entity_identity: Schema.optional(Schema.Boolean),
     streaming: Schema.Boolean,
     tools: Schema.Boolean,
     thinking: Schema.Boolean,
@@ -100,6 +118,18 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     context_tokens: PositiveInteger,
     max_output_tokens: PositiveInteger,
     max_read_banks: Schema.Literal(8),
+    max_identity_bindings: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(16)),
+    ),
+    max_identity_labels: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(64)),
+    ),
+    max_identity_id_chars: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(256)),
+    ),
+    max_identity_label_chars: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(128)),
+    ),
   }),
 });
 
