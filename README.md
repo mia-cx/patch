@@ -34,8 +34,8 @@ the assembled instructions, output tokens, and template/tool headroom. On
 overflow, Patch moves the boundary forward to retain roughly half the available
 conversation tokens, then grows from there again.
 
-Fixed instructions precede history; participant and classifier metadata follow
-it so new turns preserve the prompt prefix for llama.cpp's `cache_prompt`.
+Fixed instructions precede history to preserve the prompt prefix for
+llama.cpp's `cache_prompt`.
 Boundaries survive Patch restarts; KV cache retention belongs to the model
 server. The optional classifier's short decision input does not trim response
 history. Summarization is deferred while we evaluate Remora across resets.
@@ -77,10 +77,10 @@ logged; a writer failure preserves the generated reply and logs the failure.
 The shared contract snapshot is [remora-contract-v1.json](spec/fixtures/remora-contract-v1.json).
 It matches Remora commit `59886116b4053b7abca2913e13fc3eac3cdf61db` semantically;
 only JSON formatting differs.
-[remora-patch-request.json](spec/fixtures/remora-patch-request.json) is a sanitized
-request with Patch's actual persona and fictional history for backend context
-measurements. The real TypeScript client smoke passed against the isolated HF
-`gemma-reference-12288` service on 2026-10-16: both full-persona calls returned
+[remora-patch-request.json](spec/fixtures/remora-patch-request.json) is the archived
+qualification request with Patch's actual persona and fictional history in the
+original transcript format. The real TypeScript client smoke passed against the
+isolated HF `gemma-reference-12288` service on 2026-10-16: both full-persona calls returned
 nonempty replies, selected synthetic fact 1, and replayed an identical successful
 write result while changing only the output allowance from 128 to 64 tokens.
 [The recorded responses](spec/remora-http-smoke-2026-10-16.json) contain no credentials.
