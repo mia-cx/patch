@@ -37,7 +37,13 @@ export const resetContextAction: Action<typeof ResetArgs.Type> = {
           outcome.status === "failed"
             ? "couldn't reset context. try again."
             : outcome.reason;
-        if (interaction.deferred || interaction.replied) {
+        if (interaction.replied) {
+          await interaction.followUp({
+            content,
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: NO_MENTIONS,
+          });
+        } else if (interaction.deferred) {
           await interaction.editReply({
             content,
             allowedMentions: NO_MENTIONS,
@@ -63,13 +69,26 @@ export const resetContextAction: Action<typeof ResetArgs.Type> = {
     // success, and queued pre-reset turns are rejected by the persisted boundary.
     await context.queue.add(
       () =>
-        context.contextStore.resetAfterConfirmation(channelId, () =>
-          interaction.editReply({
+        context.contextStore.resetAfterConfirmation(channelId, async () => {
+          // Editing the deferred reply keeps its invocation-time ID. Finalize
+          // and remove it, then send a fresh success message to obtain a cutoff
+          // ordered by Discord itself, without assuming our clock matches theirs.
+          await interaction.editReply({
+            content: "resetting context…",
+            allowedMentions: NO_MENTIONS,
+          });
+          await interaction.deleteReply();
+          const confirmation = await interaction.followUp({
             content:
               "context reset. your next message starts a new conversation.",
+            flags: MessageFlags.Ephemeral,
             allowedMentions: NO_MENTIONS,
-          }),
-        ),
+          });
+          return {
+            id: confirmation.id,
+            retract: () => interaction.webhook.deleteMessage(confirmation.id),
+          };
+        }),
       { priority: "leave", bucketKey: channelId },
     );
     context.logger.info(
