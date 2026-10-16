@@ -87,13 +87,21 @@ metadata and a matching write receipt. Receipts and observed cache reuse are
 logged; a writer failure preserves the generated reply and logs the failure.
 
 The shared contract snapshot is [remora-contract-v1.json](spec/fixtures/remora-contract-v1.json).
-It matches Remora commit `a8a34dbdf479c1fff9530eff7f0e2eda5edacce7` semantically;
+It matches Remora commit `9a63c85ea04b1635cb476273b7e4a5d5e93e3f98` semantically;
 only JSON formatting differs.
 Read-only callers may supply `remora.speaker: { bank, id }` to identify the current
 human's attribution scope. The ID is opaque and grants no access; writable turns
 infer that scope from `write_bank` and `turn.speaker_id`. The optional
-`features.speaker_binding` capability is decoded when present. The DM trial remains
-paused for recall ownership validation; this contract update qualifies transport.
+`features.speaker_binding` capability is decoded when present.
+Capabilities also retain optional `memory_delivery: "detached" | "native-cache"`.
+Delivery is selected by the service, with detached as its default. HF native-cache
+feeds recalled source blocks through ordinary token/KV input and remains
+`backend: "transformers"`; its profile is `gemma-reference-12288-native-cache`.
+The actual read-only TypeScript diagnostic agrees with the captured ownership
+improvement, but still produces irrelevant recall and an indirect name answer.
+See Remora's [speaker and delivery guide](https://github.com/mia-cx/remora/blob/8b0642fd48f26c6723a21f0aff0b0bf9241ee1e7/docs/api/source-speaker-and-delivery.md)
+for the failed foreign/legacy ownership and other qualification controls.
+The trial remains paused.
 [remora-patch-request.json](spec/fixtures/remora-patch-request.json) is the archived
 qualification request with Patch's actual persona and fictional history in the
 original transcript format. The real TypeScript client smoke passed against the

@@ -59,10 +59,15 @@ Mia's source identity, but first-person recall lets Patch claim them as her own.
 Preserve the existing facts and receipts while testing explicit source-speaker
 binding in the Remora harness; Patch's chat roles do not solve recall ownership.
 Patch supports the optional `speaker: {bank, id}` attribution field and optional
-speaker-binding capability from contract `a8a34db`. Writable turns infer identity
+speaker-binding capability from contract `9a63c85`. Writable turns infer identity
 from their existing source tuple. This qualifies transport only: detached recall
-still fails ownership controls. Remora is testing an explicit opt-in ordinary-KV
-memory delivery mode; its default remains detached, with no trial switch approved.
+still fails ownership controls. Capabilities disclose optional `memory_delivery`.
+The opt-in HF `native-cache` mode delivers recall through ordinary token/KV input;
+the service default remains detached. The real read-only TypeScript diagnostic
+matches the captured ownership improvement and 7,310-token SYSTEM reuse, preserving
+both bank copies and policies. Irrelevant recall, indirect name answers and failed
+foreign/legacy ownership and subject controls keep the trial paused. No delivery
+switch or bot resume is approved; see Remora's [qualification status](https://github.com/mia-cx/remora/blob/8b0642fd48f26c6723a21f0aff0b0bf9241ee1e7/docs/api/source-speaker-and-delivery.md).
 The measured synthetic Patch request already uses 8,770 rendered Gemma tokens
 before Remora framing/output, so an 8,192-token profile is insufficient.
 
