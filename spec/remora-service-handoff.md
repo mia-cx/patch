@@ -22,8 +22,12 @@ Remora recall across those resets before adding compaction. Preserve edits and
 deletions in the active history; accept the resulting cache recomputation.
 
 The requested bank-selection and fact-permission capability is decided. The
-precise extension field names and permission representation below are a starting
-contract to finalize against the core, not an already implemented API.
+contract is now frozen in Remora's `docs/api/contract-v1.json`; Patch keeps a
+test snapshot at `spec/fixtures/remora-contract-v1.json`. That fixture supersedes
+the illustrative request below. It requires a raw final user message exactly
+equal to `turn.text`, a stable `turn.id`, and an integer edit `turn.revision`.
+Patch's opt-in DM client implements that contract; real backend validation is
+still required. The remaining implementation assignment below belongs to Remora.
 
 ## Read before implementation
 
