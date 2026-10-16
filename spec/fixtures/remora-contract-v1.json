@@ -1,0 +1,377 @@
+{
+  "version": 1,
+  "kind": "Shared contract examples and schemas; not a running-backend capability claim",
+  "source_binding": {
+    "mode": "final_user_message_exact",
+    "description": "Before model rendering, messages[-1] must have role=user and string content equal to remora.turn.text. Caller history contains the current turn only in that final message. Rendering may merge adjacent equal roles with blank lines, without invented assistant turns. Only turn.text is a new write source.",
+    "identity": [
+      "authenticated principal",
+      "write_bank",
+      "turn.id",
+      "turn.revision"
+    ],
+    "revision": "Nonnegative integer. Initial revision is 0; edits use a greater source version, such as the edited timestamp. Generation parameters do not change source identity. Changed text/speaker under an existing revision is a 409 source_conflict; older revisions are 409 stale_source_revision. A higher revision supersedes the previous source and invalidates affected memories and reuse.",
+    "retry": "A completed source write receipt is durable. Fallback generations may produce another answer, but cannot add, reinforce or extract the same source revision again. Write failures are receipts too."
+  },
+  "request_extension": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "read_banks": {
+        "type": "array",
+        "uniqueItems": true,
+        "maxItems": 8,
+        "items": { "type": "string", "minLength": 1 }
+      },
+      "write_bank": { "type": "string", "minLength": 1 },
+      "turn": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "revision", "speaker_id", "text"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "revision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "speaker_id": { "type": "string", "minLength": 1 },
+          "text": { "type": "string", "minLength": 1 }
+        }
+      },
+      "recall": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allow": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/fact_ref" }
+          },
+          "deny": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/fact_ref" }
+          }
+        }
+      }
+    },
+    "required": ["read_banks"]
+  },
+  "definitions": {
+    "fact_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bank", "id"],
+      "properties": {
+        "bank": { "type": "string", "minLength": 1 },
+        "id": { "type": "integer", "minimum": 1 }
+      }
+    }
+  },
+  "rules": {
+    "write_bank_and_turn": "Both present or both absent. A writable destination must be independently granted; reading a bank grants no write permission.",
+    "authorization": "Bearer-authenticated server policy grants banks and facts. Requests can only select or narrow those grants. speaker_id is attribution, never authentication.",
+    "recall": "Eligible refs are intersected with server grants and provenance restrictions before retrieval and every refresh. Missing allow means all otherwise permitted refs; allow=[] means none. deny further subtracts refs.",
+    "cross_bank_writes": "Reading several banks does not authorize publishing their facts into the write bank. Server policy must grant source-bank to destination-bank flows; derived facts retain restrictive provenance. No implicit permission promotion.",
+    "without_extension": "Ordinary generation with no bank access and no writes. No global default bank.",
+    "unsupported": "Explicit OpenAI-shaped errors; unsupported tools, thinking, multimodal content, nonzero temperature and streaming are not silently ignored by the first HF backend.",
+    "cache_prompt": "Boolean reuse request. false disables reuse. true requires a backend advertising prefix_cache and returns observed token counts, not a reuse guarantee. State changes, edits or context resets may legitimately yield zero reuse.",
+    "cancellation": "Before inference completes, cancellation commits no automatic write. Nonstreaming write and receipt commit atomically before sending the completed response. A disconnect after commit is retried with the same source identity.",
+    "history": "The supplied messages are the entire real-token generation history. No independent hidden history, silent eviction or resurrection of caller-discarded turns. Over-budget input is rejected explicitly."
+  },
+  "capabilities_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "object",
+      "version",
+      "model",
+      "backend",
+      "profile",
+      "features",
+      "limits",
+      "source_binding"
+    ],
+    "properties": {
+      "object": { "const": "remora.capabilities" },
+      "version": { "const": 1 },
+      "model": { "type": "string" },
+      "backend": { "enum": ["transformers", "llama.cpp"] },
+      "profile": { "type": "string" },
+      "source_binding": { "const": "final_user_message_exact" },
+      "features": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "memory",
+          "automatic_writes",
+          "multi_bank",
+          "fact_filter",
+          "source_revisions",
+          "prefix_cache",
+          "streaming",
+          "tools",
+          "thinking"
+        ],
+        "properties": {
+          "memory": { "type": "boolean" },
+          "automatic_writes": { "type": "boolean" },
+          "multi_bank": { "type": "boolean" },
+          "fact_filter": { "type": "boolean" },
+          "source_revisions": { "type": "boolean" },
+          "prefix_cache": { "type": "boolean" },
+          "streaming": { "type": "boolean" },
+          "tools": { "type": "boolean" },
+          "thinking": { "type": "boolean" }
+        }
+      },
+      "limits": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["context_tokens", "max_output_tokens", "max_read_banks"],
+        "properties": {
+          "context_tokens": { "type": "integer", "minimum": 1 },
+          "max_output_tokens": { "type": "integer", "minimum": 1 },
+          "max_read_banks": { "const": 8 }
+        }
+      }
+    }
+  },
+  "capabilities_example": {
+    "object": "remora.capabilities",
+    "version": 1,
+    "model": "gemma-4-e2b-it",
+    "backend": "transformers",
+    "profile": "gemma-reference-448",
+    "source_binding": "final_user_message_exact",
+    "features": {
+      "memory": true,
+      "automatic_writes": true,
+      "multi_bank": true,
+      "fact_filter": true,
+      "source_revisions": true,
+      "prefix_cache": true,
+      "streaming": false,
+      "tools": false,
+      "thinking": false
+    },
+    "limits": {
+      "context_tokens": 448,
+      "max_output_tokens": 64,
+      "max_read_banks": 8
+    }
+  },
+  "response_extension_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "version",
+      "backend",
+      "read_banks",
+      "selected",
+      "writes",
+      "cache"
+    ],
+    "properties": {
+      "version": { "const": 1 },
+      "backend": { "enum": ["transformers", "llama.cpp"] },
+      "read_banks": { "type": "array", "items": { "type": "string" } },
+      "selected": {
+        "type": "array",
+        "items": { "$ref": "#/definitions/fact_ref" }
+      },
+      "writes": {
+        "oneOf": [
+          { "type": "null" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["bank", "source_id", "revision", "replayed", "result"],
+            "properties": {
+              "bank": { "type": "string" },
+              "source_id": { "type": "string" },
+              "revision": { "type": "integer", "minimum": 0 },
+              "replayed": { "type": "boolean" },
+              "result": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "saved",
+                  "reinforced",
+                  "superseded",
+                  "forgotten",
+                  "error",
+                  "unmatched_forget"
+                ],
+                "properties": {
+                  "saved": {
+                    "type": "array",
+                    "items": { "type": "integer", "minimum": 1 }
+                  },
+                  "reinforced": {
+                    "type": "array",
+                    "items": { "type": "integer", "minimum": 1 }
+                  },
+                  "superseded": {
+                    "type": "array",
+                    "items": { "type": "integer", "minimum": 1 }
+                  },
+                  "forgotten": {
+                    "type": "array",
+                    "items": { "type": "integer", "minimum": 1 }
+                  },
+                  "error": { "type": ["string", "null"] },
+                  "unmatched_forget": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "cache": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requested",
+          "reused_tokens",
+          "evaluated_tokens",
+          "invalidated"
+        ],
+        "properties": {
+          "requested": { "type": "boolean" },
+          "reused_tokens": { "type": "integer", "minimum": 0 },
+          "evaluated_tokens": { "type": "integer", "minimum": 0 },
+          "invalidated": { "type": ["string", "null"] }
+        }
+      }
+    }
+  },
+  "request_example": {
+    "model": "gemma-4-e2b-it",
+    "messages": [
+      {
+        "role": "system",
+        "content": "Answer briefly. The final user message is the new turn."
+      },
+      {
+        "role": "user",
+        "content": "Prior caller-owned transcript and participant context."
+      },
+      { "role": "user", "content": "My piano teacher is Elin." }
+    ],
+    "temperature": 0,
+    "max_tokens": 64,
+    "cache_prompt": true,
+    "chat_template_kwargs": { "enable_thinking": false },
+    "remora": {
+      "read_banks": ["discord:dm:example"],
+      "write_bank": "discord:dm:example",
+      "turn": {
+        "id": "discord:message:example",
+        "revision": 0,
+        "speaker_id": "discord:user:example",
+        "text": "My piano teacher is Elin."
+      }
+    }
+  },
+  "response_example": {
+    "id": "chatcmpl-example",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "gemma-4-e2b-it",
+    "choices": [
+      {
+        "index": 0,
+        "message": { "role": "assistant", "content": "Got it." },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 100,
+      "completion_tokens": 3,
+      "total_tokens": 103
+    },
+    "remora": {
+      "version": 1,
+      "backend": "transformers",
+      "read_banks": ["discord:dm:example"],
+      "selected": [],
+      "writes": {
+        "bank": "discord:dm:example",
+        "source_id": "discord:message:example",
+        "revision": 0,
+        "replayed": false,
+        "result": {
+          "saved": [1],
+          "reinforced": [],
+          "superseded": [],
+          "forgotten": [],
+          "error": null,
+          "unmatched_forget": false
+        }
+      },
+      "cache": {
+        "requested": true,
+        "reused_tokens": 0,
+        "evaluated_tokens": 103,
+        "invalidated": null
+      }
+    }
+  },
+  "error_examples": [
+    {
+      "status": 400,
+      "body": {
+        "error": {
+          "message": "The final user message must equal remora.turn.text",
+          "type": "invalid_request_error",
+          "param": "remora.turn.text",
+          "code": "source_binding_mismatch"
+        }
+      }
+    },
+    {
+      "status": 403,
+      "body": {
+        "error": {
+          "message": "The selected bank is not authorized",
+          "type": "permission_error",
+          "param": "remora.read_banks",
+          "code": "bank_forbidden"
+        }
+      }
+    },
+    {
+      "status": 409,
+      "body": {
+        "error": {
+          "message": "The source revision has different text or speaker",
+          "type": "invalid_request_error",
+          "param": "remora.turn",
+          "code": "source_conflict"
+        }
+      }
+    },
+    {
+      "status": 409,
+      "body": {
+        "error": {
+          "message": "A newer source revision already exists",
+          "type": "invalid_request_error",
+          "param": "remora.turn.revision",
+          "code": "stale_source_revision"
+        }
+      }
+    },
+    {
+      "status": 400,
+      "body": {
+        "error": {
+          "message": "The backend does not support the requested feature",
+          "type": "invalid_request_error",
+          "param": "tools",
+          "code": "unsupported_feature"
+        }
+      }
+    }
+  ]
+}

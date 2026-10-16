@@ -16,6 +16,7 @@
     "db:migrate": "drizzle-kit migrate",
     "fix": "biome check --write .",
     "test": "vitest run",
+    "remora:smoke": "tsx test/remora-smoke.ts",
     "test:watch": "vitest"
   },
   "dependencies": {

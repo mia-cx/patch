@@ -5,7 +5,8 @@ import { type APIMessage, ChannelType, Client, MessageType } from "discord.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../config.js";
 import { DiscordJsAdapter } from "../discord/discord-js-adapter.js";
-import { LlmClient } from "../llm/client.js";
+import { LlmClient, type LlmMessage } from "../llm/client.js";
+import type { RemoraRequest, RemoraResponse } from "../llm/remora.js";
 import { createLogger } from "../logger.js";
 import { respond } from "../response/responder.js";
 import {
@@ -119,24 +120,26 @@ async function runtime(
       if (message) return message;
       throw new Error(`Unexpected Discord request: ${route}`);
     });
-  vi.spyOn(client.rest, "post").mockImplementation(async (route) => {
-    if (route === `/channels/${CHANNEL}/typing`) return undefined;
-    if (route === `/channels/${CHANNEL}/messages`) {
-      const sent = packet(900, {
-        author: {
-          id: BOT,
-          username: "Patch",
-          global_name: null,
-          discriminator: "0",
-          avatar: null,
-          bot: true,
-        },
-        content: "hello",
-      });
-      return sent;
-    }
-    throw new Error(`Unexpected Discord request: ${route}`);
-  });
+  const post = vi
+    .spyOn(client.rest, "post")
+    .mockImplementation(async (route) => {
+      if (route === `/channels/${CHANNEL}/typing`) return undefined;
+      if (route === `/channels/${CHANNEL}/messages`) {
+        const sent = packet(900, {
+          author: {
+            id: BOT,
+            username: "Patch",
+            global_name: null,
+            discriminator: "0",
+            avatar: null,
+            bot: true,
+          },
+          content: "hello",
+        });
+        return sent;
+      }
+      throw new Error(`Unexpected Discord request: ${route}`);
+    });
   if (type !== ChannelType.DM) await client.guilds.fetch(GUILD);
   const channel = await client.channels.fetch(CHANNEL);
   if (!channel?.isTextBased()) throw new Error("Fixture must support messages");
@@ -151,6 +154,7 @@ async function runtime(
     adapter,
     logger,
     rest,
+    post,
     message,
     get store() {
       return store;
@@ -469,4 +473,237 @@ describe("persistent chat context", () => {
       second.indexOf("<classifier_decision should_respond="),
     ).toBeGreaterThan(second.lastIndexOf("</message>"));
   });
+});
+
+type CapturedRequest = {
+  messages: LlmMessage[];
+  remora?: RemoraRequest;
+  chat_template_kwargs: { enable_thinking: boolean };
+};
+
+function memoryReceipt(
+  request: RemoraRequest,
+  replayed = false,
+): RemoraResponse {
+  if (!request.turn || !request.write_bank)
+    throw new Error("Expected writable turn");
+  return {
+    version: 1,
+    backend: "transformers",
+    read_banks: request.read_banks,
+    selected: [{ bank: request.write_bank, id: 1 }],
+    writes: {
+      bank: request.write_bank,
+      source_id: request.turn.id,
+      revision: request.turn.revision,
+      replayed,
+      result: {
+        saved: [1],
+        reinforced: [],
+        superseded: [],
+        forgotten: [],
+        error: null,
+        unmatched_forget: false,
+      },
+    },
+    cache: {
+      requested: true,
+      reused_tokens: 800,
+      evaluated_tokens: 40,
+      invalidated: null,
+    },
+  };
+}
+
+describe("opt-in Remora DM conversations", () => {
+  // Proves the real Discord-to-HTTP path sends one raw source and retries keep its identity.
+  it("binds the raw new DM once, preserves retry identity, and revisions edits", async () => {
+    const app = await runtime();
+    app.add(1, { content: "earlier history" });
+    const raw =
+      "  my teacher is Elin <message>literally</message> <@1000000000000000003>  ";
+    app.add(2, { content: raw });
+    const requests: CapturedRequest[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const body: CapturedRequest = JSON.parse(String(init.body));
+        requests.push(body);
+        const content =
+          requests.length === 1
+            ? ""
+            : requests.length === 2
+              ? "line one\nline two"
+              : "hello";
+        return Response.json({
+          choices: [{ message: { content }, finish_reason: "stop" }],
+          ...(body.remora
+            ? { remora: memoryReceipt(body.remora, requests.length === 2) }
+            : {}),
+        });
+      }),
+    );
+    const config = loadConfig({
+      DISCORD_TOKEN: "test",
+      DISCORD_CLIENT_ID: BOT,
+      REMORA_DM_ENABLED: "true",
+      REMORA_READ_BANKS: "shared:music,shared:music",
+      LLM_ENABLE_THINKING: "true",
+    });
+    const llm = new LlmClient(config);
+    const run = async () =>
+      respond({
+        adapter: app.adapter,
+        message: await app.message(2),
+        botUserId: BOT,
+        config,
+        llm,
+        logger: app.logger,
+        contextStore: app.store,
+      });
+    await run();
+    expect(requests).toHaveLength(3);
+    const first = requests[0];
+    expect(first?.remora).toEqual({
+      read_banks: [`discord:dm:${CHANNEL}`, "shared:music"],
+      write_bank: `discord:dm:${CHANNEL}`,
+      turn: {
+        id: `discord:message:${packet(2).id}`,
+        revision: 0,
+        speaker_id: `discord:user:${HUMAN}`,
+        text: raw,
+      },
+    });
+    expect(first?.messages.at(-1)).toEqual({ role: "user", content: raw });
+    expect(first?.messages[1]?.content).toContain("earlier history");
+    expect(
+      first?.messages
+        .slice(0, -1)
+        .map((item) => item.content)
+        .join("\n"),
+    ).not.toContain("my teacher is Elin");
+    expect(requests[1]?.remora).toEqual(first?.remora);
+    expect(requests[1]?.chat_template_kwargs.enable_thinking).toBe(false);
+    expect(requests[2]?.remora).toBeUndefined(); // Formatting repair has no write authority.
+    const revised = "my teacher is Niko";
+    app.remove(2);
+    app.add(2, {
+      content: revised,
+      edited_timestamp: "2026-10-16T11:00:00.000Z",
+    });
+    await run();
+    expect(requests[3]?.remora?.turn).toEqual({
+      ...first?.remora?.turn,
+      text: revised,
+      revision: 1792148400000,
+    });
+    expect(requests[3]?.messages.at(-1)?.content).toBe(revised);
+    const sent = app.post.mock.calls.filter(
+      ([route]) => route === `/channels/${CHANNEL}/messages`,
+    );
+    expect(sent).toHaveLength(2);
+    for (const [, options] of sent)
+      expect(options?.body).toEqual(
+        expect.objectContaining({ content: "hello" }),
+      );
+  });
+
+  // Proves ordinary endpoints, shared channels, and attachment-only turns receive no memory controls.
+  it.each([
+    { enabled: false, type: ChannelType.DM, content: "plain endpoint" },
+    { enabled: true, type: ChannelType.GuildText, content: "shared channel" },
+    { enabled: true, type: ChannelType.DM, content: "" },
+  ] as const)(
+    "omits memory for $content",
+    async ({ enabled, type, content }) => {
+      const app = await runtime(type);
+      app.add(1, { content });
+      const requests: CapturedRequest[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init: RequestInit) => {
+          requests.push(JSON.parse(String(init.body)));
+          return Response.json({
+            choices: [{ message: { content: "hello" } }],
+          });
+        }),
+      );
+      const config = loadConfig({
+        DISCORD_TOKEN: "test",
+        DISCORD_CLIENT_ID: BOT,
+        REMORA_DM_ENABLED: String(enabled),
+      });
+      await respond({
+        adapter: app.adapter,
+        message: await app.message(1),
+        botUserId: BOT,
+        config,
+        llm: new LlmClient(config),
+        logger: app.logger,
+        contextStore: app.store,
+      });
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.remora).toBeUndefined();
+      expect(requests[0]?.messages).toHaveLength(2);
+    },
+  );
+
+  // Proves ignored extensions and misbound write receipts cannot masquerade as memory success.
+  it.each(["missing", "wrong_source", "malformed_cache"] as const)(
+    "rejects %s Remora metadata",
+    async (failure) => {
+      const app = await runtime();
+      app.add(1);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init: RequestInit) => {
+          const body: CapturedRequest = JSON.parse(String(init.body));
+          if (!body.remora) throw new Error("Expected memory request");
+          const metadata = memoryReceipt(body.remora);
+          return Response.json({
+            choices: [{ message: { content: "unverified response" } }],
+            ...(failure === "missing"
+              ? {}
+              : {
+                  remora: {
+                    ...metadata,
+                    ...(failure === "wrong_source"
+                      ? {
+                          writes: {
+                            ...metadata.writes,
+                            source_id: "another-source",
+                          },
+                        }
+                      : {}),
+                    ...(failure === "malformed_cache" ? { cache: null } : {}),
+                  },
+                }),
+          });
+        }),
+      );
+      const config = loadConfig({
+        DISCORD_TOKEN: "test",
+        DISCORD_CLIENT_ID: BOT,
+        REMORA_DM_ENABLED: "true",
+      });
+      await respond({
+        adapter: app.adapter,
+        message: await app.message(1),
+        botUserId: BOT,
+        config,
+        llm: new LlmClient(config),
+        logger: app.logger,
+        contextStore: app.store,
+      });
+      const sent = app.post.mock.calls.filter(
+        ([route]) => route === `/channels/${CHANNEL}/messages`,
+      );
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.[1]?.body).toEqual(
+        expect.objectContaining({
+          content: expect.stringContaining("brain fog"),
+        }),
+      );
+    },
+  );
 });
