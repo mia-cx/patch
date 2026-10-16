@@ -16,6 +16,7 @@ import {
   escapeAttribute,
   escapeTranscriptText,
 } from "../conversation/escape.js";
+import { buildRemoraRequest } from "../conversation/remora.js";
 import type { ConversationContextStore } from "../conversation/store.js";
 import {
   buildTranscript,
@@ -35,6 +36,7 @@ import type {
   LlmResponse,
   LlmTool,
 } from "../llm/client.js";
+import type { RemoraRequest } from "../llm/remora.js";
 import type { Logger } from "../logger.js";
 import {
   type ResponseTranscriptMode,
@@ -112,8 +114,15 @@ export async function respond(options: RespondOptions): Promise<void> {
         },
       ));
     const transcript = buildTranscript(chain, botUserId);
+    const remora = buildRemoraRequest(config, message);
+    const history = remora
+      ? {
+          ...transcript,
+          blocks: transcript.blocks.filter((block) => block.id !== message.id),
+        }
+      : transcript;
     const transcriptText = withClassifierDecisionBlock(
-      formatTranscript(transcript),
+      formatTranscript(history),
       classifierDecision,
     );
 
@@ -133,6 +142,7 @@ export async function respond(options: RespondOptions): Promise<void> {
       transcriptText,
       getResponseTranscriptMode(message),
       availableActionsPrompt,
+      remora?.turn?.text,
     );
 
     if (config.llmTraceLogging) {
@@ -160,8 +170,20 @@ export async function respond(options: RespondOptions): Promise<void> {
         thinkingMaxTokens: config.llmThinkingMaxTokens,
         thinkingTimeoutMs: config.llmThinkingTimeoutMs,
         tools,
+        ...(remora ? { remora } : {}),
       });
       const { response } = generated;
+      if (response.remora) {
+        const receipt = response.remora.writes;
+        if (receipt?.result.error) {
+          log.warn(
+            { remora: response.remora },
+            "Remora automatic write failed",
+          );
+        } else {
+          log.info({ remora: response.remora }, "Remora response received");
+        }
+      }
 
       if (response.toolCalls?.length) {
         await executeToolCalls({
@@ -328,6 +350,7 @@ async function generateResponse(options: {
   thinkingMaxTokens: number;
   thinkingTimeoutMs: number;
   tools: LlmTool[];
+  remora?: RemoraRequest;
 }): Promise<{ content: string; response: LlmResponse }> {
   return completeAndSanitize(options.llm, {
     messages: options.promptMessages,
@@ -336,6 +359,7 @@ async function generateResponse(options: {
     thinkingMaxTokens: options.thinkingMaxTokens,
     thinkingTimeoutMs: options.thinkingTimeoutMs,
     tools: options.tools,
+    ...(options.remora ? { remora: options.remora } : {}),
   });
 }
 
@@ -348,6 +372,7 @@ async function completeAndSanitize(
     thinkingMaxTokens: number;
     thinkingTimeoutMs: number;
     tools: LlmTool[];
+    remora?: RemoraRequest;
   },
 ): Promise<{ content: string; response: LlmResponse }> {
   if (!request.enableThinking) {
@@ -401,6 +426,7 @@ async function completeAndRequireContent(
     signal: AbortSignal;
     enableThinking?: boolean;
     tools: LlmTool[];
+    remora?: RemoraRequest;
   },
 ): Promise<{ content: string; response: LlmResponse }> {
   const response = await llm.complete({

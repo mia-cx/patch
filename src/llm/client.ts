@@ -1,5 +1,11 @@
 import type { Config } from "../config.js";
 import type { ModelSettingProvider } from "../settings/store.js";
+import {
+  type RemoraRequest,
+  type RemoraResponse,
+  parseRemoraCapabilities,
+  parseRemoraResponse,
+} from "./remora.js";
 
 export type LlmMessage = {
   role: "system" | "user" | "assistant";
@@ -37,6 +43,7 @@ export type LlmRequest = {
   enableThinking?: boolean;
   tools?: readonly LlmTool[];
   toolChoice?: LlmToolChoice;
+  remora?: RemoraRequest;
   signal?: AbortSignal;
 };
 
@@ -46,14 +53,79 @@ export type LlmResponse = {
   finishReason?: string;
   toolCalls?: LlmToolCall[];
   timings?: unknown;
+  remora?: RemoraResponse;
   raw?: unknown;
 };
 
 export class LlmClient {
+  private maxOutputTokens = Number.POSITIVE_INFINITY;
+
   constructor(
     private readonly config: Config,
     private readonly settings?: ModelSettingProvider,
   ) {}
+
+  /** Checks capabilities and bounds shared config/output limits before Discord connects. */
+  async initializeRemora() {
+    const response = await fetch(
+      `${this.config.llmBaseUrl}/remora/capabilities`,
+      {
+        headers: { Authorization: `Bearer ${this.config.llmApiKey}` },
+        signal: AbortSignal.timeout(this.config.llmTimeoutMs),
+      },
+    );
+    if (!response.ok)
+      throw new Error(
+        `Remora capabilities failed: ${response.status} ${await response.text()}`,
+      );
+    const capabilities = parseRemoraCapabilities(await response.json());
+    const { features, limits } = capabilities;
+    if (
+      !features.memory ||
+      !features.automatic_writes ||
+      !features.source_revisions ||
+      !features.prefix_cache
+    )
+      throw new Error(
+        "Remora requires memory, automatic writes, source revisions, and prefix caching",
+      );
+    if (this.config.llmEnableThinking && !features.thinking)
+      throw new Error(
+        "Remora backend does not support LLM_ENABLE_THINKING=true",
+      );
+    if (
+      this.config.llmTemperature !== 0 &&
+      capabilities.backend === "transformers"
+    )
+      throw new Error("The Remora HF profile requires LLM_TEMPERATURE=0");
+    if (
+      this.config.activityUpdatesEnabled &&
+      capabilities.backend === "transformers"
+    )
+      throw new Error(
+        "The Remora HF profile requires ACTIVITY_UPDATES_ENABLED=false; activity requests use sampling",
+      );
+    const bankCount = new Set(this.config.remoraReadBanks).size + 1;
+    if (
+      bankCount > limits.max_read_banks ||
+      (bankCount > 1 && !features.multi_bank)
+    )
+      throw new Error("REMORA_READ_BANKS exceeds backend bank capabilities");
+    this.config.llmContextTokens = Math.min(
+      this.config.llmContextTokens,
+      limits.context_tokens,
+    );
+    this.maxOutputTokens = limits.max_output_tokens;
+    this.config.llmMaxTokens = Math.min(
+      this.config.llmMaxTokens,
+      limits.max_output_tokens,
+    );
+    this.config.llmThinkingMaxTokens = Math.min(
+      this.config.llmThinkingMaxTokens,
+      limits.max_output_tokens,
+    );
+    return capabilities;
+  }
 
   async listModels(): Promise<string[]> {
     const response = await fetch(`${this.config.llmBaseUrl}/models`, {
@@ -83,11 +155,15 @@ export class LlmClient {
       },
       cache_prompt: true,
       temperature: request.temperature ?? this.config.llmTemperature,
-      max_tokens: request.maxTokens ?? this.config.llmMaxTokens,
+      max_tokens: Math.min(
+        request.maxTokens ?? this.config.llmMaxTokens,
+        this.maxOutputTokens,
+      ),
     };
     if (request.tools && request.tools.length > 0)
       body.tools = [...request.tools];
     if (request.toolChoice) body.tool_choice = request.toolChoice;
+    if (request.remora) body.remora = request.remora;
 
     const requestInit: RequestInit = {
       method: "POST",
@@ -116,6 +192,8 @@ export class LlmClient {
     const content = choice?.message?.content ?? "";
 
     const result: LlmResponse = { content };
+    if (request.remora)
+      result.remora = parseRemoraResponse(json.remora, request.remora);
     if (choice?.message?.reasoning_content)
       result.reasoningContent = choice.message.reasoning_content;
     if (choice?.finish_reason) result.finishReason = choice.finish_reason;
@@ -140,9 +218,11 @@ type LlamaChatCompletionRequest = {
   max_tokens: number;
   tools?: LlmTool[] | undefined;
   tool_choice?: LlmToolChoice | undefined;
+  remora?: RemoraRequest;
 };
 
 type LlamaChatCompletionResponse = {
+  remora?: unknown;
   choices?: Array<{
     finish_reason?: string;
     message?: {

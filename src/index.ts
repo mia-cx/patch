@@ -45,6 +45,25 @@ const settings = new SettingsStore(config.settingsDbPath, {
 });
 const contextStore = new ConversationContextStore(config.settingsDbPath);
 const llm = new LlmClient(config, settings);
+if (config.remoraDmEnabled) {
+  const capabilities = await llm.initializeRemora();
+  const budget = buildResponseContextBudget(config, "dm");
+  if (
+    budget.promptTokens + (budget.responseTokens ?? 0) >=
+    budget.contextTokens
+  )
+    throw new Error(
+      "Remora context cannot fit Patch's persona and output allowance",
+    );
+  logger.info(
+    {
+      capabilities,
+      contextTokens: config.llmContextTokens,
+      maxTokens: config.llmMaxTokens,
+    },
+    "Remora DM memory enabled",
+  );
+}
 const modelCatalog = new ModelCatalog(llm, logger);
 const pronounProvider = new DiscordPronounProvider(
   config.discordToken,
