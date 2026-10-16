@@ -44,7 +44,7 @@ history. Summarization is deferred while we evaluate Remora across resets.
 
 `REMORA_DM_ENABLED=true` enables memory for text turns in one-to-one DMs. Point
 the existing `LLM_BASE_URL`, `LLM_MODEL`, and `LLM_API_KEY` at an isolated Remora
-service. The first HF profile requires `LLM_TEMPERATURE=0`, thinking disabled,
+service. The validated profiles require `LLM_TEMPERATURE=0`, thinking disabled,
 and activity updates disabled. Memory remains off by default.
 
 Each DM reads and writes `discord:dm:<channelId>`. `REMORA_READ_BANKS` adds up to
@@ -84,10 +84,20 @@ verify persona-prefix reuse; they do not prove entire-history KV continuity or a
 throughput improvement. The reviewed HF backend is
 [Remora `58626f9`](https://github.com/mia-cx/remora/commit/58626f9f5f67fe5061cb2ff92c7cc8f86cb3de7c),
 ready for a controlled single-human DM trial. The final
-[serving guide](https://github.com/mia-cx/remora/blob/66f86295869a9c8ceb71195def08b14d67358a5c/docs/api/serving.md)
-and [Patch handback](https://github.com/mia-cx/remora/blob/66f86295869a9c8ceb71195def08b14d67358a5c/docs/api/patch-handoff-2026-10-16.md)
+[serving guide](https://github.com/mia-cx/remora/blob/865ade5910022188c9b8313bb76a2a4d48ced4c5/docs/api/serving.md)
+and [HF Patch handback](https://github.com/mia-cx/remora/blob/66f86295869a9c8ceb71195def08b14d67358a5c/docs/api/patch-handoff-2026-10-16.md)
 cover launch, server-owned policy grants, validated behavior, and remaining limits.
-The Discord bot remains off. Native llama.cpp work is separate from this HF path.
+The Discord bot remains off.
+
+The [native CPU development profile](https://github.com/mia-cx/remora/blob/865ade5910022188c9b8313bb76a2a4d48ced4c5/docs/api/native-profile-2026-10-16.md)
+is also selectable through this API on reviewed source `90c4970`, using its exact
+BF16 assets and a memory frame of at most 448 tokens. Set
+`LLM_TIMEOUT_MS=300000` for that profile. Remora's final rerun of the stock Patch
+client returned matching nonempty replies and replayed the same successful
+`saved: [1, 2]` receipt: cold 0 reused / 8,917 evaluated, then 7,310 reused / 1,607
+evaluated. [The native HTTP proof](spec/remora-native-http-smoke-2026-10-16.json)
+records those responses. Native remains CPU development support, without GPU,
+quantization, throughput, or broad HF-parity claims; HF stays the DM trial backend.
 
 The Gemma tokenizer renders this sample at 8,770 tokens before Remora framing and
 128 output tokens. An 8,192-token profile cannot fit it. The tested service reports

@@ -9,7 +9,7 @@ inference API with optional memory-bank selection and fact-level recall controls
 Remora can keep its Python core; Patch consumes the API and remains independent
 of the inference backend. Bank selection and write destinations are distinct,
 and Remora enforces which facts may enter recall. For service setup and supported
-trial behavior, read the [reviewed Remora handback](https://github.com/mia-cx/remora/blob/66f86295869a9c8ceb71195def08b14d67358a5c/docs/api/patch-handoff-2026-10-16.md).
+trial behavior, read the [final Remora serving guide](https://github.com/mia-cx/remora/blob/865ade5910022188c9b8313bb76a2a4d48ced4c5/docs/api/serving.md).
 
 Protocord is the shared Discord action framework. Its canonical source is
 `mia-cx/protocord`, extracted from Prod with the core, settings, permissions,
@@ -36,10 +36,13 @@ profile: full-persona replies are nonempty and generation retries replay the sam
 durable write result. A second real smoke with Remora's native SYSTEM checkpoint
 reports 7,310 reused persona-prefix tokens and 1,601 evaluated tokens on each call.
 That proves persona-prefix reuse, not entire-history KV continuity. Remora's
-reviewed HF backend is `feat/inference-service` at `58626f9`, with the final serving
-guide and handback released at `66f8629`. It is ready for a controlled single-human
-DM trial; the bot remains off.
-Native llama.cpp work continues separately and does not gate that HF trial.
+reviewed HF source `58626f9` remains the controlled single-human DM trial backend.
+Final service/native docs are released at `865ade5`; the native CPU development
+backend `90c4970` is selectable behind the same API for its exact BF16 profile.
+Its final stock Patch HTTP proof has nonempty replies and durable receipt replay,
+with a cold 0/8,917 reused/evaluated count followed by 7,310/1,607. Native needs
+`LLM_TIMEOUT_MS=300000`; this does not establish GPU, quantized, or broad HF parity.
+The bot remains off; native qualification does not gate the HF trial.
 The measured synthetic Patch request already uses 8,770 rendered Gemma tokens
 before Remora framing/output, so an 8,192-token profile is insufficient.
 

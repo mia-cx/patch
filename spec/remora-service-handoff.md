@@ -1,10 +1,12 @@
 # Remora API and inference integration handoff
 
 The reviewed HF service and Patch client have been delivered. Use Remora's final
-[serving guide](https://github.com/mia-cx/remora/blob/66f86295869a9c8ceb71195def08b14d67358a5c/docs/api/serving.md)
-and [Patch handback](https://github.com/mia-cx/remora/blob/66f86295869a9c8ceb71195def08b14d67358a5c/docs/api/patch-handoff-2026-10-16.md)
-for the controlled DM trial. This document preserves the original assignment;
-native llama.cpp implementation remains separate and unqualified.
+[serving guide](https://github.com/mia-cx/remora/blob/865ade5910022188c9b8313bb76a2a4d48ced4c5/docs/api/serving.md)
+and [HF Patch handback](https://github.com/mia-cx/remora/blob/66f86295869a9c8ceb71195def08b14d67358a5c/docs/api/patch-handoff-2026-10-16.md)
+for the controlled DM trial. A separately scoped
+[native CPU development profile](https://github.com/mia-cx/remora/blob/865ade5910022188c9b8313bb76a2a4d48ced4c5/docs/api/native-profile-2026-10-16.md)
+is now selectable through the same API; HF remains the trial backend. This
+document preserves the original assignment below.
 
 ## Assignment and current decisions
 
