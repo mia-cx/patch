@@ -4,6 +4,7 @@ import { leaveThreadAction } from "./leave.js";
 import { modelAction } from "./model.js";
 import { actionRegistry } from "./registry.js";
 import { reloadRuntimeAction } from "./reload.js";
+import { resetContextAction } from "./reset.js";
 
 export function registerDefaultActions(
   registry: ActionRegistry = actionRegistry,
@@ -12,4 +13,5 @@ export function registerDefaultActions(
   registry.registerAction(leaveThreadAction);
   registry.registerAction(modelAction);
   registry.registerAction(reloadRuntimeAction);
+  registry.registerAction(resetContextAction);
 }

@@ -1,6 +1,12 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { SnowflakeUtil } from "discord.js";
+
+type ResetBoundary = {
+  cutoff: string;
+  start: string | null;
+};
 
 /** Persists where each chat's active context begins; Discord owns the messages. */
 export class ConversationContextStore {
@@ -14,11 +20,18 @@ export class ConversationContextStore {
         channel_id TEXT PRIMARY KEY,
         start_message_id TEXT NOT NULL
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS conversation_resets (
+        channel_id TEXT PRIMARY KEY,
+        cutoff_message_id TEXT NOT NULL,
+        start_message_id TEXT
+      ) STRICT;
     `);
   }
 
   /** Returns the fixed starting message for a DM, channel, or thread. */
   getStart(channelId: string): string | undefined {
+    const reset = this.getReset(channelId);
+    if (reset) return reset.start ?? undefined;
     const value = this.db
       .prepare(
         "SELECT start_message_id FROM conversation_contexts WHERE channel_id = ?",
@@ -32,6 +45,14 @@ export class ConversationContextStore {
 
   /** Records the active start after seeding, a budget reset, or message deletion. */
   setStart(channelId: string, messageId: string): void {
+    if (this.getReset(channelId)) {
+      this.db
+        .prepare(
+          "UPDATE conversation_resets SET start_message_id = ? WHERE channel_id = ?",
+        )
+        .run(messageId, channelId);
+      return;
+    }
     this.db
       .prepare(`
       INSERT INTO conversation_contexts (channel_id, start_message_id) VALUES (?, ?)
@@ -40,7 +61,82 @@ export class ConversationContextStore {
       .run(channelId, messageId);
   }
 
+  /** Observe human creates before classification, so even an unanswered turn can start a reset chat. */
+  observeHumanMessage(channelId: string, messageId: string): boolean {
+    const reset = this.getReset(channelId);
+    if (!reset) return true;
+    if (BigInt(messageId) <= BigInt(reset.cutoff)) return false;
+    if (reset.start) return BigInt(messageId) >= BigInt(reset.start);
+    this.setStart(channelId, messageId);
+    return true;
+  }
+
+  /** Suppress queued or edited pre-reset turns, without allowing them to seed history. */
+  allowsMessage(channelId: string, messageId: string): boolean {
+    const reset = this.getReset(channelId);
+    return (
+      !reset ||
+      (reset.start !== null && BigInt(messageId) >= BigInt(reset.start))
+    );
+  }
+
+  /** Run in the channel's queue: only successful confirmation establishes the reset cutoff. */
+  async resetAfterConfirmation(
+    channelId: string,
+    confirm: () => Promise<unknown>,
+  ): Promise<void> {
+    // Check writable storage before posting success, but roll back immediately:
+    // other channels and human arrivals must keep their old state until success.
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.writeReset(channelId, {
+        cutoff: currentMessageCutoff(),
+        start: null,
+      });
+    } finally {
+      this.db.exec("ROLLBACK");
+    }
+    await confirm();
+    this.writeReset(channelId, { cutoff: currentMessageCutoff(), start: null });
+  }
+
+  private getReset(channelId: string): ResetBoundary | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT cutoff_message_id, start_message_id FROM conversation_resets WHERE channel_id = ?",
+      )
+      .get(channelId);
+    if (!row) return undefined;
+    if (
+      typeof row.cutoff_message_id !== "string" ||
+      (row.start_message_id !== null &&
+        typeof row.start_message_id !== "string")
+    )
+      throw new Error("Invalid conversation reset boundary");
+    return { cutoff: row.cutoff_message_id, start: row.start_message_id };
+  }
+
+  private writeReset(channelId: string, reset: ResetBoundary): void {
+    this.db
+      .prepare(`
+      INSERT INTO conversation_resets (channel_id, cutoff_message_id, start_message_id) VALUES (?, ?, ?)
+      ON CONFLICT(channel_id) DO UPDATE SET cutoff_message_id = excluded.cutoff_message_id, start_message_id = excluded.start_message_id
+    `)
+      .run(channelId, reset.cutoff, reset.start);
+  }
+
   close(): void {
     this.db.close();
   }
+}
+
+function currentMessageCutoff(): string {
+  // Discord snowflakes order creates within a millisecond. Exclude that whole
+  // millisecond so a delayed event from the confirmation cannot seed old history.
+  return SnowflakeUtil.generate({
+    timestamp: Date.now(),
+    workerId: 31n,
+    processId: 31n,
+    increment: 4095n,
+  }).toString();
 }

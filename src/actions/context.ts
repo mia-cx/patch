@@ -7,6 +7,7 @@ import type {
   ActionRegistry as ProtocordRegistry,
 } from "protocord";
 import type { Config } from "../config.js";
+import type { ConversationContextStore } from "../conversation/store.js";
 import type { LlmClient } from "../llm/client.js";
 import type { ModelCatalog } from "../llm/model-catalog.js";
 import type { Logger } from "../logger.js";
@@ -31,6 +32,7 @@ export type ActionContext = {
   queue: GenerationQueue;
   modelCatalog: ModelCatalog;
   settings: SettingsStore;
+  contextStore: ConversationContextStore;
   channel?: Pick<Message["channel"], "isThread"> | null | undefined;
 };
 

@@ -84,6 +84,7 @@ export async function respond(options: RespondOptions): Promise<void> {
     actionContext,
     actionRegistry,
   } = options;
+  if (!contextStore.allowsMessage(message.channelId, message.id)) return;
   const log = logger.child({
     messageId: message.id,
     channelId: message.channelId,
@@ -116,6 +117,7 @@ export async function respond(options: RespondOptions): Promise<void> {
           guildRecentMessageLimit: config.guildRecentMessageLimit,
         },
       ));
+    if (chain.length === 0) return;
     const transcript = buildTranscript(chain, botUserId);
     const history = remora
       ? {

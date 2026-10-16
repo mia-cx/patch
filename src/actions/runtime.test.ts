@@ -17,6 +17,7 @@ import {
 } from "discord.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../config.js";
+import { ConversationContextStore } from "../conversation/store.js";
 import { dispatchInteraction } from "../discord/actions/dispatch.js";
 import { LlmClient } from "../llm/client.js";
 import { ModelCatalog } from "../llm/model-catalog.js";
@@ -142,8 +143,10 @@ async function runtime(thread = true) {
   const logger = createLogger(false);
   logger.level = "silent";
   const settings = new SettingsStore(":memory:", { llmModel: "old-model" });
+  const contextStore = new ConversationContextStore(":memory:");
   resources.push(
     () => settings.close(),
+    () => contextStore.close(),
     () => {
       void client.destroy();
     },
@@ -154,6 +157,7 @@ async function runtime(thread = true) {
     config,
     logger,
     settings,
+    contextStore,
     llm,
     queue: new GenerationQueue(1),
     modelCatalog: new ModelCatalog(llm, logger),
