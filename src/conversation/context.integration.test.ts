@@ -1,14 +1,34 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type APIMessage, ChannelType, Client, MessageType } from "discord.js";
+import { DatabaseSync } from "node:sqlite";
+import {
+  type APIChatInputApplicationCommandInteraction,
+  type APIMessage,
+  ApplicationCommandOptionType,
+  ApplicationCommandType,
+  ChannelType,
+  ChatInputCommandInteraction,
+  Client,
+  InteractionType,
+  Locale,
+  MessageType,
+  SnowflakeUtil,
+} from "discord.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ActionContext } from "../actions/context.js";
+import { registerDefaultActions } from "../actions/defaults.js";
+import { createPatchActionRegistry } from "../actions/registry.js";
 import { loadConfig } from "../config.js";
+import { dispatchInteraction } from "../discord/actions/dispatch.js";
 import { DiscordJsAdapter } from "../discord/discord-js-adapter.js";
 import { LlmClient, type LlmMessage } from "../llm/client.js";
+import { ModelCatalog } from "../llm/model-catalog.js";
 import type { RemoraRequest, RemoraResponse } from "../llm/remora.js";
 import { createLogger } from "../logger.js";
+import { GenerationQueue } from "../queue.js";
 import { respond } from "../response/responder.js";
+import { SettingsStore } from "../settings/store.js";
 import {
   type ConversationContextOptions,
   reconstructConversationContext,
@@ -31,8 +51,9 @@ function packet(
   index: number,
   overrides: Partial<APIMessage> = {},
 ): APIMessage {
+  const timestamp = Date.UTC(2026, 9, 16, 10, 0, index);
   return {
-    id: String(1000000000000000100n + BigInt(index)),
+    id: SnowflakeUtil.generate({ timestamp, increment: 0n }).toString(),
     channel_id: CHANNEL,
     author: {
       id: HUMAN,
@@ -44,7 +65,7 @@ function packet(
     },
     type: MessageType.Default,
     content: `message ${index}`,
-    timestamp: new Date(Date.UTC(2026, 9, 16, 10, 0, index)).toISOString(),
+    timestamp: new Date(timestamp).toISOString(),
     edited_timestamp: null,
     tts: false,
     mention_everyone: false,
@@ -58,12 +79,23 @@ function packet(
   };
 }
 
+class Command extends ChatInputCommandInteraction {
+  // biome-ignore lint/complexity/noUselessConstructor: expose the SDK's protected gateway constructor
+  constructor(
+    client: Client<true>,
+    data: APIChatInputApplicationCommandInteraction,
+  ) {
+    super(client, data);
+  }
+}
+
 async function runtime(
   type:
     | ChannelType.DM
     | ChannelType.GuildText
     | ChannelType.PublicThread = ChannelType.DM,
   path = ":memory:",
+  channelId = CHANNEL,
 ) {
   const client = new Client<true>({ intents: [] });
   let packets: APIMessage[] = [];
@@ -89,9 +121,9 @@ async function runtime(
           emojis: [],
           stickers: [],
         };
-      if (route === `/channels/${CHANNEL}`)
+      if (route === `/channels/${channelId}`)
         return {
-          id: CHANNEL,
+          id: channelId,
           type,
           guild_id: type === ChannelType.DM ? undefined : GUILD,
           name: "trial",
@@ -104,7 +136,7 @@ async function runtime(
             archive_timestamp: "2026-10-16T10:00:00Z",
           },
         };
-      if (route === `/channels/${CHANNEL}/messages`) {
+      if (route === `/channels/${channelId}/messages`) {
         const before = BigInt(
           options?.query?.get("before") ?? "9223372036854775807",
         );
@@ -115,7 +147,7 @@ async function runtime(
           .slice(0, limit);
       }
       const message = packets.find(
-        (item) => route === `/channels/${CHANNEL}/messages/${item.id}`,
+        (item) => route === `/channels/${channelId}/messages/${item.id}`,
       );
       if (message) return message;
       throw new Error(`Unexpected Discord request: ${route}`);
@@ -123,8 +155,9 @@ async function runtime(
   const post = vi
     .spyOn(client.rest, "post")
     .mockImplementation(async (route) => {
-      if (route === `/channels/${CHANNEL}/typing`) return undefined;
-      if (route === `/channels/${CHANNEL}/messages`) {
+      if (route.startsWith("/interactions/")) return undefined;
+      if (route === `/channels/${channelId}/typing`) return undefined;
+      if (route === `/channels/${channelId}/messages`) {
         const sent = packet(900, {
           author: {
             id: BOT,
@@ -140,12 +173,35 @@ async function runtime(
       }
       throw new Error(`Unexpected Discord request: ${route}`);
     });
+  const patch = vi.spyOn(client.rest, "patch").mockResolvedValue(packet(900));
   if (type !== ChannelType.DM) await client.guilds.fetch(GUILD);
-  const channel = await client.channels.fetch(CHANNEL);
+  const channel = await client.channels.fetch(channelId);
   if (!channel?.isTextBased()) throw new Error("Fixture must support messages");
   const adapter = new DiscordJsAdapter(client, BOT);
   const logger = createLogger(false);
   logger.level = "silent";
+  const config = loadConfig({
+    DISCORD_TOKEN: "test",
+    DISCORD_CLIENT_ID: BOT,
+    BOT_OWNER_USER_IDS: HUMAN,
+  });
+  const settings = new SettingsStore(":memory:", { llmModel: "test-model" });
+  resources.push(() => settings.close());
+  const llm = new LlmClient(config, settings);
+  const actionContext: ActionContext = {
+    client: { channels: client.channels, user: { id: BOT } },
+    config,
+    llm,
+    logger,
+    settings,
+    queue: new GenerationQueue(2),
+    modelCatalog: new ModelCatalog(llm, logger),
+    get contextStore() {
+      return store;
+    },
+  };
+  const registry = createPatchActionRegistry();
+  registerDefaultActions(registry);
 
   const message = async (index: number) => {
     return channel.messages.fetch({ message: packet(index).id, force: true });
@@ -155,12 +211,14 @@ async function runtime(
     logger,
     rest,
     post,
+    patch,
     message,
+    actionContext,
     get store() {
       return store;
     },
     add(index: number, overrides: Partial<APIMessage> = {}) {
-      packets.push(packet(index, overrides));
+      packets.push(packet(index, { channel_id: channelId, ...overrides }));
     },
     remove(index: number) {
       packets = packets.filter((item) => item.id !== packet(index).id);
@@ -173,6 +231,43 @@ async function runtime(
     reopen() {
       store.close();
       store = new ConversationContextStore(path);
+    },
+    async receive(index: number) {
+      const incoming = await message(index);
+      return (
+        !incoming.author.bot &&
+        store.observeHumanMessage(incoming.channelId, incoming.id)
+      );
+    },
+    async reset(index: number, userId = HUMAN) {
+      const interaction = new Command(client, {
+        id: packet(index).id,
+        application_id: BOT,
+        token: "test-token",
+        version: 1,
+        type: InteractionType.ApplicationCommand,
+        channel: { id: channelId, type },
+        channel_id: channelId,
+        user: { ...packet(index).author, id: userId },
+        locale: Locale.EnglishUS,
+        app_permissions: "0",
+        entitlements: [],
+        authorizing_integration_owners: {},
+        attachment_size_limit: 1000000,
+        data: {
+          id: packet(0).id,
+          name: "context",
+          type: ApplicationCommandType.ChatInput,
+          options: [
+            { name: "reset", type: ApplicationCommandOptionType.Subcommand },
+          ],
+        },
+      });
+      await dispatchInteraction({
+        interaction,
+        context: actionContext,
+        registry,
+      });
     },
     async context(
       index: number,
@@ -198,6 +293,226 @@ async function runtime(
 }
 
 describe("persistent chat context", () => {
+  // Proves a confirmed native reset survives restarts and only a new human arrival starts history.
+  it("starts afresh on the first human arrival after confirmation, despite stale events and replies", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "patch-reset-"));
+    resources.push(() => rmSync(dir, { recursive: true, force: true }));
+    const path = join(dir, "patch.sqlite");
+    const app = await runtime(ChannelType.DM, path);
+    const other = await runtime(ChannelType.DM, path, "1000000000000000009");
+    const bot = { ...packet(1).author, id: BOT, username: "Patch", bot: true };
+    app.add(1, { content: "old human history" });
+    app.add(2, { author: bot, content: "old reply-chain ancestor" });
+    app.add(3);
+    await app.context(3);
+    other.add(1, { content: "other channel history" });
+    await other.context(1);
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(Date.parse(packet(4).timestamp));
+    let confirm!: () => void;
+    let confirming!: () => void;
+    const confirmation = new Promise<void>((resolve) => {
+      confirm = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      confirming = resolve;
+    });
+    app.patch.mockImplementationOnce(async () => {
+      confirming();
+      await confirmation;
+      return packet(4);
+    });
+    const reset = app.reset(4);
+    await Promise.race([started, reset]);
+    expect(app.patch).toHaveBeenCalledTimes(1);
+    // This arrives after invocation but before successful confirmation; it must not become the start.
+    app.add(5, { content: "human while reset is still running" });
+    await app.receive(5);
+    other.add(5, { content: "unaffected while another channel resets" });
+    expect(await other.receive(5)).toBe(true);
+    expect((await other.context(5)).map((item) => item.content)).toEqual([
+      "other channel history",
+      "unaffected while another channel resets",
+    ]);
+    clock.mockReturnValue(Date.parse(packet(7).timestamp));
+    confirm();
+    await reset;
+    expect(app.patch.mock.calls[0]?.[1]?.body).toMatchObject({
+      content: "context reset. your next message starts a new conversation.",
+    });
+    expect(app.store.getStart(CHANNEL)).toBeUndefined();
+    app.add(4, {
+      type: MessageType.ChatInputCommand,
+      content: "/context reset",
+    });
+    app.add(6, { author: bot, content: "reset confirmation" });
+    clock.mockReturnValue(Date.parse(packet(8).timestamp));
+    await app.reset(8);
+    app.reopen();
+    app.edit(1, "old edit now mentioning Patch");
+    expect(await app.context(1)).toEqual([]);
+    expect(await app.receive(5)).toBe(false);
+    app.add(9, { author: bot, content: "a bot cannot establish the boundary" });
+    expect(await app.receive(9)).toBe(false);
+    expect(app.store.getStart(CHANNEL)).toBeUndefined();
+    app.add(10, {
+      content: "first new human, with no generated reply",
+      message_reference: { channel_id: CHANNEL, message_id: packet(2).id },
+    });
+    expect(await app.receive(10)).toBe(true);
+    app.reopen();
+    app.add(11, {
+      content: "second new human",
+      message_reference: { channel_id: CHANNEL, message_id: packet(2).id },
+    });
+    expect(await app.receive(11)).toBe(true);
+    // A late event even newer than the cutoff cannot rewind the first observed human arrival.
+    app.remove(9);
+    app.add(9, { content: "late human event" });
+    expect(await app.receive(9)).toBe(false);
+    expect(await app.context(9)).toEqual([]);
+    expect(await app.context(5)).toEqual([]);
+    app.rest.mockClear();
+    expect((await app.context(11)).map((item) => item.content)).toEqual([
+      "first new human, with no generated reply",
+      "second new human",
+    ]);
+    expect(
+      app.rest.mock.calls.some(([route]) =>
+        route.endsWith(`/messages/${packet(2).id}`),
+      ),
+    ).toBe(false);
+    app.add(12, { author: bot, content: "new assistant reply" });
+    app.add(13, {
+      message_reference: { channel_id: CHANNEL, message_id: packet(12).id },
+    });
+    expect(await app.receive(13)).toBe(true);
+    expect((await app.context(13)).map((item) => item.content)).toEqual([
+      "first new human, with no generated reply",
+      "second new human",
+      "new assistant reply",
+      "message 13",
+    ]);
+    expect(other.store.getStart("1000000000000000009")).toBe(packet(1).id);
+  });
+
+  // Proves rejected or failed native resets leave the active conversation usable and report no success.
+  it.each(["unauthorized", "confirmation", "storage"] as const)(
+    "keeps history when reset fails at %s",
+    async (failure) => {
+      const dir = mkdtempSync(join(tmpdir(), "patch-reset-failure-"));
+      resources.push(() => rmSync(dir, { recursive: true, force: true }));
+      const path = join(dir, "patch.sqlite");
+      const app = await runtime(ChannelType.DM, path);
+      app.add(1, { content: "keep this conversation" });
+      await app.context(1);
+      vi.spyOn(Date, "now").mockReturnValue(Date.parse(packet(2).timestamp));
+      if (failure === "confirmation") {
+        app.patch.mockRejectedValueOnce(new Error("Discord unavailable"));
+      }
+      if (failure === "storage") {
+        const db = new DatabaseSync(path);
+        db.exec(`CREATE TRIGGER fail_reset BEFORE INSERT ON conversation_resets
+          BEGIN SELECT RAISE(ABORT, 'read-only trial database'); END;`);
+        db.close();
+      }
+      await app.reset(
+        2,
+        failure === "unauthorized" ? "1000000000000000008" : HUMAN,
+      );
+      expect(app.patch).toHaveBeenCalledTimes(
+        failure === "confirmation" ? 2 : 1,
+      );
+      expect(app.patch).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          body: expect.objectContaining({
+            content:
+              failure === "unauthorized"
+                ? "nope, owner-only."
+                : "couldn't reset context. try again.",
+          }),
+        }),
+      );
+      app.reopen();
+      app.add(3);
+      expect(await app.receive(3)).toBe(true);
+      expect((await app.context(3)).map((item) => item.content)).toEqual([
+        "keep this conversation",
+        "message 3",
+      ]);
+    },
+  );
+
+  // Proves reset success waits for active sends and stale queued work cannot generate or restore history.
+  it("serializes reset confirmation after an in-flight reply and suppresses queued old turns", async () => {
+    const app = await runtime();
+    app.add(1);
+    app.add(2);
+    await app.context(1);
+    await app.receive(2);
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse(packet(4).timestamp));
+    let finish!: () => void;
+    let requested!: () => void;
+    const generation = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      requested = resolve;
+    });
+    const network = vi.fn(async () => {
+      requested();
+      await generation;
+      return Response.json({
+        choices: [{ message: { content: "old-context reply" } }],
+      });
+    });
+    vi.stubGlobal("fetch", network);
+    const run = async (index: number) =>
+      respond({
+        adapter: app.adapter,
+        message: await app.message(index),
+        botUserId: BOT,
+        ...app.actionContext,
+      });
+    const active = app.actionContext.queue.add(() => run(1), {
+      bucketKey: CHANNEL,
+    });
+    await started;
+    const queued = app.actionContext.queue.add(() => run(2), {
+      bucketKey: CHANNEL,
+      priority: "passive",
+    });
+    const reset = app.reset(3);
+    await vi.waitFor(() =>
+      expect(app.post).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/interactions\//),
+        expect.anything(),
+      ),
+    );
+    expect(app.patch).not.toHaveBeenCalled();
+    expect(app.store.getStart(CHANNEL)).toBe(packet(1).id);
+    finish();
+    await Promise.all([active, reset, queued]);
+    expect(network).toHaveBeenCalledTimes(1);
+    const replies = app.post.mock.calls.filter(
+      ([route]) => route === `/channels/${CHANNEL}/messages`,
+    );
+    expect(replies).toHaveLength(1);
+    expect(replies[0]?.[1]?.body).toMatchObject({
+      content: "old-context reply",
+    });
+    const replyIndex = app.post.mock.calls.findIndex(
+      ([route]) => route === `/channels/${CHANNEL}/messages`,
+    );
+    expect(app.patch.mock.invocationCallOrder[0]).toBeGreaterThan(
+      app.post.mock.invocationCallOrder[replyIndex] ?? 0,
+    );
+    expect(app.store.getStart(CHANNEL)).toBeUndefined();
+    expect(await app.context(2)).toEqual([]);
+  });
+
   it.each([
     ChannelType.DM,
     ChannelType.PublicThread,
