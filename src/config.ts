@@ -3,6 +3,7 @@ import { Effect, Schema } from "effect";
 export type Config = {
   discordToken: string;
   discordClientId: string;
+  discordTrialDmChannelId: string;
   llmBaseUrl: string;
   llmModel: string;
   llmApiKey: string;
@@ -42,6 +43,7 @@ const NonNegativeNumber = Schema.Number.check(Schema.isGreaterThanOrEqualTo(0));
 const ConfigSchema = Schema.Struct({
   discordToken: Schema.String.check(Schema.isMinLength(1)),
   discordClientId: Schema.String.check(Schema.isMinLength(1)),
+  discordTrialDmChannelId: Schema.String,
   llmBaseUrl: Schema.String.check(Schema.isMinLength(1)),
   llmModel: Schema.String.check(Schema.isMinLength(1)),
   llmApiKey: Schema.String.check(Schema.isMinLength(1)),
@@ -80,6 +82,7 @@ export function loadConfigEffect(env: NodeJS.ProcessEnv = process.env) {
     Schema.decodeUnknownSync(ConfigSchema)({
       discordToken: required(env, "DISCORD_TOKEN"),
       discordClientId: required(env, "DISCORD_CLIENT_ID"),
+      discordTrialDmChannelId: env.DISCORD_TRIAL_DM_CHANNEL_ID?.trim() ?? "",
       llmBaseUrl: trimTrailingSlash(
         env.LLM_BASE_URL ?? "http://10.0.3.2:8080/v1",
       ),

@@ -2,6 +2,7 @@ import "dotenv/config";
 import {
   Client,
   Events,
+  GatewayIntentBits,
   type Message,
   type PartialMessage,
   type ThreadChannel,
@@ -39,7 +40,17 @@ const mentionStateByMessageId = new Map<string, boolean>();
 const config = loadConfig();
 const identity = getBotIdentity();
 const logger = createLogger(config.debugLogging || config.llmTraceLogging);
-const client = new Client(discordClientOptions);
+const client = new Client(
+  config.discordTrialDmChannelId
+    ? {
+        ...discordClientOptions,
+        intents: [
+          GatewayIntentBits.DirectMessages,
+          GatewayIntentBits.MessageContent,
+        ],
+      }
+    : discordClientOptions,
+);
 const settings = new SettingsStore(config.settingsDbPath, {
   llmModel: config.llmModel,
 });
@@ -90,9 +101,12 @@ client.once(Events.ClientReady, (readyClient) => {
     logger.warn({ error }, "failed to prewarm model catalog");
   });
 
-  void registerDiscordCommands(readyClient, actionRegistry).catch((error) => {
-    logger.error({ error }, "failed to register action triggers");
-  });
+  // A one-DM trial must not change the application's global Discord commands.
+  if (!config.discordTrialDmChannelId) {
+    void registerDiscordCommands(readyClient, actionRegistry).catch((error) => {
+      logger.error({ error }, "failed to register action triggers");
+    });
+  }
 
   logger.info(
     {
@@ -101,12 +115,18 @@ client.once(Events.ClientReady, (readyClient) => {
       identityName: identity.name,
       llmModel: settings.getLlmModel(),
       settingsDbPath: config.settingsDbPath,
+      trialDmChannelId: config.discordTrialDmChannelId || undefined,
     },
     `${identity.name.toLowerCase()} online`,
   );
 });
 
 client.on(Events.MessageCreate, (message) => {
+  if (
+    config.discordTrialDmChannelId &&
+    message.channelId !== config.discordTrialDmChannelId
+  )
+    return;
   void handleMessage(message).catch((error) => {
     logger.error(
       { error, messageId: message.id, channelId: message.channelId },
@@ -116,6 +136,11 @@ client.on(Events.MessageCreate, (message) => {
 });
 
 client.on(Events.MessageUpdate, (oldMessage, newMessage) => {
+  if (
+    config.discordTrialDmChannelId &&
+    newMessage.channelId !== config.discordTrialDmChannelId
+  )
+    return;
   void handleMessageUpdate(oldMessage, newMessage).catch((error) => {
     logger.error(
       { error, messageId: newMessage.id, channelId: newMessage.channelId },
@@ -125,6 +150,11 @@ client.on(Events.MessageUpdate, (oldMessage, newMessage) => {
 });
 
 client.on(Events.InteractionCreate, (interaction) => {
+  if (
+    config.discordTrialDmChannelId &&
+    interaction.channelId !== config.discordTrialDmChannelId
+  )
+    return;
   void dispatchInteraction({
     interaction,
     context: actionContext,

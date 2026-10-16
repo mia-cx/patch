@@ -47,6 +47,11 @@ the existing `LLM_BASE_URL`, `LLM_MODEL`, and `LLM_API_KEY` at an isolated Remor
 service. The validated profiles require `LLM_TEMPERATURE=0`, thinking disabled,
 and activity updates disabled. Memory remains off by default.
 
+Set `DISCORD_TRIAL_DM_CHANNEL_ID` for a trial confined to one DM. Patch then
+subscribes only to DM events, ignores other channels, and skips global command
+registration. Use a separate `SETTINGS_DB_PATH` to keep trial settings and context
+boundaries apart from other runs.
+
 Each DM reads and writes `discord:dm:<channelId>`. `REMORA_READ_BANKS` adds up to
 seven comma-separated read banks; it never adds write destinations. Remora's
 authenticated server policy grants banks, facts, and cross-bank information
