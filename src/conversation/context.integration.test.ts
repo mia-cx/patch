@@ -53,7 +53,7 @@ function packet(
 ): APIMessage {
   const timestamp = Date.UTC(2026, 9, 16, 10, 0, index);
   return {
-    id: SnowflakeUtil.generate({ timestamp, increment: 0n }).toString(),
+    id: SnowflakeUtil.generate({ timestamp, increment: 1n }).toString(),
     channel_id: CHANNEL,
     author: {
       id: HUMAN,
@@ -99,6 +99,7 @@ async function runtime(
 ) {
   const client = new Client<true>({ intents: [] });
   let packets: APIMessage[] = [];
+  let confirmationIndex = 0;
   let store = new ConversationContextStore(path);
   resources.push(
     () => {
@@ -156,6 +157,8 @@ async function runtime(
     .spyOn(client.rest, "post")
     .mockImplementation(async (route) => {
       if (route.startsWith("/interactions/")) return undefined;
+      if (route === `/webhooks/${BOT}/test-token`)
+        return packet(confirmationIndex);
       if (route === `/channels/${channelId}/typing`) return undefined;
       if (route === `/channels/${channelId}/messages`) {
         const sent = packet(900, {
@@ -174,6 +177,9 @@ async function runtime(
       throw new Error(`Unexpected Discord request: ${route}`);
     });
   const patch = vi.spyOn(client.rest, "patch").mockResolvedValue(packet(900));
+  const restDelete = vi
+    .spyOn(client.rest, "delete")
+    .mockResolvedValue(undefined);
   if (type !== ChannelType.DM) await client.guilds.fetch(GUILD);
   const channel = await client.channels.fetch(channelId);
   if (!channel?.isTextBased()) throw new Error("Fixture must support messages");
@@ -212,6 +218,7 @@ async function runtime(
     rest,
     post,
     patch,
+    restDelete,
     message,
     actionContext,
     get store() {
@@ -240,6 +247,7 @@ async function runtime(
       );
     },
     async reset(index: number, userId = HUMAN) {
+      confirmationIndex = index;
       const interaction = new Command(client, {
         id: packet(index).id,
         application_id: BOT,
@@ -268,6 +276,9 @@ async function runtime(
         context: actionContext,
         registry,
       });
+    },
+    confirmAt(index: number) {
+      confirmationIndex = index;
     },
     async context(
       index: number,
@@ -307,9 +318,6 @@ describe("persistent chat context", () => {
     await app.context(3);
     other.add(1, { content: "other channel history" });
     await other.context(1);
-    const clock = vi
-      .spyOn(Date, "now")
-      .mockReturnValue(Date.parse(packet(4).timestamp));
     let confirm!: () => void;
     let confirming!: () => void;
     const confirmation = new Promise<void>((resolve) => {
@@ -335,10 +343,14 @@ describe("persistent chat context", () => {
       "other channel history",
       "unaffected while another channel resets",
     ]);
-    clock.mockReturnValue(Date.parse(packet(7).timestamp));
+    app.confirmAt(7);
     confirm();
     await reset;
-    expect(app.patch.mock.calls[0]?.[1]?.body).toMatchObject({
+    expect(
+      app.post.mock.calls.find(
+        ([route]) => route === `/webhooks/${BOT}/test-token`,
+      )?.[1]?.body,
+    ).toMatchObject({
       content: "context reset. your next message starts a new conversation.",
     });
     expect(app.store.getStart(CHANNEL)).toBeUndefined();
@@ -347,7 +359,6 @@ describe("persistent chat context", () => {
       content: "/context reset",
     });
     app.add(6, { author: bot, content: "reset confirmation" });
-    clock.mockReturnValue(Date.parse(packet(8).timestamp));
     await app.reset(8);
     app.reopen();
     app.edit(1, "old edit now mentioning Patch");
@@ -398,7 +409,7 @@ describe("persistent chat context", () => {
   });
 
   // Proves rejected or failed native resets leave the active conversation usable and report no success.
-  it.each(["unauthorized", "confirmation", "storage"] as const)(
+  it.each(["unauthorized", "confirmation", "storage", "late_storage"] as const)(
     "keeps history when reset fails at %s",
     async (failure) => {
       const dir = mkdtempSync(join(tmpdir(), "patch-reset-failure-"));
@@ -407,9 +418,11 @@ describe("persistent chat context", () => {
       const app = await runtime(ChannelType.DM, path);
       app.add(1, { content: "keep this conversation" });
       await app.context(1);
-      vi.spyOn(Date, "now").mockReturnValue(Date.parse(packet(2).timestamp));
       if (failure === "confirmation") {
-        app.patch.mockRejectedValueOnce(new Error("Discord unavailable"));
+        // Acknowledge the command, then fail the fresh success send after the original was deleted.
+        app.post
+          .mockResolvedValueOnce(undefined)
+          .mockRejectedValueOnce(new Error("Discord unavailable"));
       }
       if (failure === "storage") {
         const db = new DatabaseSync(path);
@@ -417,14 +430,27 @@ describe("persistent chat context", () => {
           BEGIN SELECT RAISE(ABORT, 'read-only trial database'); END;`);
         db.close();
       }
+      if (failure === "late_storage") {
+        app.post
+          .mockResolvedValueOnce(undefined)
+          .mockImplementationOnce(async () => {
+            const db = new DatabaseSync(path);
+            db.exec(`CREATE TRIGGER fail_reset BEFORE INSERT ON conversation_resets
+            BEGIN SELECT RAISE(ABORT, 'database filled during confirmation'); END;`);
+            db.close();
+            return packet(2);
+          });
+      }
       await app.reset(
         2,
         failure === "unauthorized" ? "1000000000000000008" : HUMAN,
       );
-      expect(app.patch).toHaveBeenCalledTimes(
-        failure === "confirmation" ? 2 : 1,
-      );
-      expect(app.patch).toHaveBeenLastCalledWith(
+      expect(app.patch).toHaveBeenCalledTimes(1);
+      const response =
+        failure === "confirmation" || failure === "late_storage"
+          ? app.post
+          : app.patch;
+      expect(response).toHaveBeenLastCalledWith(
         expect.anything(),
         expect.objectContaining({
           body: expect.objectContaining({
@@ -435,6 +461,12 @@ describe("persistent chat context", () => {
           }),
         }),
       );
+      if (failure === "late_storage") {
+        expect(app.restDelete).toHaveBeenCalledWith(
+          `/webhooks/${BOT}/test-token/messages/${packet(2).id}`,
+          expect.anything(),
+        );
+      }
       app.reopen();
       app.add(3);
       expect(await app.receive(3)).toBe(true);
@@ -445,6 +477,52 @@ describe("persistent chat context", () => {
     },
   );
 
+  // Proves same-millisecond human arrivals survive a delayed success acknowledgement without using the host clock.
+  it("keeps the first human reply received while Discord's successful confirmation is in transit", async () => {
+    const app = await runtime();
+    app.add(1, { content: "old history" });
+    await app.context(1);
+    let acknowledge!: () => void;
+    let sent!: () => void;
+    const acknowledgement = new Promise<void>((resolve) => {
+      acknowledge = resolve;
+    });
+    const success = new Promise<void>((resolve) => {
+      sent = resolve;
+    });
+    app.post
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(async () => {
+        sent();
+        await acknowledgement;
+        return {
+          ...packet(3),
+          id: SnowflakeUtil.generate({
+            timestamp: Date.parse(packet(3).timestamp),
+            increment: 0n,
+          }).toString(),
+        };
+      });
+    const reset = app.reset(2);
+    await success;
+    app.add(3, {
+      content: "first human after success in the same millisecond",
+    });
+    await app.receive(3);
+    app.add(4, { content: "second human after success" });
+    await app.receive(4);
+    app.add(2, { content: "late event from before success" });
+    await app.receive(2);
+    acknowledge();
+    await reset;
+    expect((await app.context(4)).map((item) => item.content)).toEqual([
+      "first human after success in the same millisecond",
+      "second human after success",
+    ]);
+    expect(app.store.getStart(CHANNEL)).toBe(packet(3).id);
+    expect(await app.receive(2)).toBe(false);
+  });
+
   // Proves reset success waits for active sends and stale queued work cannot generate or restore history.
   it("serializes reset confirmation after an in-flight reply and suppresses queued old turns", async () => {
     const app = await runtime();
@@ -452,7 +530,6 @@ describe("persistent chat context", () => {
     app.add(2);
     await app.context(1);
     await app.receive(2);
-    vi.spyOn(Date, "now").mockReturnValue(Date.parse(packet(4).timestamp));
     let finish!: () => void;
     let requested!: () => void;
     const generation = new Promise<void>((resolve) => {
@@ -506,9 +583,12 @@ describe("persistent chat context", () => {
     const replyIndex = app.post.mock.calls.findIndex(
       ([route]) => route === `/channels/${CHANNEL}/messages`,
     );
-    expect(app.patch.mock.invocationCallOrder[0]).toBeGreaterThan(
-      app.post.mock.invocationCallOrder[replyIndex] ?? 0,
+    const confirmationIndex = app.post.mock.calls.findIndex(
+      ([route]) => route === `/webhooks/${BOT}/test-token`,
     );
+    expect(
+      app.post.mock.invocationCallOrder[confirmationIndex],
+    ).toBeGreaterThan(app.post.mock.invocationCallOrder[replyIndex] ?? 0);
     expect(app.store.getStart(CHANNEL)).toBeUndefined();
     expect(await app.context(2)).toEqual([]);
   });
