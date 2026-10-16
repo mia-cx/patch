@@ -1,4 +1,5 @@
 import { getBotIdentity } from "../identity.js";
+import type { LlmMessage } from "../llm/client.js";
 import { escapeAttribute, escapeTranscriptText } from "./escape.js";
 import type {
   ConversationMessage,
@@ -63,6 +64,47 @@ export function formatTranscript(transcript: Transcript): string {
   ].join("\n\n");
 }
 
+/** Keeps speaker metadata inside real chat roles and identifies the separate raw current turn. */
+export function formatTranscriptMessages(
+  transcript: Transcript,
+  currentMessageId: string,
+): LlmMessage[] {
+  const messages: LlmMessage[] = [
+    {
+      role: "user",
+      content: `Participants:\n${transcript.participants.map(formatParticipantAttributes).join("\n")}`,
+    },
+  ];
+  const current = transcript.blocks.find(
+    (block) => block.id === currentMessageId,
+  );
+  for (const block of transcript.blocks) {
+    if (block === current) continue;
+    // Keep reference metadata near its reply, outside the assistant's visible wording.
+    if (block.kind === "response") {
+      messages.push({
+        role: "user",
+        content: `Following Patch reply:\n${formatAttributes(block)}`,
+      });
+    }
+    messages.push({
+      role: block.kind === "response" ? "assistant" : "user",
+      content:
+        block.kind === "response"
+          ? formatBlockBody(block)
+          : `Speaker: ${formatAttributes(block)}\n\n${formatBlockBody(block)}`,
+    });
+  }
+  // Source binding requires the next user message to contain only its original text.
+  if (current) {
+    messages.push({
+      role: "user",
+      content: `Current human message:\n${formatAttributes(current)}`,
+    });
+  }
+  return messages;
+}
+
 function collectParticipants(
   blocks: TranscriptBlock[],
 ): TranscriptParticipant[] {
@@ -108,6 +150,12 @@ function formatParticipants(participants: TranscriptParticipant[]): string {
 }
 
 function formatParticipant(participant: TranscriptParticipant): string {
+  return `<participant ${formatParticipantAttributes(participant)} />`;
+}
+
+function formatParticipantAttributes(
+  participant: TranscriptParticipant,
+): string {
   const attributes: [string, string][] = [
     ["author_id", participant.authorId],
     ["author_name", participant.authorName],
@@ -115,7 +163,9 @@ function formatParticipant(participant: TranscriptParticipant): string {
     ["role", participant.role],
   ];
 
-  return `<participant ${attributes.map(([key, value]) => `${key}="${escapeAttribute(value)}"`).join(" ")} />`;
+  return attributes
+    .map(([key, value]) => `${key}="${escapeAttribute(value)}"`)
+    .join(" ");
 }
 
 function mergeAdjacentPatchResponses(
@@ -145,11 +195,13 @@ function mergeAdjacentPatchResponses(
 function formatBlock(block: TranscriptBlock): string {
   const tag = block.kind;
   const attributes = formatAttributes(block);
+  return `<${tag} ${attributes}>\n${formatBlockBody(block)}\n</${tag}>`;
+}
+
+function formatBlockBody(block: TranscriptBlock): string {
   const content = formatBlockContent(block);
   const attachments = block.attachments.map(formatAttachment).join("\n");
-  const body = [content, attachments].filter(Boolean).join("\n");
-
-  return `<${tag} ${attributes}>\n${body}\n</${tag}>`;
+  return [content, attachments].filter(Boolean).join("\n");
 }
 
 function formatBlockContent(block: TranscriptBlock): string {

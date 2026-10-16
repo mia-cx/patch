@@ -25,9 +25,12 @@ scaffold; Patch's provider uses the core extension contract directly.
 Start Remora conversation trials in a single-human place. Wrong-person recall
 and semantic forgetting collateral remain unresolved for shared places.
 
-Patch's Remora client is opt-in for one-to-one DMs. Caller-owned rendered history
-precedes one raw final user turn; stable source IDs and edit revisions survive
-generation retries. Read-bank selection never adds write destinations or grants.
+Patch's Remora client is opt-in for one-to-one DMs. Caller-owned history uses real
+user/assistant roles. Incoming turns retain author IDs, names, pronouns, and reply
+targets in readable labels; Patch replies remain plain assistant text. Separate
+metadata retains Patch reply references and identifies the raw final user turn.
+Stable source IDs and edit revisions survive generation retries. Read-bank
+selection never adds write destinations or grants.
 Runtime capabilities bound context/output; write receipts and observed cache reuse
 are validated. Classifier, activity, and formatting calls have no memory access.
 The shared contract and synthetic full-persona request are in `spec/fixtures`.
@@ -42,10 +45,15 @@ backend `90c4970` is selectable behind the same API for its exact BF16 profile.
 Its final stock Patch HTTP proof has nonempty replies and durable receipt replay,
 with a cold 0/8,917 reused/evaluated count followed by 7,310/1,607. Native needs
 `LLM_TIMEOUT_MS=300000`; this does not establish GPU, quantized, or broad HF parity.
-The controlled HF trial is running in Mia's one-to-one DM, restricted to that
+The controlled HF trial is authorized in Mia's one-to-one DM, restricted to that
 channel with global command registration skipped. It uses separate trial SQLite
 settings and a fresh context starting at the first new human message; subsequent
-turns grow normally. Native qualification does not gate this HF trial.
+turns grow normally. Attributed chat-role rendering now passes both real failed
+follow-ups cold and cached, with durable receipts and bank rows preserved. Keep
+assistant text plain and reference metadata beside its reply: XML assistant
+wrappers leak into output, and cumulative metadata footers obscure recent
+dialogue in Gemma's 512-token local attention. The trial is paused pending this
+client release. Native qualification does not gate this HF trial.
 The measured synthetic Patch request already uses 8,770 rendered Gemma tokens
 before Remora framing/output, so an 8,192-token profile is insufficient.
 

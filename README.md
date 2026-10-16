@@ -57,8 +57,12 @@ seven comma-separated read banks; it never adds write destinations. Remora's
 authenticated server policy grants banks, facts, and cross-bank information
 flows. Selecting a bank grants no access.
 
-Patch sends earlier rendered history followed by the exact raw new human message
-once, with a stable Discord message ID and edit revision. Generation retries keep
+Patch sends earlier turns with their real user/assistant roles. Incoming turns
+keep author IDs, names, pronouns, message IDs, and reply references in readable
+labels; other bots remain attributed user turns. Patch's prior replies stay plain
+assistant text, with their message references in separate metadata that identifies
+the current speaker before the exact raw new human message, included once with
+a stable Discord message ID and edit revision. Generation retries keep
 the same source identity. Remora owns durable write deduplication. Classifier,
 activity, and output-formatting requests carry no memory extension. An edit used
 as a new trigger advances its source revision; changing older supplied history
@@ -92,7 +96,7 @@ ready for a controlled single-human DM trial. The final
 [serving guide](https://github.com/mia-cx/remora/blob/865ade5910022188c9b8313bb76a2a4d48ced4c5/docs/api/serving.md)
 and [HF Patch handback](https://github.com/mia-cx/remora/blob/66f86295869a9c8ceb71195def08b14d67358a5c/docs/api/patch-handoff-2026-10-16.md)
 cover launch, server-owned policy grants, validated behavior, and remaining limits.
-The controlled HF trial is running in one owner DM with
+The controlled HF trial uses one owner DM with
 `DISCORD_TRIAL_DM_CHANNEL_ID` and separate SQLite settings. Existing global
 Discord command registration is skipped in that mode.
 

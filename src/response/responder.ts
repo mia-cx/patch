@@ -21,6 +21,7 @@ import type { ConversationContextStore } from "../conversation/store.js";
 import {
   buildTranscript,
   formatTranscript,
+  formatTranscriptMessages,
 } from "../conversation/transcript.js";
 import type { ConversationMessage } from "../conversation/types.js";
 import type { DiscordAdapter } from "../discord/adapter.js";
@@ -94,6 +95,7 @@ export async function respond(options: RespondOptions): Promise<void> {
       { silentFailure: Boolean(silentFailure) },
       "response generation started",
     );
+    const remora = buildRemoraRequest(config, message);
     const chain =
       contextMessages ??
       (await reconstructConversationContext(
@@ -107,6 +109,7 @@ export async function respond(options: RespondOptions): Promise<void> {
           budget: buildResponseContextBudget(
             config,
             getResponseTranscriptMode(message),
+            remora !== undefined,
           ),
           dmContextMessageLimit: config.dmContextMessageLimit,
           threadContextMessageLimit: config.threadContextMessageLimit,
@@ -114,7 +117,6 @@ export async function respond(options: RespondOptions): Promise<void> {
         },
       ));
     const transcript = buildTranscript(chain, botUserId);
-    const remora = buildRemoraRequest(config, message);
     const history = remora
       ? {
           ...transcript,
@@ -138,8 +140,17 @@ export async function respond(options: RespondOptions): Promise<void> {
     const availableActionsPrompt =
       formatAvailableActionsPrompt(availableActions);
     const tools = toLlmTools(availableActions);
+    const promptTranscript = remora
+      ? formatTranscriptMessages(transcript, message.id)
+      : transcriptText;
+    if (Array.isArray(promptTranscript) && classifierDecision) {
+      promptTranscript.push({
+        role: "user",
+        content: withClassifierDecisionBlock("", classifierDecision),
+      });
+    }
     const promptMessages = buildResponseMessages(
-      transcriptText,
+      promptTranscript,
       getResponseTranscriptMode(message),
       availableActionsPrompt,
       remora?.turn?.text,

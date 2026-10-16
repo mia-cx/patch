@@ -516,6 +516,94 @@ function memoryReceipt(
 }
 
 describe("opt-in Remora DM conversations", () => {
+  // Proves chat roles preserve distinct speakers, reply targets, and the exact new write source.
+  it("keeps attributed history in real chat roles before the raw new source", async () => {
+    const app = await runtime();
+    const bot = { ...packet(1).author, id: BOT, username: "Patch", bot: true };
+    app.add(1, { content: "I adopted a puppy." });
+    const other = {
+      ...packet(1).author,
+      id: "1000000000000000009",
+      username: "Sam",
+    };
+    app.add(2, { author: other, content: "My puppy is called Pip." });
+    app.add(3, { author: bot, content: "That's lovely." });
+    app.add(4, { author: bot, content: "Tell me more." });
+    app.add(5, {
+      content: "Want to hear his name?",
+      message_reference: {
+        channel_id: CHANNEL,
+        message_id: packet(1).id,
+      },
+    });
+    app.store.setStart(CHANNEL, packet(1).id);
+    const requests: CapturedRequest[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const body: CapturedRequest = JSON.parse(String(init.body));
+        requests.push(body);
+        if (!body.remora) throw new Error("Expected writable DM");
+        return Response.json({
+          choices: [{ message: { content: "yes, tell me" } }],
+          remora: memoryReceipt(body.remora),
+        });
+      }),
+    );
+    const config = loadConfig({
+      DISCORD_TOKEN: "test",
+      DISCORD_CLIENT_ID: BOT,
+      REMORA_DM_ENABLED: "true",
+      DM_CONTEXT_MESSAGE_LIMIT: "1",
+    });
+    await respond({
+      adapter: app.adapter,
+      message: await app.message(5),
+      botUserId: BOT,
+      config,
+      llm: new LlmClient(config),
+      logger: app.logger,
+      contextStore: app.store,
+      pronounProvider: {
+        getPronouns: async (id) => (id === HUMAN ? "she/her" : "they/them"),
+      },
+    });
+    expect(requests).toHaveLength(1);
+    const turns = requests[0]?.messages.slice(1);
+    expect(turns?.map((turn) => turn.role)).toEqual([
+      "user",
+      "user",
+      "user",
+      "user",
+      "assistant",
+      "user",
+      "user",
+    ]);
+    expect(turns?.[1]?.content).toContain(
+      `author_name="Mia" pronouns="she/her" author_id="${HUMAN}"`,
+    );
+    expect(turns?.[1]?.content).toContain("I adopted a puppy.");
+    expect(turns?.[2]?.content).toContain(
+      `author_name="Sam" pronouns="they/them" author_id="${other.id}"`,
+    );
+    expect(turns?.[2]?.content).toContain("My puppy is called Pip.");
+    expect(turns?.[4]?.content).toBe(
+      "That's lovely.\n<split />\nTell me more.",
+    );
+    expect(turns?.[3]?.content).toContain('author_id="patch"');
+    expect(turns?.[5]?.content).toContain(
+      `author_name="Mia" pronouns="she/her" author_id="${HUMAN}"`,
+    );
+    expect(turns?.[5]?.content).toContain(`reply_to="${packet(1).id}"`);
+    expect(turns?.[5]?.content).not.toContain("Want to hear his name?");
+    expect(turns?.at(-1)).toEqual({
+      role: "user",
+      content: "Want to hear his name?",
+    });
+    expect(requests[0]?.remora?.turn?.text).toBe("Want to hear his name?");
+    expect(app.store.getStart(CHANNEL)).toBe(packet(1).id);
+  });
+
   // Proves the real Discord-to-HTTP path sends one raw source and retries keep its identity.
   it("binds the raw new DM once, preserves retry identity, and revisions edits", async () => {
     const app = await runtime();
@@ -575,13 +663,12 @@ describe("opt-in Remora DM conversations", () => {
       },
     });
     expect(first?.messages.at(-1)).toEqual({ role: "user", content: raw });
-    expect(first?.messages[1]?.content).toContain("earlier history");
-    expect(
-      first?.messages
-        .slice(0, -1)
-        .map((item) => item.content)
-        .join("\n"),
-    ).not.toContain("my teacher is Elin");
+    const priorHistory = first?.messages
+      .slice(1, -1)
+      .map((item) => item.content)
+      .join("\n");
+    expect(priorHistory).toContain("earlier history");
+    expect(priorHistory).not.toContain("my teacher is Elin");
     expect(requests[1]?.remora).toEqual(first?.remora);
     expect(requests[1]?.chat_template_kwargs.enable_thinking).toBe(false);
     expect(requests[2]?.remora).toBeUndefined(); // Formatting repair has no write authority.

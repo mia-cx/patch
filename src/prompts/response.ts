@@ -1,5 +1,6 @@
 import type { Config } from "../config.js";
 import type { ContextBudget } from "../conversation/context.js";
+import type { LlmMessage } from "../llm/client.js";
 import {
   RESPONSE_TRANSCRIPT_PREFIX_PROMPT_FILES,
   RESPONSE_TRANSCRIPT_SUFFIX_PROMPT_FILES,
@@ -20,12 +21,13 @@ const PROMPT_TOKEN_MARGIN = 1_024;
 export function buildResponseContextBudget(
   config: Config,
   mode: ResponseTranscriptMode,
+  nativeHistory = config.remoraDmEnabled && mode === "dm",
 ): ContextBudget {
   const promptChars = buildResponseMessages(
-    "",
+    nativeHistory ? [] : "",
     mode,
     "",
-    config.remoraDmEnabled && mode === "dm" ? "" : undefined,
+    nativeHistory ? "" : undefined,
   ).reduce((total, message) => total + message.content.length, 0);
   return {
     contextTokens: config.llmContextTokens,
@@ -36,13 +38,13 @@ export function buildResponseContextBudget(
   };
 }
 
-/** Keeps caller-owned history separate from Remora's exact new human source. */
+/** Preserves native history roles and keeps Remora's exact new human source last. */
 export function buildResponseMessages(
-  transcript: string,
+  transcript: string | LlmMessage[],
   mode: ResponseTranscriptMode,
   availableActionsPrompt = "",
   currentMessage?: string,
-) {
+): LlmMessage[] {
   const systemPromptFiles = [
     ...RESPONSE_TRANSCRIPT_PREFIX_PROMPT_FILES,
     MODE_PROMPT_FILES[mode],
@@ -58,15 +60,19 @@ export function buildResponseMessages(
     .filter(Boolean)
     .join("\n\n");
 
-  const messages = [
+  const messages: LlmMessage[] = [
     { role: "system" as const, content: systemPrompt },
-    {
-      role: "user" as const,
-      content: readPromptFile("40-response-user.md").replace(
-        "{{transcript}}",
-        transcript,
-      ),
-    },
+    ...(typeof transcript === "string"
+      ? [
+          {
+            role: "user" as const,
+            content: readPromptFile("40-response-user.md").replace(
+              "{{transcript}}",
+              transcript,
+            ),
+          },
+        ]
+      : transcript),
   ];
   if (currentMessage !== undefined)
     messages.push({ role: "user", content: currentMessage });
