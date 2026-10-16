@@ -81,8 +81,10 @@ Remora added a native SYSTEM checkpoint reports **7,310 reused tokens and 1,601
 evaluated tokens** on both calls, with nonempty replies and identical successful
 source receipts. [The cache smoke responses](spec/remora-http-cache-smoke-2026-10-16.json)
 verify persona-prefix reuse; they do not prove entire-history KV continuity or a
-throughput improvement. The Discord bot trial remains off pending Remora's final
-reviewed backend handback.
+throughput improvement. The reviewed HF backend is
+[Remora `58626f9`](https://github.com/mia-cx/remora/commit/58626f9f5f67fe5061cb2ff92c7cc8f86cb3de7c),
+ready for a controlled single-human DM trial. Its final serving guide is pending;
+the Discord bot remains off. Native llama.cpp work is separate from this HF path.
 
 The Gemma tokenizer renders this sample at 8,770 tokens before Remora framing and
 128 output tokens. An 8,192-token profile cannot fit it. The tested service reports
