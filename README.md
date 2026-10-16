@@ -76,8 +76,13 @@ nonempty replies, selected synthetic fact 1, and replayed an identical successfu
 write result while changing only the output allowance from 128 to 64 tokens.
 [The recorded responses](spec/remora-http-smoke-2026-10-16.json) contain no credentials.
 This proves transport and durable source replay; recall correctness is a separate
-Remora check. Both calls reported zero reused tokens, so this is no evidence of
-cache reuse. The Discord bot trial remains off pending that work.
+Remora check. The first run reported zero reused tokens. A second real run after
+Remora added a native SYSTEM checkpoint reports **7,310 reused tokens and 1,601
+evaluated tokens** on both calls, with nonempty replies and identical successful
+source receipts. [The cache smoke responses](spec/remora-http-cache-smoke-2026-10-16.json)
+verify persona-prefix reuse; they do not prove entire-history KV continuity or a
+throughput improvement. The Discord bot trial remains off pending Remora's final
+reviewed backend handback.
 
 The Gemma tokenizer renders this sample at 8,770 tokens before Remora framing and
 128 output tokens. An 8,192-token profile cannot fit it. The tested service reports

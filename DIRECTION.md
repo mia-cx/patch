@@ -33,9 +33,11 @@ are validated. Classifier, activity, and formatting calls have no memory access.
 The shared contract and synthetic full-persona request are in `spec/fixtures`.
 The real TypeScript HTTP smoke passes against the isolated HF 12,288-token
 profile: full-persona replies are nonempty and generation retries replay the same
-durable write result. These requests reported zero reused tokens; stable persona
-prefix reuse remains Remora-owned work before the bot trial. The bot stays off,
-and llama.cpp support still requires its native adapter.
+durable write result. A second real smoke with Remora's native SYSTEM checkpoint
+reports 7,310 reused persona-prefix tokens and 1,601 evaluated tokens on each call.
+That proves persona-prefix reuse, not entire-history KV continuity. The bot stays
+off pending Remora's final reviewed backend handback; llama.cpp still requires
+its native adapter.
 The measured synthetic Patch request already uses 8,770 rendered Gemma tokens
 before Remora framing/output, so an 8,192-token profile is insufficient.
 
