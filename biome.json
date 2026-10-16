@@ -15,7 +15,7 @@
     }
   },
   "files": {
-    "ignore": [".obsidian/**", "node_modules/**", "dist/**"]
+    "ignore": [".obsidian/**", "node_modules/**", "dist/**", "vendor/**"]
   },
   "javascript": {
     "formatter": {
