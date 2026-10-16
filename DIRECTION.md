@@ -68,6 +68,13 @@ matches the captured ownership improvement and 7,310-token SYSTEM reuse, preserv
 both bank copies and policies. Irrelevant recall, indirect name answers and failed
 foreign/legacy ownership and subject controls keep the trial paused. No delivery
 switch or bot resume is approved; see Remora's [qualification status](https://github.com/mia-cx/remora/blob/8b0642fd48f26c6723a21f0aff0b0bf9241ee1e7/docs/api/source-speaker-and-delivery.md).
+Mia rejected a reader LoRA. Next, Remora should extract explicit third-person
+facts bound to generic stable entity references, keeping fact subjects separate
+from source authors and preserving raw evidence and receipts. Names are optional
+caller-supplied labels; Patch may resolve them through its Discord adapter or
+Protocord. Core extraction, storage and recall must work without any harness or
+platform SDK. Agree the entity/name interface before changing the client contract;
+runtime representation and stored facts remain unchanged while the trial is paused.
 The measured synthetic Patch request already uses 8,770 rendered Gemma tokens
 before Remora framing/output, so an 8,192-token profile is insufficient.
 
