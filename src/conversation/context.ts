@@ -4,41 +4,61 @@ import { toConversationMessage } from "../discord/discord-js-adapter.js";
 import type { PronounProvider } from "../discord/pronouns.js";
 import type { Logger } from "../logger.js";
 import { reconstructReplyChain } from "./reply-chain.js";
+import type { ConversationContextStore } from "./store.js";
 import type { ConversationMessage, TranscriptContext } from "./types.js";
 
 const DEFAULT_DM_CONTEXT_MESSAGE_LIMIT = 30;
 const DEFAULT_THREAD_CONTEXT_MESSAGE_LIMIT = 30;
 const DEFAULT_GUILD_RECENT_MESSAGE_LIMIT = 10;
-const PROMPT_OVERHEAD_TOKENS = 3_000;
 const TRANSCRIPT_METADATA_CHARS_PER_MESSAGE = 450;
-const DISCORD_MESSAGE_CONTENT_CHAR_LIMIT = 4_000;
+const DISCORD_HISTORY_PAGE_SIZE = 100;
+const CONTEXT_RETAIN_RATIO = 0.5;
 
 export type ContextBudget = {
   contextTokens: number;
+  promptTokens: number;
+  responseTokens?: number;
 };
 
 export type ConversationContextOptions = {
+  store: ConversationContextStore;
+  budget: ContextBudget;
   dmContextMessageLimit?: number;
   threadContextMessageLimit?: number;
   guildRecentMessageLimit?: number;
 };
 
+/** Rebuilds the active chat from its persisted boundary, resetting only when full. */
 export async function reconstructConversationContext(
   adapter: DiscordAdapter,
   message: Message,
   botUserId: string,
   log: Logger,
-  pronounProvider?: PronounProvider,
-  options: ConversationContextOptions = {},
+  pronounProvider: PronounProvider | undefined,
+  options: ConversationContextOptions,
 ): Promise<ConversationMessage[]> {
   const trigger = toConversationMessage(message, botUserId);
+  const storedStart = options.store.getStart(message.channelId);
+  // An edit to an older message gets its own view, without rewinding this chat.
+  const historicalTrigger =
+    storedStart !== undefined && BigInt(trigger.id) < BigInt(storedStart);
+  const start = historicalTrigger ? undefined : storedStart;
+  const initialLimit = !message.inGuild()
+    ? (options.dmContextMessageLimit ?? DEFAULT_DM_CONTEXT_MESSAGE_LIMIT)
+    : message.channel.isThread()
+      ? (options.threadContextMessageLimit ??
+        DEFAULT_THREAD_CONTEXT_MESSAGE_LIMIT)
+      : (options.guildRecentMessageLimit ?? DEFAULT_GUILD_RECENT_MESSAGE_LIMIT);
+  const recent = await fetchChannelContext(
+    message,
+    botUserId,
+    initialLimit,
+    options.budget,
+    start,
+  );
+  let messages: ConversationMessage[];
+
   if (!message.inGuild()) {
-    const recent = await fetchDmContext(
-      message,
-      botUserId,
-      log,
-      options.dmContextMessageLimit ?? DEFAULT_DM_CONTEXT_MESSAGE_LIMIT,
-    );
     const botReplyChain = await fetchBotReplyChain(
       adapter,
       trigger,
@@ -46,56 +66,50 @@ export async function reconstructConversationContext(
       log,
     );
 
-    return addAuthorPronouns(
-      canonicalizeContextMessages([...recent, ...botReplyChain], trigger.id),
-      pronounProvider,
-    );
-  }
-
-  if (message.channel.isThread()) {
-    const recent = withContext(
-      await fetchThreadContext(
-        message,
-        botUserId,
-        log,
-        options.threadContextMessageLimit ??
-          DEFAULT_THREAD_CONTEXT_MESSAGE_LIMIT,
-      ),
-      "thread",
-    );
+    messages = [...recent, ...botReplyChain];
+  } else if (message.channel.isThread()) {
     const botReplyChain = withContext(
       await fetchBotReplyChain(adapter, trigger, botUserId, log),
       "thread",
     );
 
-    return addAuthorPronouns(
-      canonicalizeContextMessages([...recent, ...botReplyChain], trigger.id),
-      pronounProvider,
-      message.guildId,
-    );
+    messages = [...withContext(recent, "thread"), ...botReplyChain];
+  } else {
+    const replyChain = message.reference?.messageId
+      ? await reconstructReplyChain(adapter, trigger, log)
+      : [trigger];
+    messages = [
+      ...withContext(recent, "neighbor"),
+      ...withContext(replyChain, "reply_chain"),
+    ];
   }
 
-  const replyChain = message.reference?.messageId
-    ? await reconstructReplyChain(adapter, trigger, log)
-    : [trigger];
-  const recent = await fetchGuildRecentContext(
-    message,
-    botUserId,
-    log,
-    options.guildRecentMessageLimit ?? DEFAULT_GUILD_RECENT_MESSAGE_LIMIT,
+  const canonical = canonicalizeContextMessages(
+    messages.filter((item) => !start || BigInt(item.id) >= BigInt(start)),
+    trigger.id,
   );
-
-  return addAuthorPronouns(
-    canonicalizeContextMessages(
-      [
-        ...withContext(recent, "neighbor"),
-        ...withContext(replyChain, "reply_chain"),
-      ],
-      trigger.id,
-    ),
+  const enriched = await addAuthorPronouns(
+    canonical,
     pronounProvider,
-    message.guildId,
+    message.guildId ?? undefined,
   );
+  const selected = rolloverConversationContext(enriched, options.budget);
+  const nextStart = selected[0]?.id;
+  if (nextStart && !historicalTrigger && nextStart !== storedStart) {
+    options.store.setStart(message.channelId, nextStart);
+  }
+  if (selected.length !== enriched.length) {
+    log.info(
+      {
+        previousStart: storedStart,
+        nextStart,
+        before: enriched.length,
+        after: selected.length,
+      },
+      "reset conversation context at token budget",
+    );
+  }
+  return selected;
 }
 
 export function limitContextMessages(
@@ -106,83 +120,29 @@ export function limitContextMessages(
   return messages.slice(-limit);
 }
 
-export function trimConversationContext(
+/** Keeps the whole context until full, then retains a recent suffix with headroom. */
+export function rolloverConversationContext(
   messages: ConversationMessage[],
   budget: ContextBudget,
 ): ConversationMessage[] {
-  const availableTokens = Math.max(
-    512,
-    budget.contextTokens - PROMPT_OVERHEAD_TOKENS,
-  );
+  const availableTokens = availableContextTokens(budget);
+  if (estimateContextTokens(messages) <= availableTokens) return messages;
 
-  let trimmed = [...messages];
-  let nextTrimLane: TrimLane = "neighbor";
-  const protectedIds = findProtectedContextIds(messages);
+  const latest = messages.at(-1);
+  if (!latest) return messages;
+  if (estimateContextTokens([latest]) > availableTokens) {
+    throw new Error("Latest message exceeds the conversation token budget");
+  }
 
+  const targetTokens = availableTokens * CONTEXT_RETAIN_RATIO;
+  let start = messages.length - 1;
   while (
-    estimateContextTokens(trimmed) > availableTokens &&
-    trimmed.length > 1
+    start > 0 &&
+    estimateContextTokens(messages.slice(start - 1)) <= targetTokens
   ) {
-    const preferred = removeFirstInLane(trimmed, nextTrimLane, protectedIds);
-    if (preferred) {
-      trimmed = preferred;
-      nextTrimLane = oppositeTrimLane(nextTrimLane);
-      continue;
-    }
-
-    const fallbackLane = oppositeTrimLane(nextTrimLane);
-    const fallback = removeFirstInLane(trimmed, fallbackLane, protectedIds);
-    if (!fallback) break;
-
-    trimmed = fallback;
+    start -= 1;
   }
-
-  return trimmed;
-}
-
-type TrimLane = "neighbor" | "core";
-
-function removeFirstInLane(
-  messages: ConversationMessage[],
-  lane: TrimLane,
-  protectedIds: ReadonlySet<string>,
-): ConversationMessage[] | undefined {
-  const removableIndex = messages.findIndex(
-    (message, index) =>
-      index < messages.length - 1 &&
-      !protectedIds.has(message.id) &&
-      isInTrimLane(message, lane),
-  );
-
-  return removableIndex === -1
-    ? undefined
-    : messages.toSpliced(removableIndex, 1);
-}
-
-function findProtectedContextIds(messages: ConversationMessage[]): Set<string> {
-  const protectedIds = new Set<string>();
-  const messagesById = new Map(
-    messages.map((message) => [message.id, message]),
-  );
-  let current = messages.at(-1);
-
-  while (current?.replyTo) {
-    const parent = messagesById.get(current.replyTo.messageId);
-    if (!parent || protectedIds.has(parent.id)) break;
-    protectedIds.add(parent.id);
-    current = parent;
-  }
-
-  return protectedIds;
-}
-
-function isInTrimLane(message: ConversationMessage, lane: TrimLane): boolean {
-  if (lane === "neighbor") return message.context === "neighbor";
-  return message.context !== "neighbor";
-}
-
-function oppositeTrimLane(lane: TrimLane): TrimLane {
-  return lane === "neighbor" ? "core" : "neighbor";
+  return messages.slice(start);
 }
 
 export function summarizeContext(messages: ConversationMessage[]) {
@@ -207,7 +167,7 @@ function estimateContextTokens(messages: ConversationMessage[]): number {
     const metadataBudget = TRANSCRIPT_METADATA_CHARS_PER_MESSAGE;
     return (
       total +
-      Math.min(message.content.length, DISCORD_MESSAGE_CONTENT_CHAR_LIMIT) +
+      message.content.length +
       message.authorName.length +
       (message.authorPronouns?.length ?? 0) +
       metadataBudget
@@ -217,52 +177,45 @@ function estimateContextTokens(messages: ConversationMessage[]): number {
   return Math.ceil(chars / 4);
 }
 
-async function fetchThreadContext(
-  message: Message,
-  botUserId: string,
-  log: Logger,
-  limit: number,
-): Promise<ConversationMessage[]> {
-  try {
-    const fetched = await message.channel.messages.fetch({
-      limit,
-    });
-    const messagesById = new Map<string, Message>(
-      fetched.map((item) => [item.id, item]),
-    );
-    messagesById.set(message.id, message);
-
-    return [...messagesById.values()]
-      .filter((item) => item.createdTimestamp <= message.createdTimestamp)
-      .sort((left, right) => left.createdTimestamp - right.createdTimestamp)
-      .map((item) => toConversationMessage(item, botUserId));
-  } catch (error) {
-    log.warn({ error }, "failed to fetch thread context");
-    return [toConversationMessage(message, botUserId)];
-  }
+function availableContextTokens(budget: ContextBudget): number {
+  return Math.max(
+    1,
+    budget.contextTokens - budget.promptTokens - (budget.responseTokens ?? 0),
+  );
 }
 
-async function fetchGuildRecentContext(
+async function fetchChannelContext(
   message: Message,
   botUserId: string,
-  log: Logger,
-  limit: number,
+  initialLimit: number,
+  budget: ContextBudget,
+  startMessageId?: string,
 ): Promise<ConversationMessage[]> {
-  try {
-    const fetched = await message.channel.messages.fetch({ limit });
-    const messagesById = new Map<string, Message>(
-      fetched.map((item) => [item.id, item]),
-    );
-    messagesById.set(message.id, message);
-
-    return [...messagesById.values()]
-      .filter((item) => item.createdTimestamp <= message.createdTimestamp)
-      .sort((left, right) => left.createdTimestamp - right.createdTimestamp)
-      .map((item) => toConversationMessage(item, botUserId));
-  } catch (error) {
-    log.warn({ error }, "failed to fetch guild recent context");
-    return [toConversationMessage(message, botUserId)];
+  const messages = [toConversationMessage(message, botUserId)];
+  let before = message.id;
+  while (startMessageId || messages.length < initialLimit) {
+    if (startMessageId && BigInt(before) <= BigInt(startMessageId)) break;
+    const limit = startMessageId
+      ? DISCORD_HISTORY_PAGE_SIZE
+      : Math.min(DISCORD_HISTORY_PAGE_SIZE, initialLimit - messages.length);
+    const fetched = await message.channel.messages.fetch({
+      limit,
+      before,
+      cache: false,
+    });
+    for (const item of fetched.values()) {
+      if (!startMessageId || BigInt(item.id) >= BigInt(startMessageId)) {
+        messages.push(toConversationMessage(item, botUserId));
+      }
+    }
+    const oldest = fetched.last();
+    if (!oldest || fetched.size < limit) break;
+    // Once full, only the recent suffix can survive the reset. Avoid fetching
+    // an entire busy channel after a long offline interval.
+    if (estimateContextTokens(messages) > availableContextTokens(budget)) break;
+    before = oldest.id;
   }
+  return messages;
 }
 
 async function fetchBotReplyChain(
@@ -357,29 +310,4 @@ async function addAuthorPronouns(
     const authorPronouns = pronounsByAuthor.get(message.authorId);
     return authorPronouns ? { ...message, authorPronouns } : message;
   });
-}
-
-async function fetchDmContext(
-  message: Message,
-  botUserId: string,
-  log: Logger,
-  limit: number,
-) {
-  try {
-    const fetched = await message.channel.messages.fetch({
-      limit,
-    });
-    const messagesById = new Map<string, Message>(
-      fetched.map((item) => [item.id, item]),
-    );
-    messagesById.set(message.id, message);
-
-    return [...messagesById.values()]
-      .filter((item) => item.createdTimestamp <= message.createdTimestamp)
-      .sort((left, right) => left.createdTimestamp - right.createdTimestamp)
-      .map((item) => toConversationMessage(item, botUserId));
-  } catch (error) {
-    log.warn({ error }, "failed to fetch DM context");
-    return [toConversationMessage(message, botUserId)];
-  }
 }

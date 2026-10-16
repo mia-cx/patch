@@ -38,7 +38,12 @@ export class DiscordJsAdapter implements DiscordAdapter {
     if (!channel?.isTextBased())
       throw new Error(`Channel ${ref.channelId} is not text based`);
 
-    const message = await channel.messages.fetch(ref.messageId);
+    // Reply-chain entries must reflect edits/deletions just like fetched history.
+    const message = await channel.messages.fetch({
+      message: ref.messageId,
+      force: true,
+      cache: false,
+    });
     return toConversationMessage(message, this.botUserId);
   }
 

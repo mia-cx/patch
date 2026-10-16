@@ -7,7 +7,7 @@ This transcript functions as working memory. You may quote parts of it using mar
 ## Legend
 
 Blocks:
-- `<participants>` / `<participant>`: speaker index. A separate summary of conversation participants present in the transcript. Resolve names, pronouns, and roles by `author_id`.
+- `<participants>` / `<participant>`: speaker index after the conversation blocks. A separate summary of conversation participants present in the transcript. Resolve names, pronouns, and roles by `author_id`.
 - `<classifier_decision>`: context and reasoning provided by a classifier that decided that the latest "passive" message warrants a reply. You may use this to inform the shape of your reply, but you should not quote or answer it. 
 - `<message>`: message sent by a human or another bot.
 - `<response>`: your own prior replies. They are not drafts, examples or fallbacks. 

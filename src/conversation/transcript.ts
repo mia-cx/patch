@@ -55,10 +55,11 @@ export function buildTranscript(
   };
 }
 
+/** Formats history first so new participants only change the prompt's suffix. */
 export function formatTranscript(transcript: Transcript): string {
   return [
-    formatParticipants(transcript.participants),
     ...transcript.blocks.map(formatBlock),
+    formatParticipants(transcript.participants),
   ].join("\n\n");
 }
 

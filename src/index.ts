@@ -14,8 +14,8 @@ import { loadConfig } from "./config.js";
 import {
   limitContextMessages,
   reconstructConversationContext,
-  trimConversationContext,
 } from "./conversation/context.js";
+import { ConversationContextStore } from "./conversation/store.js";
 import type { ConversationMessage } from "./conversation/types.js";
 import { dispatchInteraction } from "./discord/actions/dispatch.js";
 import { startActivityLoop } from "./discord/activity.js";
@@ -28,6 +28,7 @@ import { getBotIdentity } from "./identity.js";
 import { LlmClient } from "./llm/client.js";
 import { ModelCatalog } from "./llm/model-catalog.js";
 import { createLogger } from "./logger.js";
+import { buildResponseContextBudget } from "./prompts/response.js";
 import { GenerationQueue } from "./queue.js";
 import { respond } from "./response/responder.js";
 import { SettingsStore } from "./settings/store.js";
@@ -42,6 +43,7 @@ const client = new Client(discordClientOptions);
 const settings = new SettingsStore(config.settingsDbPath, {
   llmModel: config.llmModel,
 });
+const contextStore = new ConversationContextStore(config.settingsDbPath);
 const llm = new LlmClient(config, settings);
 const modelCatalog = new ModelCatalog(llm, logger);
 const pronounProvider = new DiscordPronounProvider(
@@ -162,6 +164,7 @@ async function handleMessage(message: Message): Promise<void> {
           llm,
           logger,
           pronounProvider,
+          contextStore,
           actionContext,
           actionRegistry,
         });
@@ -235,6 +238,7 @@ async function handleMessage(message: Message): Promise<void> {
         llm,
         logger,
         pronounProvider,
+        contextStore,
         contextMessages,
         classifierDecision: decision,
         silentFailure: true,
@@ -255,20 +259,26 @@ async function buildSharedContext(
   message: Message,
   botUserId: string,
 ): Promise<ConversationMessage[]> {
-  return trimConversationContext(
-    await reconstructConversationContext(
-      adapter,
-      message,
-      botUserId,
-      logger,
-      pronounProvider,
-      {
-        dmContextMessageLimit: config.dmContextMessageLimit,
-        threadContextMessageLimit: config.threadContextMessageLimit,
-        guildRecentMessageLimit: config.guildRecentMessageLimit,
-      },
-    ),
-    { contextTokens: config.llmContextTokens },
+  return reconstructConversationContext(
+    adapter,
+    message,
+    botUserId,
+    logger,
+    pronounProvider,
+    {
+      store: contextStore,
+      budget: buildResponseContextBudget(
+        config,
+        !message.inGuild()
+          ? "dm"
+          : message.channel.isThread()
+            ? "thread"
+            : "global",
+      ),
+      dmContextMessageLimit: config.dmContextMessageLimit,
+      threadContextMessageLimit: config.threadContextMessageLimit,
+      guildRecentMessageLimit: config.guildRecentMessageLimit,
+    },
   );
 }
 
@@ -347,6 +357,7 @@ async function handleMessageUpdate(
         llm,
         logger,
         pronounProvider,
+        contextStore,
         actionContext,
         actionRegistry,
       }),

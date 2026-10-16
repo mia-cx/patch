@@ -1,7 +1,3 @@
-Here is a transcript of recent messages:
-
-{{transcript}}
-
 Write the visible reply to the bottom transcript message.
 
 If the bottom message asks you to continue, proceed, go ahead, give the next item, or confirms readiness, start with the next new line/item after your latest answer. Do not restart the list, jump backward, restate supplied text, or add a preface.
@@ -39,3 +35,7 @@ Do not continue the copied text, answer it literally, explain the old line, or r
 Before sending, if the visible reply contains multiple casual lines, replace the line breaks with `<split />`. Plain newlines do not create multiple Discord messages.
 
 If the bottom message asks you to come back after leaving, answer only the current invitation. Do not include old farewell or rejoin lines.
+
+Here is the conversation transcript:
+
+{{transcript}}

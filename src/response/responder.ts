@@ -11,12 +11,12 @@ import type { Config } from "../config.js";
 import {
   reconstructConversationContext,
   summarizeContext,
-  trimConversationContext,
 } from "../conversation/context.js";
 import {
   escapeAttribute,
   escapeTranscriptText,
 } from "../conversation/escape.js";
+import type { ConversationContextStore } from "../conversation/store.js";
 import {
   buildTranscript,
   formatTranscript,
@@ -38,6 +38,7 @@ import type {
 import type { Logger } from "../logger.js";
 import {
   type ResponseTranscriptMode,
+  buildResponseContextBudget,
   buildResponseMessages,
 } from "../prompts/response.js";
 
@@ -55,6 +56,7 @@ export type RespondOptions = {
   config: Config;
   llm: LlmClient;
   logger: Logger;
+  contextStore: ConversationContextStore;
   pronounProvider?: PronounProvider | undefined;
   contextMessages?: ConversationMessage[] | undefined;
   classifierDecision?: ClassifierDecision | undefined;
@@ -72,6 +74,7 @@ export async function respond(options: RespondOptions): Promise<void> {
     llm,
     logger,
     pronounProvider,
+    contextStore,
     contextMessages,
     classifierDecision,
     silentFailure,
@@ -91,21 +94,23 @@ export async function respond(options: RespondOptions): Promise<void> {
     );
     const chain =
       contextMessages ??
-      trimConversationContext(
-        await reconstructConversationContext(
-          adapter,
-          message,
-          botUserId,
-          log,
-          pronounProvider,
-          {
-            dmContextMessageLimit: config.dmContextMessageLimit,
-            threadContextMessageLimit: config.threadContextMessageLimit,
-            guildRecentMessageLimit: config.guildRecentMessageLimit,
-          },
-        ),
-        { contextTokens: config.llmContextTokens },
-      );
+      (await reconstructConversationContext(
+        adapter,
+        message,
+        botUserId,
+        log,
+        pronounProvider,
+        {
+          store: contextStore,
+          budget: buildResponseContextBudget(
+            config,
+            getResponseTranscriptMode(message),
+          ),
+          dmContextMessageLimit: config.dmContextMessageLimit,
+          threadContextMessageLimit: config.threadContextMessageLimit,
+          guildRecentMessageLimit: config.guildRecentMessageLimit,
+        },
+      ));
     const transcript = buildTranscript(chain, botUserId);
     const transcriptText = withClassifierDecisionBlock(
       formatTranscript(transcript),
@@ -311,12 +316,8 @@ function withClassifierDecisionBlock(
   if (!decision) return transcript;
 
   const block = `<classifier_decision should_respond="${String(decision.shouldRespond)}" confidence="${escapeAttribute(String(decision.confidence))}">\n${escapeTranscriptText(decision.reason)}\n</classifier_decision>`;
-  const participantBlockEnd = "</participants>";
-  const participantBlockIndex = transcript.indexOf(participantBlockEnd);
-  if (participantBlockIndex === -1) return `${block}\n\n${transcript}`;
-
-  const insertAt = participantBlockIndex + participantBlockEnd.length;
-  return `${transcript.slice(0, insertAt)}\n\n${block}${transcript.slice(insertAt)}`;
+  // Per-turn guidance follows history so it cannot invalidate its cached prefix.
+  return `${transcript}\n\n${block}`;
 }
 
 async function generateResponse(options: {
