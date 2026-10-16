@@ -76,8 +76,9 @@ Protocord. Core extraction, storage and recall must work without any harness or
 platform SDK. Patch accepts the [entity identity semantics](https://github.com/mia-cx/remora/blob/e5670f158ede3a2781dc5f18e9fb2ddbde2484b2/docs/api/entity-identity-proposal.md):
 the existing tuple identifies the local human; assistant identity is separate;
 shared links are durable actor-scoped associations and labels remain request-local.
-Extension fields are still pending. Runtime representation, the client contract
-and stored facts remain unchanged while the trial is paused.
+Wire review is closed at the [additive identity draft](https://github.com/mia-cx/remora/blob/ea060f25b03e6ad82cede9db6514a805a1e1ecf1/docs/api/entity-identity-wire-draft.json).
+Canonical promotion and implementation are pending. Runtime representation,
+the client contract and stored facts remain unchanged while the trial is paused.
 The measured synthetic Patch request already uses 8,770 rendered Gemma tokens
 before Remora framing/output, so an 8,192-token profile is insufficient.
 
