@@ -83,8 +83,11 @@ source receipts. [The cache smoke responses](spec/remora-http-cache-smoke-2026-1
 verify persona-prefix reuse; they do not prove entire-history KV continuity or a
 throughput improvement. The reviewed HF backend is
 [Remora `58626f9`](https://github.com/mia-cx/remora/commit/58626f9f5f67fe5061cb2ff92c7cc8f86cb3de7c),
-ready for a controlled single-human DM trial. Its final serving guide is pending;
-the Discord bot remains off. Native llama.cpp work is separate from this HF path.
+ready for a controlled single-human DM trial. The final
+[serving guide](https://github.com/mia-cx/remora/blob/66f86295869a9c8ceb71195def08b14d67358a5c/docs/api/serving.md)
+and [Patch handback](https://github.com/mia-cx/remora/blob/66f86295869a9c8ceb71195def08b14d67358a5c/docs/api/patch-handoff-2026-10-16.md)
+cover launch, server-owned policy grants, validated behavior, and remaining limits.
+The Discord bot remains off. Native llama.cpp work is separate from this HF path.
 
 The Gemma tokenizer renders this sample at 8,770 tokens before Remora framing and
 128 output tokens. An 8,192-token profile cannot fit it. The tested service reports

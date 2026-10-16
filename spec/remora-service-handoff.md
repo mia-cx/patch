@@ -1,5 +1,11 @@
 # Remora API and inference integration handoff
 
+The reviewed HF service and Patch client have been delivered. Use Remora's final
+[serving guide](https://github.com/mia-cx/remora/blob/66f86295869a9c8ceb71195def08b14d67358a5c/docs/api/serving.md)
+and [Patch handback](https://github.com/mia-cx/remora/blob/66f86295869a9c8ceb71195def08b14d67358a5c/docs/api/patch-handoff-2026-10-16.md)
+for the controlled DM trial. This document preserves the original assignment;
+native llama.cpp implementation remains separate and unqualified.
+
 ## Assignment and current decisions
 
 Build Remora as an **OpenAI-compatible superset inference API** that Patch and

@@ -8,8 +8,8 @@ Patch's runtime stays JavaScript/TypeScript. Remora provides an OpenAI-compatibl
 inference API with optional memory-bank selection and fact-level recall controls.
 Remora can keep its Python core; Patch consumes the API and remains independent
 of the inference backend. Bank selection and write destinations are distinct,
-and Remora enforces which facts may enter recall. Before implementing the client
-integration, read [the Remora handoff](spec/remora-service-handoff.md).
+and Remora enforces which facts may enter recall. For service setup and supported
+trial behavior, read the [reviewed Remora handback](https://github.com/mia-cx/remora/blob/66f86295869a9c8ceb71195def08b14d67358a5c/docs/api/patch-handoff-2026-10-16.md).
 
 Protocord is the shared Discord action framework. Its canonical source is
 `mia-cx/protocord`, extracted from Prod with the core, settings, permissions,
@@ -36,8 +36,9 @@ profile: full-persona replies are nonempty and generation retries replay the sam
 durable write result. A second real smoke with Remora's native SYSTEM checkpoint
 reports 7,310 reused persona-prefix tokens and 1,601 evaluated tokens on each call.
 That proves persona-prefix reuse, not entire-history KV continuity. Remora's
-reviewed HF backend is `feat/inference-service` at `58626f9`, ready for a controlled
-single-human DM trial; the final serving guide is pending and the bot remains off.
+reviewed HF backend is `feat/inference-service` at `58626f9`, with the final serving
+guide and handback released at `66f8629`. It is ready for a controlled single-human
+DM trial; the bot remains off.
 Native llama.cpp work continues separately and does not gate that HF trial.
 The measured synthetic Patch request already uses 8,770 rendered Gemma tokens
 before Remora framing/output, so an 8,192-token profile is insufficient.
