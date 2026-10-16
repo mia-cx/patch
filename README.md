@@ -40,6 +40,16 @@ Boundaries survive Patch restarts; KV cache retention belongs to the model
 server. The optional classifier's short decision input does not trim response
 history. Summarization is deferred while we evaluate Remora across resets.
 
+Owners configured in `BOT_OWNER_USER_IDS` can run **`/context reset`** in the
+current DM, channel, or thread. After its private confirmation succeeds, the next
+incoming human message starts a new persistent context, even if Patch does not
+reply. Earlier history, reply ancestors, the command, and its confirmation stay
+outside that context. Repeating reset before another human message keeps the
+context empty. Old events and edits cannot restore earlier history; other
+channels keep their context. An active reply finishes before reset confirms, and
+queued old turns are skipped. Remora's saved memories, grants, source identities,
+and write receipts are preserved; this command resets conversation context only.
+
 ## Remora DM integration
 
 `REMORA_DM_ENABLED=true` enables memory for text turns in one-to-one DMs. Point
@@ -99,6 +109,16 @@ cover launch, server-owned policy grants, validated behavior, and remaining limi
 The controlled HF trial uses one owner DM with
 `DISCORD_TRIAL_DM_CHANNEL_ID` and separate SQLite settings. Existing global
 Discord command registration is skipped in that mode.
+
+The native `/context reset` command must already be registered globally to appear
+in a trial DM; guild commands cannot be invoked in DMs. Publishing it is a separate
+release step. With a ready Discord client and Patch's default action registry,
+upsert only `getDiscordCommandRegistration(registry).find(command =>
+command.name === "context")` through `client.application.commands.create(payload)`.
+This uses Protocord's command payload, including DM availability, without replacing
+the application's command catalog. Once Discord offers it in the slash picker,
+invoke `/context reset` as an owner in the configured trial DM. Trial startup
+continues to skip registration.
 
 The [native CPU development profile](https://github.com/mia-cx/remora/blob/865ade5910022188c9b8313bb76a2a4d48ced4c5/docs/api/native-profile-2026-10-16.md)
 is also selectable through this API on reviewed source `90c4970`, using its exact
