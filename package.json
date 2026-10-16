@@ -9,7 +9,7 @@
     "protocord:build": "pnpm --dir vendor/protocord build",
     "protocord:check": "pnpm --dir vendor/protocord check",
     "dev": "pnpm run protocord:build && tsx watch src/index.ts",
-    "build": "pnpm run protocord:build && tsup src/index.ts --format esm --target node24 --clean",
+    "build": "pnpm run protocord:build && tsup src/index.ts --format esm --target node24 --clean && tsx test/build-smoke.ts",
     "start": "node dist/index.js",
     "check": "pnpm run protocord:build && biome check . && tsc --noEmit",
     "db:generate": "drizzle-kit generate",
