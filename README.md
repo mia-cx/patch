@@ -43,7 +43,9 @@ history. Summarization is deferred while we evaluate Remora across resets.
 Owners configured in `BOT_OWNER_USER_IDS` can run **`/context reset`** in the
 current DM, channel, or thread. After its private confirmation succeeds, the next
 incoming human message starts a new persistent context, even if Patch does not
-reply. Earlier history, reply ancestors, the command, and its confirmation stay
+reply. The new confirmation's Discord message ID defines the cutoff; a human
+reply received while its HTTP acknowledgement is in transit is retained too.
+Earlier history, reply ancestors, the command, and its confirmation stay
 outside that context. Repeating reset before another human message keeps the
 context empty. Old events and edits cannot restore earlier history; other
 channels keep their context. An active reply finishes before reset confirms, and
