@@ -7,6 +7,10 @@ import type { RemoraRequest, RemoraResponse } from "./remora.js";
 // Golden examples are copied from Remora's canonical contract, not re-created by Patch.
 const contract: {
   request_example: { messages: LlmMessage[]; remora: RemoraRequest };
+  readonly_speaker_request_example: {
+    messages: LlmMessage[];
+    remora: RemoraRequest;
+  };
   response_example: {
     choices: { message: { content: string } }[];
     remora: RemoraResponse;
@@ -47,6 +51,10 @@ describe("Remora contract over the LLM HTTP interface", () => {
         if (url.endsWith("/remora/capabilities"))
           return Response.json({
             ...contract.capabilities_example,
+            features: {
+              ...contract.capabilities_example.features,
+              speaker_binding: undefined,
+            },
             limits: {
               context_tokens: 16_384,
               max_output_tokens: 128,
@@ -85,6 +93,40 @@ describe("Remora contract over the LLM HTTP interface", () => {
       expect.objectContaining({ max_tokens: 128 }),
     ]);
     expect(requests[1]?.remora).toBeUndefined();
+  });
+
+  // Proves a read-only caller can bind the current human without creating a write source.
+  it("transports the canonical read-only speaker and accepts no write receipt", async () => {
+    const config = loadConfig({
+      DISCORD_TOKEN: "test",
+      DISCORD_CLIENT_ID: "test",
+      LLM_TEMPERATURE: "0",
+    });
+    const requests: { remora?: RemoraRequest }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        if (url.endsWith("/remora/capabilities"))
+          return Response.json(contract.capabilities_example);
+        requests.push(JSON.parse(String(init.body)));
+        return Response.json({
+          ...contract.response_example,
+          remora: { ...contract.response_example.remora, writes: null },
+        });
+      }),
+    );
+    const llm = new LlmClient(config);
+    const capabilities = await llm.initializeRemora();
+    const result = await llm.complete(
+      contract.readonly_speaker_request_example,
+    );
+
+    expect(capabilities.features.speaker_binding).toBe(true);
+    expect(requests.map((request) => request.remora)).toEqual([
+      contract.readonly_speaker_request_example.remora,
+    ]);
+    expect(result.content).toBe("Got it.");
+    expect(result.remora?.writes).toBeNull();
   });
 
   // Proves durable failed-write receipts remain visible without discarding the generated answer.
