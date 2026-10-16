@@ -51,6 +51,7 @@ describe("Remora contract over the LLM HTTP interface", () => {
         if (url.endsWith("/remora/capabilities"))
           return Response.json({
             ...contract.capabilities_example,
+            memory_delivery: undefined,
             features: {
               ...contract.capabilities_example.features,
               speaker_binding: undefined,
@@ -107,7 +108,11 @@ describe("Remora contract over the LLM HTTP interface", () => {
       "fetch",
       vi.fn(async (url: string, init: RequestInit) => {
         if (url.endsWith("/remora/capabilities"))
-          return Response.json(contract.capabilities_example);
+          return Response.json({
+            ...contract.capabilities_example,
+            memory_delivery: "native-cache",
+            profile: "gemma-reference-12288-native-cache",
+          });
         requests.push(JSON.parse(String(init.body)));
         return Response.json({
           ...contract.response_example,
@@ -122,6 +127,9 @@ describe("Remora contract over the LLM HTTP interface", () => {
     );
 
     expect(capabilities.features.speaker_binding).toBe(true);
+    expect(capabilities.memory_delivery).toBe("native-cache");
+    expect(capabilities.backend).toBe("transformers");
+    expect(capabilities.profile).toBe("gemma-reference-12288-native-cache");
     expect(requests.map((request) => request.remora)).toEqual([
       contract.readonly_speaker_request_example.remora,
     ]);
