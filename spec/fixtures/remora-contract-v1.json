@@ -24,6 +24,15 @@
         "items": { "type": "string", "minLength": 1 }
       },
       "write_bank": { "type": "string", "minLength": 1 },
+      "speaker": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["bank", "id"],
+        "properties": {
+          "bank": { "type": "string", "minLength": 1 },
+          "id": { "type": "string", "minLength": 1 }
+        }
+      },
       "turn": {
         "type": "object",
         "additionalProperties": false,
@@ -70,6 +79,7 @@
   "rules": {
     "write_bank_and_turn": "Both present or both absent. A writable destination must be independently granted; reading a bank grants no write permission.",
     "authorization": "Bearer-authenticated server policy grants banks and facts. Requests can only select or narrow those grants. speaker_id is attribution, never authentication.",
+    "speaker": "Optional remora.speaker declares the current human's attribution scope: authenticated principal, speaker.bank and exact opaque speaker.id. IDs are not normalized or interpreted. Writable requests infer the same scope from write_bank and turn.speaker_id; an explicit conflicting bank or ID is a 400 speaker_binding_mismatch before inference or bank access. Speaker binding grants no reads, writes or flows and opens no additional bank. An unselected speaker bank can only supply an unmatched attribution scope. Missing identity remains unknown. Recall quotes preserve named third parties and grammatical subjects; a source author is not necessarily the subject. Attribution that changes rendered recall invalidates conditioned memory while compatible bare SYSTEM reuse remains possible.",
     "recall": "Eligible refs are intersected with server grants and provenance restrictions before retrieval and every refresh. Missing allow means all otherwise permitted refs; allow=[] means none. deny further subtracts refs.",
     "cross_bank_writes": "Reading several banks does not authorize publishing their facts into the write bank. Server policy must grant source-bank to destination-bank flows; derived facts retain restrictive provenance. No implicit permission promotion.",
     "without_extension": "Ordinary generation with no bank access and no writes. No global default bank.",
@@ -119,6 +129,7 @@
           "fact_filter": { "type": "boolean" },
           "source_revisions": { "type": "boolean" },
           "prefix_cache": { "type": "boolean" },
+          "speaker_binding": { "type": "boolean" },
           "streaming": { "type": "boolean" },
           "tools": { "type": "boolean" },
           "thinking": { "type": "boolean" }
@@ -150,6 +161,7 @@
       "fact_filter": true,
       "source_revisions": true,
       "prefix_cache": true,
+      "speaker_binding": true,
       "streaming": false,
       "tools": false,
       "thinking": false
@@ -273,6 +285,17 @@
       }
     }
   },
+  "readonly_speaker_request_example": {
+    "model": "gemma-4-e2b-it",
+    "messages": [{ "role": "user", "content": "Who is my piano teacher?" }],
+    "temperature": 0,
+    "max_tokens": 64,
+    "cache_prompt": true,
+    "remora": {
+      "read_banks": ["discord:dm:example"],
+      "speaker": { "bank": "discord:dm:example", "id": "discord:user:example" }
+    }
+  },
   "response_example": {
     "id": "chatcmpl-example",
     "object": "chat.completion",
@@ -318,6 +341,17 @@
     }
   },
   "error_examples": [
+    {
+      "status": 400,
+      "body": {
+        "error": {
+          "message": "Speaker must match the source turn",
+          "type": "invalid_request_error",
+          "param": "remora.speaker",
+          "code": "speaker_binding_mismatch"
+        }
+      }
+    },
     {
       "status": 400,
       "body": {

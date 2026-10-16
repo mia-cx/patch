@@ -4,6 +4,8 @@ import { Schema } from "effect";
 export type RemoraRequest = {
   read_banks: string[];
   write_bank?: string;
+  /** Current human attribution; inferred from write_bank + turn when writable. Never grants access. */
+  speaker?: { bank: string; id: string };
   turn?: {
     id: string;
     revision: number;
@@ -86,6 +88,7 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     fact_filter: Schema.Boolean,
     source_revisions: Schema.Boolean,
     prefix_cache: Schema.Boolean,
+    speaker_binding: Schema.optional(Schema.Boolean),
     streaming: Schema.Boolean,
     tools: Schema.Boolean,
     thinking: Schema.Boolean,
