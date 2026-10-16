@@ -7,7 +7,7 @@ const requiredEnv = {
 };
 
 describe("loadConfig", () => {
-  it("does not derive context trimming from max output tokens", () => {
+  it("keeps context capacity and output allowance separately configurable", () => {
     const config = loadConfig({
       ...requiredEnv,
       LLM_MAX_TOKENS: "32768",
