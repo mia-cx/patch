@@ -42,7 +42,10 @@ backend `90c4970` is selectable behind the same API for its exact BF16 profile.
 Its final stock Patch HTTP proof has nonempty replies and durable receipt replay,
 with a cold 0/8,917 reused/evaluated count followed by 7,310/1,607. Native needs
 `LLM_TIMEOUT_MS=300000`; this does not establish GPU, quantized, or broad HF parity.
-The bot remains off; native qualification does not gate the HF trial.
+The controlled HF trial is running in Mia's one-to-one DM, restricted to that
+channel with global command registration skipped. It uses separate trial SQLite
+settings and a fresh context starting at the first new human message; subsequent
+turns grow normally. Native qualification does not gate this HF trial.
 The measured synthetic Patch request already uses 8,770 rendered Gemma tokens
 before Remora framing/output, so an 8,192-token profile is insufficient.
 
