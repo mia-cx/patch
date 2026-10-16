@@ -4,8 +4,8 @@ import {
   formatAvailableActionsPrompt,
   toLlmTools,
 } from "../actions/action-context.js";
-import type { ActionContext } from "../actions/context.js";
-import type { ActionRegistry } from "../actions/registry.js";
+import type { ActionContext, ActionRegistry } from "../actions/context.js";
+import { dispatchToolCall } from "../actions/tool-calls.js";
 import type { ClassifierDecision } from "../classifier/response-classifier.js";
 import type { Config } from "../config.js";
 import {
@@ -116,7 +116,7 @@ export async function respond(options: RespondOptions): Promise<void> {
       log.debug({ transcript: transcriptText }, "built transcript");
     }
 
-    const availableActions = buildAvailableActions({
+    const availableActions = await buildAvailableActions({
       message,
       actionContext,
       actionRegistry,
@@ -225,9 +225,7 @@ function buildAvailableActions(options: {
   if (!options.actionContext || !options.actionRegistry) return [];
 
   return buildModelVisibleActions({
-    triggerMessage: options.message,
-    channelId: options.message.channelId,
-    guildId: options.message.guildId ?? undefined,
+    message: options.message,
     context: options.actionContext,
     registry: options.actionRegistry,
   });
@@ -290,43 +288,18 @@ async function executeToolCalls(options: {
   }
 
   for (const toolCall of options.response.toolCalls ?? []) {
-    const resolved = options.actionRegistry.getToolCallTrigger(toolCall.name);
-    if (!resolved) throw new Error(`Unknown tool call: ${toolCall.name}`);
-
-    const args = parseToolArguments(toolCall.arguments);
     options.log.debug(
       {
         toolCallId: toolCall.id,
         toolName: toolCall.name,
-        action: resolved.action.name,
       },
       "executing LLM tool call action",
     );
-    await resolved.action.execute(
-      {
-        source: "tool_call",
-        channelId: options.message.channelId,
-        guildId: options.message.guildId ?? undefined,
-        requester: {
-          id: options.message.author.id,
-          name:
-            options.message.author.globalName ??
-            options.message.author.username,
-        },
-        triggerMessage: options.message,
-        args,
-      },
-      options.actionContext,
-    );
-  }
-}
-
-function parseToolArguments(argumentsJson: string): unknown {
-  try {
-    return JSON.parse(argumentsJson || "{}");
-  } catch (error) {
-    throw new Error(`Invalid tool call arguments JSON: ${argumentsJson}`, {
-      cause: error,
+    await dispatchToolCall({
+      registry: options.actionRegistry,
+      context: options.actionContext,
+      message: options.message,
+      toolCall,
     });
   }
 }

@@ -1,11 +1,10 @@
 import {
-  type ChatInputCommandInteraction,
-  type Message,
+  MessageFlags,
   type MessageMentionOptions,
-  SlashCommandBuilder,
   type ThreadChannel,
 } from "discord.js";
 import { Schema } from "effect";
+import { discordSlashCommandProviderId, slashCommand } from "protocord";
 import {
   buildTranscript,
   formatTranscript,
@@ -18,7 +17,14 @@ import { askLlm } from "../llm/ask.js";
 import type { LlmResponse } from "../llm/client.js";
 import type { Logger } from "../logger.js";
 import { buildLeaveMessages } from "../prompts/leave.js";
-import type { Action, ActionContext, ActionInvocation } from "./context.js";
+import {
+  type Action,
+  type ActionContext,
+  type ActionInvocation,
+  actionInput,
+} from "./context.js";
+import { isSlashInteraction } from "./permissions.js";
+import { toolCall } from "./tool-calls.js";
 
 const LEAVE_COMMAND_NAME = "leave";
 const LEAVE_MAX_TOKENS = 96;
@@ -30,141 +36,101 @@ const NO_MENTIONS: MessageMentionOptions = {
   repliedUser: false,
 };
 
-type LeaveThreadArgs = {
-  farewell: string;
-};
-
-const LeaveThreadArgsSchema = Schema.Struct({
-  farewell: Schema.String,
+const Farewell = Schema.String.annotate({
+  description:
+    "Exact Discord-visible farewell to send before leaving. May include <split /> for multiple Discord messages.",
 });
+const LeaveThreadArgs = Schema.Struct({ farewell: Schema.optional(Farewell) });
+type LeaveInvocation = ActionInvocation<typeof LeaveThreadArgs.Type>;
 
-export const leaveThreadAction: Action = {
+export const leaveThreadAction: Action<typeof LeaveThreadArgs.Type> = {
   name: "leave_thread",
   description: "Say goodbye and leave the current thread.",
-  inputSchema: LeaveThreadArgsSchema,
+  input: actionInput(LeaveThreadArgs),
   triggers: [
-    {
-      kind: "slash_command",
+    slashCommand({
       name: LEAVE_COMMAND_NAME,
       description: `Have ${getBotIdentity().name} say goodbye and leave this thread`,
       usage: "/leave",
-      data: new SlashCommandBuilder()
-        .setName(LEAVE_COMMAND_NAME)
-        .setDescription(
-          `Have ${getBotIdentity().name} say goodbye and leave this thread`,
-        )
-        .setDMPermission(false),
+      registration: { dmPermission: false },
+      acknowledgement: "none",
       parse: () => ({}),
-    },
-    {
-      kind: "tool_call",
+      async present(outcome, interaction) {
+        if (outcome.status === "executed") return;
+        const content =
+          outcome.status === "failed"
+            ? "couldn't leave cleanly. staying put."
+            : outcome.reason;
+        if (interaction.deferred || interaction.replied) {
+          await interaction.editReply({
+            content,
+            allowedMentions: NO_MENTIONS,
+          });
+        } else {
+          await interaction.reply({
+            content,
+            flags: MessageFlags.Ephemeral,
+            allowedMentions: NO_MENTIONS,
+          });
+        }
+      },
+    }),
+    toolCall({
       name: "leave_thread",
       description: "Send a farewell message, then leave the current thread.",
       usage:
         "Use when the latest user asks Patch to leave, exit, go away, stop participating, or otherwise remove herself from the current thread. Put the exact Discord-visible farewell in farewell.",
-      inputSchema: LeaveThreadArgsSchema,
-      inputSchemaJson: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          farewell: {
-            type: "string",
-            description:
-              "Exact Discord-visible farewell to send before leaving. May include <split /> for multiple Discord messages.",
-          },
-        },
-        required: ["farewell"],
-      },
-    },
+      input: actionInput(Schema.Struct({ farewell: Farewell })),
+    }),
   ],
-  availability(input) {
-    if (!input.isThread) {
+  availability(context) {
+    if (!context.channel?.isThread()) {
       return { available: false, reason: "only available in threads" };
     }
     return { available: true };
   },
+  authorization: () => undefined,
   async execute(invocation, context) {
     const botUserId = context.client.user?.id;
     if (!botUserId) throw new Error("Bot user is not ready");
 
+    if (!invocation.channelId)
+      throw new Error("leave_thread requires a channel");
     const channel = await context.client.channels.fetch(invocation.channelId);
     if (!channel?.isThread()) {
-      return {
-        kind: "not_applicable",
-        reason: "leave_thread only works in threads",
-      };
+      throw new Error("leave_thread only works in threads");
     }
 
-    if (invocation.source === "slash_command") {
-      const interaction = requireSlashInteraction(invocation);
+    if (invocation.source === discordSlashCommandProviderId) {
+      const interaction = invocation.rawEvent;
+      if (!isSlashInteraction(interaction))
+        throw new Error("Expected a slash interaction");
       await interaction.deferReply();
       await context.queue.add(
         () => runSlashLeave(channel, { ...context, invocation, botUserId }),
         { priority: "leave", bucketKey: channel.id },
       );
-      return { kind: "handled" };
+      return;
     }
 
-    await leaveThread(channel, { ...context, invocation, botUserId });
-    return { kind: "handled" };
+    const { farewell } = invocation.input;
+    if (farewell === undefined)
+      throw new Error("leave_thread requires a farewell");
+    await leaveThread(channel, { ...context, invocation, botUserId, farewell });
   },
 };
 
-function requireSlashInteraction(
-  invocation: ActionInvocation,
-): ChatInputCommandInteraction {
-  if (!isChatInputCommandInteraction(invocation.interaction)) {
-    throw new Error("leave_thread slash trigger requires a slash interaction");
-  }
-  return invocation.interaction;
-}
-
-function isChatInputCommandInteraction(
-  interaction: unknown,
-): interaction is ChatInputCommandInteraction {
-  return Boolean(
-    interaction &&
-      typeof interaction === "object" &&
-      "isChatInputCommand" in interaction &&
-      typeof interaction.isChatInputCommand === "function" &&
-      interaction.isChatInputCommand(),
-  );
-}
-
-function isDiscordMessage(message: unknown): message is Message {
-  return Boolean(
-    message &&
-      typeof message === "object" &&
-      "createdTimestamp" in message &&
-      typeof message.createdTimestamp === "number",
-  );
-}
-
 async function runSlashLeave(
   thread: ThreadChannel,
-  options: ActionContext & { invocation: ActionInvocation; botUserId: string },
+  options: ActionContext & { invocation: LeaveInvocation; botUserId: string },
 ): Promise<void> {
-  try {
-    const farewell = await generateSlashFarewell(thread, options);
-    await leaveThread(thread, {
-      ...options,
-      invocation: { ...options.invocation, args: { farewell } },
-    });
-  } catch (error) {
-    options.logger.error(
-      { error, threadId: thread.id },
-      "failed to leave thread",
-    );
-    const interaction = options.invocation.interaction;
-    if (isChatInputCommandInteraction(interaction)) {
-      await interaction.editReply("couldn't leave cleanly. staying put.");
-    }
-  }
+  const farewell = await generateSlashFarewell(thread, options);
+  await leaveThread(thread, { ...options, farewell });
 }
 
 async function generateSlashFarewell(
   thread: ThreadChannel,
-  options: ActionContext & { invocation: ActionInvocation; botUserId: string },
+  options: ActionContext & { invocation: LeaveInvocation; botUserId: string },
 ): Promise<string> {
   const log = options.logger.child({
     channelId: thread.id,
@@ -190,7 +156,11 @@ async function generateSlashFarewell(
 
 async function leaveThread(
   thread: ThreadChannel,
-  options: ActionContext & { invocation: ActionInvocation; botUserId: string },
+  options: ActionContext & {
+    invocation: LeaveInvocation;
+    botUserId: string;
+    farewell: string;
+  },
 ): Promise<void> {
   const log = options.logger.child({
     channelId: thread.id,
@@ -198,45 +168,19 @@ async function leaveThread(
     operation: "leave-thread",
   });
 
-  try {
-    const { farewell } = parseLeaveThreadArgs(options.invocation.args);
-    await sendFarewell(
-      options.invocation,
-      thread,
-      sanitizeFarewell(farewell),
-      log,
-    );
-    await thread.leave();
-  } catch (error) {
-    log.error({ error }, "failed to leave thread");
-    const interaction = options.invocation.interaction;
-    if (isChatInputCommandInteraction(interaction)) {
-      await interaction.editReply("couldn't leave cleanly. staying put.");
-    }
-  }
+  await sendFarewell(
+    options.invocation,
+    thread,
+    sanitizeFarewell(options.farewell),
+    log,
+  );
+  await thread.leave();
 }
 
-function cutoffTimestamp(invocation: ActionInvocation): number {
-  if (isChatInputCommandInteraction(invocation.interaction)) {
-    return invocation.interaction.createdTimestamp;
-  }
-  if (isDiscordMessage(invocation.triggerMessage)) {
-    return invocation.triggerMessage.createdTimestamp;
-  }
+function cutoffTimestamp(invocation: LeaveInvocation): number {
+  if (isSlashInteraction(invocation.rawEvent))
+    return invocation.rawEvent.createdTimestamp;
   return Date.now();
-}
-
-function parseLeaveThreadArgs(args: unknown): LeaveThreadArgs {
-  if (!args || typeof args !== "object" || !("farewell" in args)) {
-    throw new Error("leave_thread requires a farewell argument");
-  }
-
-  const farewell = (args as { farewell: unknown }).farewell;
-  if (typeof farewell !== "string") {
-    throw new Error("leave_thread farewell must be a string");
-  }
-
-  return { farewell };
 }
 
 function sanitizeFarewell(farewell: string): string {
@@ -246,7 +190,7 @@ function sanitizeFarewell(farewell: string): string {
 }
 
 async function sendFarewell(
-  invocation: ActionInvocation,
+  invocation: LeaveInvocation,
   thread: ThreadChannel,
   farewell: string,
   log: Logger,
@@ -255,8 +199,8 @@ async function sendFarewell(
   if (!first) throw new Error("leave farewell split into no chunks");
 
   log.debug({ chunkCount: rest.length + 1 }, "sending leave farewell chunks");
-  const interaction = invocation.interaction;
-  if (isChatInputCommandInteraction(interaction)) {
+  const interaction = invocation.rawEvent;
+  if (isSlashInteraction(interaction)) {
     await interaction.editReply({
       content: first,
       allowedMentions: NO_MENTIONS,

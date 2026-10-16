@@ -1,7 +1,7 @@
+import type { ActionRegistry } from "./context.js";
 import { deleteMessagesAction } from "./delete.js";
 import { leaveThreadAction } from "./leave.js";
 import { modelAction } from "./model.js";
-import type { ActionRegistry } from "./registry.js";
 import { actionRegistry } from "./registry.js";
 import { reloadRuntimeAction } from "./reload.js";
 

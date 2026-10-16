@@ -13,9 +13,11 @@ Protocord is the shared Discord action framework. Its canonical source is
 and AI scaffold. Patch consumes it as a pinned submodule at `vendor/protocord`
 through pnpm workspace dependencies. Publishing packages is deferred.
 
-The existing in-app actions still use Patch's original dispatcher; migrate
-them onto the shared runtime as a separate behavior change. Protocord's AI
-extension is currently a scaffold.
+Patch's commands and model actions use Protocord's shared validation,
+availability, authorization, execution, and presentation lifecycle. Patch owns
+the actions and a model tool-call trigger provider; Protocord owns Discord
+triggers, autocomplete, and command registration. Its AI extension remains a
+scaffold; Patch's provider uses the core extension contract directly.
 
 Start Remora conversation trials in a single-human place. Wrong-person recall
 and semantic forgetting collateral remain unresolved for shared places.

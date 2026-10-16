@@ -1,119 +1,78 @@
 import {
+  ApplicationCommandOptionType,
   type AutocompleteInteraction,
-  type ChatInputCommandInteraction,
-  SlashCommandBuilder,
 } from "discord.js";
 import { Schema } from "effect";
+import { slashCommand } from "protocord";
 import { getBotIdentity } from "../identity.js";
-import type { Action, ActionContext, ActionInvocation } from "./context.js";
-import { requireOwner, requireOwnerAutocomplete } from "./permissions.js";
+import { type Action, type ActionContext, actionInput } from "./context.js";
 
 const MODEL_COMMAND_NAME = "model";
 
-type ModelArgs = {
-  name?: string;
-};
+const ModelArgs = Schema.Struct({ name: Schema.optional(Schema.String) });
 
-export const modelAction: Action = {
+export const modelAction: Action<typeof ModelArgs.Type, string> = {
   name: "model",
   description: "Show or switch the current LLM model.",
-  inputSchema: Schema.Struct({ name: Schema.optional(Schema.String) }),
-  ownerOnly: true,
+  input: actionInput(ModelArgs),
   triggers: [
-    {
-      kind: "slash_command",
+    slashCommand({
       name: MODEL_COMMAND_NAME,
       description: `Show or switch ${getBotIdentity().name}'s current LLM model`,
       usage: "/model [name:<model alias>]",
-      data: new SlashCommandBuilder()
-        .setName(MODEL_COMMAND_NAME)
-        .setDescription(
-          `Show or switch ${getBotIdentity().name}'s current LLM model`,
-        )
-        .setDMPermission(true)
-        .addStringOption((option) =>
-          option
-            .setName("name")
-            .setDescription("Model alias/name to use, e.g. gemma-4-e4b-it")
-            .setRequired(false)
-            .setAutocomplete(true),
-        ),
-      parse: (interaction: ChatInputCommandInteraction) => ({
+      registration: { dmPermission: true },
+      options: [
+        {
+          type: ApplicationCommandOptionType.String,
+          name: "name",
+          description: "Model alias/name to use, e.g. gemma-4-e4b-it",
+          required: false,
+          autocomplete: true,
+        },
+      ],
+      parse: (interaction) => ({
         name: interaction.options.getString("name")?.trim() || undefined,
       }),
-      autocomplete: handleModelAutocomplete,
-    },
+      autocomplete: {
+        availability: () => ({ available: true }),
+        access: { kind: "authorized", authorization: () => "owner" },
+        complete: handleModelAutocomplete,
+      },
+    }),
   ],
   availability: () => ({ available: true }),
+  authorization: () => "owner",
   async execute(invocation, context) {
-    const interaction = requireSlashInteraction(invocation);
-    if (!(await requireOwner(interaction, context.config))) {
-      return { kind: "handled" };
-    }
-
-    const { name } = invocation.args as ModelArgs;
+    const { name } = invocation.input;
     if (!name) {
-      await interaction.reply({
-        content: `current model: ${context.settings.getLlmModel()}`,
-        ephemeral: true,
-      });
-      return { kind: "handled" };
+      return `current model: ${context.settings.getLlmModel()}`;
     }
 
     context.settings.setLlmModel(name);
     context.logger.info(
-      { userId: interaction.user.id, model: name },
+      { userId: invocation.requester?.id, model: name },
       "switched llm model",
     );
 
-    await interaction.reply({
-      content: `model set to ${name}`,
-      ephemeral: true,
-    });
-    return { kind: "handled" };
+    return `model set to ${name}`;
   },
 };
 
 async function handleModelAutocomplete(
   interaction: AutocompleteInteraction,
   context: ActionContext,
-): Promise<void> {
-  if (!(await requireOwnerAutocomplete(interaction, context.config))) return;
-
+) {
   const focused = interaction.options.getFocused().trim();
   try {
     const models = await context.modelCatalog.getModels();
-    await interaction.respond(
-      rankModelChoices(models, focused, context.settings.getLlmModel())
-        .slice(0, 25)
-        .map((model) => ({ name: model, value: model })),
-    );
+    return rankModelChoices(models, focused, context.settings.getLlmModel())
+      .slice(0, 25)
+      .map((model) => ({ name: model, value: model }));
   } catch (error) {
     context.logger.warn({ error }, "failed to autocomplete model choices");
     const currentModel = context.settings.getLlmModel();
-    await interaction.respond([{ name: currentModel, value: currentModel }]);
+    return [{ name: currentModel, value: currentModel }];
   }
-}
-
-function requireSlashInteraction(
-  invocation: ActionInvocation,
-): ChatInputCommandInteraction {
-  if (!isChatInputCommandInteraction(invocation.interaction)) {
-    throw new Error("model requires a slash command interaction");
-  }
-  return invocation.interaction;
-}
-
-function isChatInputCommandInteraction(
-  interaction: unknown,
-): interaction is ChatInputCommandInteraction {
-  return Boolean(
-    interaction &&
-      typeof interaction === "object" &&
-      "isChatInputCommand" in interaction &&
-      typeof interaction.isChatInputCommand === "function" &&
-      interaction.isChatInputCommand(),
-  );
 }
 
 function rankModelChoices(

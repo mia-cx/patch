@@ -1,22 +1,23 @@
 import {
-  type ChatInputCommandInteraction,
-  type Client,
+  ApplicationCommandOptionType,
   type Message,
-  SlashCommandBuilder,
   type TextBasedChannel,
 } from "discord.js";
 import { Schema } from "effect";
+import { slashCommand } from "protocord";
 import { getBotIdentity } from "../identity.js";
 import type { Logger } from "../logger.js";
-import type { Action, ActionInvocation } from "./context.js";
-import { requireDeleteBotMessagesPermission } from "./permissions.js";
+import { type Action, type ActionContext, actionInput } from "./context.js";
 
 const DELETE_COMMAND_NAME = "delete";
 const MAX_DELETE_COUNT = 100;
 
-type DeleteArgs = {
-  count: number;
-};
+const DeleteArgs = Schema.Struct({
+  count: Schema.Int.check(
+    Schema.isGreaterThanOrEqualTo(1),
+    Schema.isLessThanOrEqualTo(MAX_DELETE_COUNT),
+  ),
+});
 
 type DeleteResult = {
   scanned: number;
@@ -24,90 +25,55 @@ type DeleteResult = {
   failed: number;
 };
 
-export const deleteMessagesAction: Action = {
+export const deleteMessagesAction: Action<typeof DeleteArgs.Type, string> = {
   name: "delete_messages",
   description: "Delete the bot's latest messages in the current channel.",
-  inputSchema: Schema.Struct({ count: Schema.Number }),
+  input: actionInput(DeleteArgs),
   triggers: [
-    {
-      kind: "slash_command",
+    slashCommand({
       name: DELETE_COMMAND_NAME,
       description: `Delete ${getBotIdentity().name}'s latest messages in this channel`,
       usage: "/delete count:<1-100>",
-      data: new SlashCommandBuilder()
-        .setName(DELETE_COMMAND_NAME)
-        .setDescription(
-          `Delete ${getBotIdentity().name}'s latest messages in this channel`,
-        )
-        .setDMPermission(true)
-        .addIntegerOption((option) =>
-          option
-            .setName("count")
-            .setDescription(
-              `How many of ${getBotIdentity().name}'s latest messages to delete`,
-            )
-            .setRequired(true)
-            .setMinValue(1)
-            .setMaxValue(MAX_DELETE_COUNT),
-        ),
-      parse: (interaction: ChatInputCommandInteraction) => ({
+      registration: { dmPermission: true },
+      options: [
+        {
+          type: ApplicationCommandOptionType.Integer,
+          name: "count",
+          description: `How many of ${getBotIdentity().name}'s latest messages to delete`,
+          required: true,
+          minValue: 1,
+          maxValue: MAX_DELETE_COUNT,
+        },
+      ],
+      parse: (interaction) => ({
         count: interaction.options.getInteger("count", true),
       }),
-    },
+    }),
   ],
   availability: () => ({ available: true }),
+  authorization: () => "delete_messages",
   async execute(invocation, context) {
-    const interaction = requireSlashInteraction(invocation);
-    if (
-      !(await requireDeleteBotMessagesPermission(interaction, context.config))
-    ) {
-      return { kind: "handled" };
-    }
-
     const botUserId = context.client.user?.id;
     if (!botUserId) throw new Error("Bot user is not ready");
 
-    const { count } = invocation.args as DeleteArgs;
-    await interaction.deferReply({ ephemeral: true });
+    const { count } = invocation.input;
+    if (!invocation.channelId)
+      throw new Error("delete_messages requires a channel");
 
     const result = await deleteLatestBotMessages(
       context.client,
-      interaction.channelId,
+      invocation.channelId,
       botUserId,
       count,
       context.logger,
     );
 
-    await interaction.editReply(
-      `deleted ${result.deleted}/${count} latest ${getBotIdentity().name} messages. scanned ${result.scanned}, failed ${result.failed}.`,
-    );
-    return { kind: "handled" };
+    return `deleted ${result.deleted}/${count} latest ${getBotIdentity().name} messages. scanned ${result.scanned}, failed ${result.failed}.`;
   },
 };
 
-function requireSlashInteraction(
-  invocation: ActionInvocation,
-): ChatInputCommandInteraction {
-  if (!isChatInputCommandInteraction(invocation.interaction)) {
-    throw new Error("delete_messages requires a slash command interaction");
-  }
-  return invocation.interaction;
-}
-
-function isChatInputCommandInteraction(
-  interaction: unknown,
-): interaction is ChatInputCommandInteraction {
-  return Boolean(
-    interaction &&
-      typeof interaction === "object" &&
-      "isChatInputCommand" in interaction &&
-      typeof interaction.isChatInputCommand === "function" &&
-      interaction.isChatInputCommand(),
-  );
-}
-
 async function deleteLatestBotMessages(
-  client: Client,
+  client: ActionContext["client"],
   channelId: string,
   botUserId: string,
   count: number,

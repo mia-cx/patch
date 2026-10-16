@@ -6,6 +6,7 @@ import {
   type PartialMessage,
   type ThreadChannel,
 } from "discord.js";
+import { registerDiscordCommands } from "protocord";
 import { registerDefaultActions } from "./actions/defaults.js";
 import { actionRegistry } from "./actions/registry.js";
 import { classifyShouldRespond } from "./classifier/response-classifier.js";
@@ -17,7 +18,6 @@ import {
 } from "./conversation/context.js";
 import type { ConversationMessage } from "./conversation/types.js";
 import { dispatchInteraction } from "./discord/actions/dispatch.js";
-import { registerDiscordActionTriggers } from "./discord/actions/register.js";
 import { startActivityLoop } from "./discord/activity.js";
 import {
   DiscordJsAdapter,
@@ -69,11 +69,7 @@ client.once(Events.ClientReady, (readyClient) => {
     logger.warn({ error }, "failed to prewarm model catalog");
   });
 
-  void registerDiscordActionTriggers({
-    client: readyClient,
-    registry: actionRegistry,
-    logger,
-  }).catch((error) => {
+  void registerDiscordCommands(readyClient, actionRegistry).catch((error) => {
     logger.error({ error }, "failed to register action triggers");
   });
 

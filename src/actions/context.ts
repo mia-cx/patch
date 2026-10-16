@@ -1,5 +1,11 @@
-import type { Client } from "discord.js";
-import type { Schema } from "effect";
+import type { Client, Message } from "discord.js";
+import { Schema } from "effect";
+import type {
+  ActionInput,
+  ActionInvocation,
+  Action as ProtocordAction,
+  ActionRegistry as ProtocordRegistry,
+} from "protocord";
 import type { Config } from "../config.js";
 import type { LlmClient } from "../llm/client.js";
 import type { ModelCatalog } from "../llm/model-catalog.js";
@@ -7,80 +13,34 @@ import type { Logger } from "../logger.js";
 import type { GenerationQueue } from "../queue.js";
 import type { SettingsStore } from "../settings/store.js";
 
-export type Action = {
-  name: string;
-  description: string;
-  inputSchema: Schema.Schema<unknown>;
-  ownerOnly?: boolean;
-  triggers: ActionTrigger[];
-  availability(
-    input: ActionAvailabilityInput,
-    context: ActionContext,
-  ): ActionAvailability;
-  execute(
-    invocation: ActionInvocation,
-    context: ActionContext,
-  ): Promise<ActionResult>;
-};
+export type ActionPermission = "owner" | "delete_messages";
+export type Action<Input, Output = void> = ProtocordAction<
+  Input,
+  Output,
+  ActionContext,
+  ActionPermission
+>;
+export type ActionRegistry = ProtocordRegistry<ActionContext, ActionPermission>;
+export type { ActionInvocation };
 
 export type ActionContext = {
-  client: Client;
+  client: Pick<Client, "channels"> & { user: { id: string } | null };
   config: Config;
   llm: LlmClient;
   logger: Logger;
   queue: GenerationQueue;
   modelCatalog: ModelCatalog;
   settings: SettingsStore;
+  channel?: Pick<Message["channel"], "isThread"> | null | undefined;
 };
 
-export interface ActionTriggerBase {
-  kind: string;
-  name: string;
-  description: string;
-  usage: string;
-  [key: string]: unknown;
-}
-
-export interface ToolCallTrigger extends ActionTriggerBase {
-  kind: "tool_call";
-  inputSchema: Schema.Schema<unknown>;
-  inputSchemaJson?: unknown;
-}
-
-export type ActionTrigger = ActionTriggerBase | ToolCallTrigger;
-
-export type ResolvedToolCallTrigger = {
-  action: Action;
-  trigger: ToolCallTrigger;
-};
-
-export type ActionInvocation = {
-  source: string;
-  channelId: string;
-  guildId?: string | undefined;
-  requester?: { id: string; name: string } | undefined;
-  triggerMessage?: unknown;
-  interaction?: unknown;
-  args: unknown;
-};
-
-export type ActionAvailabilityInput = {
-  channelId: string;
-  guildId?: string | undefined;
-  isThread: boolean;
-  triggerMessage?: unknown;
-};
-
-export type ActionAvailability =
-  | { available: true; reason?: string | undefined }
-  | { available: false; reason: string };
-
-export type ActionResult =
-  | { kind: "handled" }
-  | { kind: "not_applicable"; reason: string };
-
-export function isToolCallTrigger(
-  trigger: ActionTrigger,
-): trigger is ToolCallTrigger {
-  return trigger.kind === "tool_call";
+/** Adapt Effect input validation and JSON Schema to Protocord's action contract. */
+export function actionInput<Input extends Schema.Decoder<unknown>>(
+  schema: Input,
+): ActionInput<Input["Type"]> {
+  const document = Schema.toJsonSchemaDocument(schema);
+  return {
+    parse: Schema.decodeUnknownSync(schema, { onExcessProperty: "error" }),
+    jsonSchema: { ...document.schema, $defs: document.definitions },
+  };
 }

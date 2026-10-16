@@ -1,73 +1,34 @@
-import {
-  type ChatInputCommandInteraction,
-  SlashCommandBuilder,
-} from "discord.js";
 import { Schema } from "effect";
+import { slashCommand } from "protocord";
 import { getBotIdentity } from "../identity.js";
 import { reloadPromptFiles } from "../prompts/files.js";
-import type { Action, ActionInvocation } from "./context.js";
-import { requireOwner } from "./permissions.js";
+import { type Action, actionInput } from "./context.js";
 
 const RELOAD_COMMAND_NAME = "reload";
+const ReloadArgs = Schema.Struct({});
 
-export const reloadRuntimeAction: Action = {
+export const reloadRuntimeAction: Action<typeof ReloadArgs.Type, string> = {
   name: "reload_runtime",
   description: "Reload prompt and identity files.",
-  inputSchema: Schema.Struct({}),
-  ownerOnly: true,
+  input: actionInput(ReloadArgs),
   triggers: [
-    {
-      kind: "slash_command",
+    slashCommand({
       name: RELOAD_COMMAND_NAME,
       description: `Reload ${getBotIdentity().name}'s prompt and identity files`,
       usage: "/reload",
-      data: new SlashCommandBuilder()
-        .setName(RELOAD_COMMAND_NAME)
-        .setDescription(
-          `Reload ${getBotIdentity().name}'s prompt and identity files`,
-        )
-        .setDMPermission(true),
+      registration: { dmPermission: true },
       parse: () => ({}),
-    },
+    }),
   ],
   availability: () => ({ available: true }),
+  authorization: () => "owner",
   async execute(invocation, context) {
-    const interaction = requireSlashInteraction(invocation);
-    if (!(await requireOwner(interaction, context.config))) {
-      return { kind: "handled" };
-    }
-
     const cleared = reloadPromptFiles();
     context.logger.info(
-      { userId: interaction.user.id, clearedPrompts: cleared },
+      { userId: invocation.requester?.id, clearedPrompts: cleared },
       "reloaded prompt and identity files",
     );
 
-    await interaction.reply({
-      content: `reloaded prompts and identity. cleared ${cleared} cached files.`,
-      ephemeral: true,
-    });
-    return { kind: "handled" };
+    return `reloaded prompts and identity. cleared ${cleared} cached files.`;
   },
 };
-
-function requireSlashInteraction(
-  invocation: ActionInvocation,
-): ChatInputCommandInteraction {
-  if (!isChatInputCommandInteraction(invocation.interaction)) {
-    throw new Error("reload_runtime requires a slash command interaction");
-  }
-  return invocation.interaction;
-}
-
-function isChatInputCommandInteraction(
-  interaction: unknown,
-): interaction is ChatInputCommandInteraction {
-  return Boolean(
-    interaction &&
-      typeof interaction === "object" &&
-      "isChatInputCommand" in interaction &&
-      typeof interaction.isChatInputCommand === "function" &&
-      interaction.isChatInputCommand(),
-  );
-}

@@ -4,8 +4,8 @@ import {
   escapeTranscriptText,
 } from "../conversation/escape.js";
 import type { LlmTool } from "../llm/client.js";
-import type { ActionContext } from "./context.js";
-import type { ActionRegistry } from "./registry.js";
+import type { ActionContext, ActionRegistry } from "./context.js";
+import { isToolCallTrigger } from "./tool-calls.js";
 
 export type ModelVisibleAction = {
   actionName: string;
@@ -17,37 +17,34 @@ export type ModelVisibleAction = {
   unavailableReason?: string | undefined;
 };
 
-export function buildModelVisibleActions(input: {
-  triggerMessage?: Message | undefined;
-  channelId: string;
-  guildId?: string | undefined;
+/** Discover explicitly exposed model tools for the current message's channel. */
+export async function buildModelVisibleActions(input: {
+  message: Message;
   context: ActionContext;
   registry: ActionRegistry;
-}): ModelVisibleAction[] {
-  const isThread = input.triggerMessage?.channel.isThread() ?? false;
-  return input.registry.toolCallTriggers.map(({ action, trigger }) => {
-    const availability = action.availability(
-      {
-        channelId: input.channelId,
-        guildId: input.guildId,
-        isThread,
-        triggerMessage: input.triggerMessage,
-      },
-      input.context,
-    );
+}): Promise<ModelVisibleAction[]> {
+  return Promise.all(
+    input.registry.actions.flatMap((action) =>
+      action.triggers.filter(isToolCallTrigger).map(async (trigger) => {
+        const availability = await action.availability({
+          ...input.context,
+          channel: input.message.channel,
+        });
 
-    const visible: ModelVisibleAction = {
-      actionName: action.name,
-      name: trigger.name,
-      description: trigger.description,
-      usage: trigger.usage,
-      inputSchemaJson: trigger.inputSchemaJson ?? { type: "object" },
-      available: availability.available,
-    };
-    if (!availability.available)
-      visible.unavailableReason = availability.reason;
-    return visible;
-  });
+        const visible: ModelVisibleAction = {
+          actionName: action.name,
+          name: trigger.name,
+          description: trigger.description,
+          usage: trigger.usage,
+          inputSchemaJson: trigger.input.jsonSchema,
+          available: availability.available,
+        };
+        if (!availability.available)
+          visible.unavailableReason = availability.reason;
+        return visible;
+      }),
+    ),
+  );
 }
 
 export function toLlmTools(

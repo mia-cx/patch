@@ -24,6 +24,8 @@ run `pnpm dev`.
 [`mia-cx/protocord`](https://github.com/mia-cx/protocord) is pinned at
 `vendor/protocord`. Its packages are part of this pnpm workspace, and the core
 is available as the `protocord` dependency without registry publication.
+Patch's slash commands, autocomplete, and model tool calls all use its action
+lifecycle. Patch supplies its own actions and model tool-call trigger provider.
 
 Patch's checks, tests, and build stay separate from the submodule's checks.
 Run `pnpm protocord:check` to validate all Protocord packages. Commit and push
