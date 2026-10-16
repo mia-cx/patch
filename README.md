@@ -70,13 +70,18 @@ It matches Remora commit `59886116b4053b7abca2913e13fc3eac3cdf61db` semantically
 only JSON formatting differs.
 [remora-patch-request.json](spec/fixtures/remora-patch-request.json) is a sanitized
 request with Patch's actual persona and fictional history for backend context
-measurements. These fixtures and the HTTP integration tests establish client
-compatibility; a real Gemma context/cache validation remains required before
-calling the integration ready for a bot trial.
+measurements. The real TypeScript client smoke passed against the isolated HF
+`gemma-reference-12288` service on 2026-10-16: both full-persona calls returned
+nonempty replies, selected synthetic fact 1, and replayed an identical successful
+write result while changing only the output allowance from 128 to 64 tokens.
+[The recorded responses](spec/remora-http-smoke-2026-10-16.json) contain no credentials.
+This proves transport and durable source replay; recall correctness is a separate
+Remora check. Both calls reported zero reused tokens, so this is no evidence of
+cache reuse. The Discord bot trial remains off pending that work.
 
 The Gemma tokenizer renders this sample at 8,770 tokens before Remora framing and
-128 output tokens. An 8,192-token profile cannot fit it; the larger backend profile
-still needs GPU validation.
+128 output tokens. An 8,192-token profile cannot fit it. The tested service reports
+a 12,288-token context, 256-token output limit, and eight read banks.
 
 Once the isolated service grants the fixture's synthetic bank, run
 `LLM_BASE_URL=<service>/v1 LLM_API_KEY=<test-policy-token> pnpm remora:smoke`.

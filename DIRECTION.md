@@ -31,8 +31,11 @@ generation retries. Read-bank selection never adds write destinations or grants.
 Runtime capabilities bound context/output; write receipts and observed cache reuse
 are validated. Classifier, activity, and formatting calls have no memory access.
 The shared contract and synthetic full-persona request are in `spec/fixtures`.
-Real Gemma profile/context/cache validation is owned by the Remora thread and
-must complete before the bot trial; llama.cpp support requires its native adapter.
+The real TypeScript HTTP smoke passes against the isolated HF 12,288-token
+profile: full-persona replies are nonempty and generation retries replay the same
+durable write result. These requests reported zero reused tokens; stable persona
+prefix reuse remains Remora-owned work before the bot trial. The bot stays off,
+and llama.cpp support still requires its native adapter.
 The measured synthetic Patch request already uses 8,770 rendered Gemma tokens
 before Remora framing/output, so an 8,192-token profile is insufficient.
 
