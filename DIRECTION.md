@@ -58,6 +58,11 @@ The trial is paused for Remora recall attribution work: stored dog facts retain
 Mia's source identity, but first-person recall lets Patch claim them as her own.
 Preserve the existing facts and receipts while testing explicit source-speaker
 binding in the Remora harness; Patch's chat roles do not solve recall ownership.
+Patch supports the optional `speaker: {bank, id}` attribution field and optional
+speaker-binding capability from contract `a8a34db`. Writable turns infer identity
+from their existing source tuple. This qualifies transport only: detached recall
+still fails ownership controls. Remora is testing an explicit opt-in ordinary-KV
+memory delivery mode; its default remains detached, with no trial switch approved.
 The measured synthetic Patch request already uses 8,770 rendered Gemma tokens
 before Remora framing/output, so an 8,192-token profile is insufficient.
 

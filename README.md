@@ -87,8 +87,13 @@ metadata and a matching write receipt. Receipts and observed cache reuse are
 logged; a writer failure preserves the generated reply and logs the failure.
 
 The shared contract snapshot is [remora-contract-v1.json](spec/fixtures/remora-contract-v1.json).
-It matches Remora commit `59886116b4053b7abca2913e13fc3eac3cdf61db` semantically;
+It matches Remora commit `a8a34dbdf479c1fff9530eff7f0e2eda5edacce7` semantically;
 only JSON formatting differs.
+Read-only callers may supply `remora.speaker: { bank, id }` to identify the current
+human's attribution scope. The ID is opaque and grants no access; writable turns
+infer that scope from `write_bank` and `turn.speaker_id`. The optional
+`features.speaker_binding` capability is decoded when present. The DM trial remains
+paused for recall ownership validation; this contract update qualifies transport.
 [remora-patch-request.json](spec/fixtures/remora-patch-request.json) is the archived
 qualification request with Patch's actual persona and fictional history in the
 original transcript format. The real TypeScript client smoke passed against the
