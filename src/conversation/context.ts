@@ -28,7 +28,7 @@ export type ConversationContextOptions = {
   guildRecentMessageLimit?: number;
 };
 
-/** Rebuilds the active chat from its persisted boundary, resetting only when full. */
+/** Rebuilds the active chat; explicit resets exclude old creates, edits, and ancestors. */
 export async function reconstructConversationContext(
   adapter: DiscordAdapter,
   message: Message,
@@ -37,6 +37,7 @@ export async function reconstructConversationContext(
   pronounProvider: PronounProvider | undefined,
   options: ConversationContextOptions,
 ): Promise<ConversationMessage[]> {
+  if (!options.store.allowsMessage(message.channelId, message.id)) return [];
   const trigger = toConversationMessage(message, botUserId);
   const storedStart = options.store.getStart(message.channelId);
   // An edit to an older message gets its own view, without rewinding this chat.
@@ -64,19 +65,20 @@ export async function reconstructConversationContext(
       trigger,
       botUserId,
       log,
+      start,
     );
 
     messages = [...recent, ...botReplyChain];
   } else if (message.channel.isThread()) {
     const botReplyChain = withContext(
-      await fetchBotReplyChain(adapter, trigger, botUserId, log),
+      await fetchBotReplyChain(adapter, trigger, botUserId, log, start),
       "thread",
     );
 
     messages = [...withContext(recent, "thread"), ...botReplyChain];
   } else {
     const replyChain = message.reference?.messageId
-      ? await reconstructReplyChain(adapter, trigger, log)
+      ? await reconstructReplyChain(adapter, trigger, log, start)
       : [trigger];
     messages = [
       ...withContext(recent, "neighbor"),
@@ -223,10 +225,16 @@ async function fetchBotReplyChain(
   trigger: ConversationMessage,
   botUserId: string,
   log: Logger,
+  startMessageId?: string,
 ): Promise<ConversationMessage[]> {
   if (!trigger.replyTo) return [];
 
-  const chain = await reconstructReplyChain(adapter, trigger, log);
+  const chain = await reconstructReplyChain(
+    adapter,
+    trigger,
+    log,
+    startMessageId,
+  );
   const parent = chain.at(-2);
   return parent?.authorId === botUserId ? chain : [];
 }

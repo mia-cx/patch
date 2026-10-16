@@ -90,6 +90,7 @@ const actionContext = {
   queue,
   modelCatalog,
   settings,
+  contextStore,
 };
 
 registerDefaultActions(actionRegistry);
@@ -178,6 +179,7 @@ async function handleMessage(message: Message): Promise<void> {
   const botUserId = client.user?.id;
   if (!botUserId) return;
   if (message.author.bot) return;
+  if (!contextStore.observeHumanMessage(message.channelId, message.id)) return;
 
   const mentionsBotUser = message.mentions.users.has(botUserId);
   rememberMentionState(message.id, mentionsBotUser);
@@ -232,6 +234,7 @@ async function handleMessage(message: Message): Promise<void> {
   );
   await queue.add(
     async () => {
+      if (!contextStore.allowsMessage(message.channelId, message.id)) return;
       logger.debug(
         {
           messageId: message.id,
@@ -249,6 +252,7 @@ async function handleMessage(message: Message): Promise<void> {
         contextMessages,
         config.classifierContextMessageLimit,
       );
+      if (contextMessages.length === 0) return;
       if (classifierContextMessages.length !== contextMessages.length) {
         logger.debug(
           {
@@ -381,6 +385,7 @@ async function handleMessageUpdate(
   const botUserId = client.user?.id;
   if (!botUserId) return;
 
+  if (!contextStore.allowsMessage(newMessage.channelId, newMessage.id)) return;
   const beforeMentionedBot =
     mentionStateByMessageId.get(oldMessage.id) ??
     mentionsBot(oldMessage, botUserId);

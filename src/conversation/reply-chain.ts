@@ -8,6 +8,7 @@ export async function reconstructReplyChain(
   adapter: DiscordAdapter,
   trigger: ConversationMessage,
   logger: Logger,
+  startMessageId?: string,
 ): Promise<ConversationMessage[]> {
   const messagesById = new Map<string, ConversationMessage>();
   messagesById.set(trigger.id, trigger);
@@ -17,6 +18,11 @@ export async function reconstructReplyChain(
 
   for (let depth = 0; depth < MAX_REPLY_DEPTH; depth += 1) {
     if (!current.replyTo) break;
+    if (
+      startMessageId &&
+      BigInt(current.replyTo.messageId) < BigInt(startMessageId)
+    )
+      break;
 
     const parent = await getMessage(
       adapter,
