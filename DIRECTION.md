@@ -66,7 +66,9 @@ reaches the token budget, then jumps forward to a recent boundary with room to
 grow again. Keep prompt prefixes stable for llama.cpp's KV cache. Evaluate
 Remora's recall across these resets before deciding whether compaction is
 needed; automatic summaries are deferred.
-Add an explicit context-reset command: after successful execution, the next new
-human message establishes an empty conversation's starting boundary. Persist
-this pending reset across restarts and exclude older history/reply ancestors;
-saved Remora memories remain intact. Implementation is delegated in isolation.
+Owner-only `/context reset` waits for an active reply to finish, then confirms
+success. The next new human arrival establishes an empty conversation's starting
+boundary, even without a reply. Pending resets survive restarts; older queued
+turns, edits and reply ancestors cannot restore history. Saved Remora memories
+remain intact. The implementation is verified; native command publication and
+trial restart await the Remora ownership fix.
