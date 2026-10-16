@@ -2,7 +2,12 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../config.js";
 import { LlmClient, type LlmMessage } from "./client.js";
-import type { RemoraRequest, RemoraResponse } from "./remora.js";
+import type {
+  RemoraIdentity,
+  RemoraRequest,
+  RemoraResponse,
+  parseRemoraCapabilities,
+} from "./remora.js";
 
 // Golden examples are copied from Remora's canonical contract, not re-created by Patch.
 const contract: {
@@ -11,18 +16,13 @@ const contract: {
     messages: LlmMessage[];
     remora: RemoraRequest;
   };
+  identity_request_example: { messages: LlmMessage[]; remora: RemoraRequest };
   response_example: {
     choices: { message: { content: string } }[];
     remora: RemoraResponse;
   };
-  capabilities_example: {
-    features: Record<string, boolean>;
-    limits: {
-      context_tokens: number;
-      max_output_tokens: number;
-      max_read_banks: number;
-    };
-  };
+  capabilities_example: ReturnType<typeof parseRemoraCapabilities>;
+  identity_capabilities_example: ReturnType<typeof parseRemoraCapabilities>;
 } = JSON.parse(
   readFileSync(
     new URL("../../spec/fixtures/remora-contract-v1.json", import.meta.url),
@@ -135,6 +135,177 @@ describe("Remora contract over the LLM HTTP interface", () => {
     ]);
     expect(result.content).toBe("Got it.");
     expect(result.remora?.writes).toBeNull();
+  });
+
+  // Proves negotiated identity survives transport, honors actual limits and never expands read-only writes.
+  it("transports identity within advertised limits and stops when support is withdrawn", async () => {
+    const config = loadConfig({
+      DISCORD_TOKEN: "test",
+      DISCORD_CLIENT_ID: "test",
+      LLM_TEMPERATURE: "0",
+    });
+    let capabilities = {
+      ...contract.identity_capabilities_example,
+      limits: {
+        ...contract.identity_capabilities_example.limits,
+        max_identity_bindings: 1,
+        max_identity_labels: 1,
+        max_identity_id_chars: 32,
+        max_identity_label_chars: 4,
+      },
+    };
+    const requests: RemoraRequest[] = [];
+    const writes = contract.response_example.remora.writes;
+    const request = contract.identity_request_example;
+    const identity = request.remora.identity;
+    if (!writes || !identity)
+      throw new Error("Canonical identity fixture missing");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        if (url.endsWith("/remora/capabilities"))
+          return Response.json(capabilities);
+        const body = JSON.parse(String(init.body));
+        requests.push(body.remora);
+        return Response.json({
+          ...contract.response_example,
+          remora: {
+            ...contract.response_example.remora,
+            read_banks: ["place:a"],
+            writes: body.remora.turn
+              ? { ...writes, bank: "place:a", source_id: "event:1" }
+              : null,
+          },
+        });
+      }),
+    );
+    const llm = new LlmClient(config);
+    await llm.initializeRemora();
+    const saved = await llm.complete(request);
+    const readonly: RemoraRequest = {
+      read_banks: ["place:a"],
+      speaker: { bank: "place:a", id: "local:7" },
+      identity: {
+        assistant: { bank: "place:a", id: " account:helper " },
+        labels: [
+          {
+            actor: {
+              bank: "place:a",
+              role: "assistant",
+              id: " account:helper ",
+            },
+            label: "😀😀😀😀",
+          },
+        ],
+      },
+    };
+    const recalled = await llm.complete({
+      messages: request.messages,
+      remora: readonly,
+    });
+    expect(requests).toEqual([request.remora, readonly]);
+    expect(saved.remora?.writes?.source_id).toBe("event:1");
+    expect(recalled.remora?.writes).toBeNull();
+
+    const tooLarge: RemoraIdentity[] = [
+      {
+        ...identity,
+        bindings: [
+          ...(identity.bindings ?? []),
+          {
+            actor: { bank: "place:a", role: "assistant", id: "account:helper" },
+            entity: "agent:helper",
+          },
+        ],
+      },
+      {
+        ...identity,
+        labels: [
+          ...(identity.labels ?? []),
+          {
+            actor: { bank: "place:a", role: "assistant", id: "account:helper" },
+            label: "Help",
+          },
+        ],
+      },
+      { ...identity, assistant: { bank: "place:a", id: "x".repeat(33) } },
+      { ...identity, labels: [{ entity: "person:alpha", label: "Alex!" }] },
+    ];
+    for (const identity of tooLarge)
+      await expect(
+        llm.complete({ ...request, remora: { ...request.remora, identity } }),
+      ).rejects.toThrow("advertised");
+    capabilities = {
+      ...capabilities,
+      features: { ...capabilities.features, entity_identity: false },
+    };
+    await llm.initializeRemora();
+    await expect(llm.complete(request)).rejects.toThrow("not been negotiated");
+    expect(requests).toHaveLength(2);
+  });
+
+  // Proves unsupported services never receive an identity object, including an empty one.
+  it.each([undefined, false])(
+    "blocks identity when support is %s",
+    async (support) => {
+      const config = loadConfig({
+        DISCORD_TOKEN: "test",
+        DISCORD_CLIENT_ID: "test",
+        LLM_TEMPERATURE: "0",
+      });
+      const fetch = vi.fn(async () =>
+        Response.json({
+          ...contract.capabilities_example,
+          features: {
+            ...contract.capabilities_example.features,
+            entity_identity: support,
+          },
+        }),
+      );
+      vi.stubGlobal("fetch", fetch);
+      const llm = new LlmClient(config);
+      const request = {
+        ...contract.readonly_speaker_request_example,
+        remora: { read_banks: ["place:a"], identity: {} },
+      };
+      await expect(llm.complete(request)).rejects.toThrow(
+        "not been negotiated",
+      );
+      await llm.initializeRemora();
+      await expect(llm.complete(request)).rejects.toThrow(
+        "not been negotiated",
+      );
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  // Proves an enabled endpoint cannot make clients guess a missing or invalid identity limit.
+  it.each([
+    ["max_identity_bindings", undefined],
+    ["max_identity_labels", undefined],
+    ["max_identity_id_chars", undefined],
+    ["max_identity_label_chars", undefined],
+    ["max_identity_bindings", 17],
+    ["max_identity_label_chars", 0],
+  ] as const)("rejects enabled identity limit %s=%s", async (field, value) => {
+    const config = loadConfig({
+      DISCORD_TOKEN: "test",
+      DISCORD_CLIENT_ID: "test",
+      LLM_TEMPERATURE: "0",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          ...contract.identity_capabilities_example,
+          limits: {
+            ...contract.identity_capabilities_example.limits,
+            [field]: value,
+          },
+        }),
+      ),
+    );
+    await expect(new LlmClient(config).initializeRemora()).rejects.toThrow();
   });
 
   // Proves durable failed-write receipts remain visible without discarding the generated answer.
