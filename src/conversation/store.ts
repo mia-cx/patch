@@ -1,7 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { SnowflakeUtil } from "discord.js";
 
 type ResetBoundary = {
   cutoff: string;
@@ -11,6 +10,7 @@ type ResetBoundary = {
 /** Persists where each chat's active context begins; Discord owns the messages. */
 export class ConversationContextStore {
   private readonly db: DatabaseSync;
+  private readonly confirmingResets = new Map<string, string[]>();
 
   constructor(path: string) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
@@ -63,6 +63,7 @@ export class ConversationContextStore {
 
   /** Observe human creates before classification, so even an unanswered turn can start a reset chat. */
   observeHumanMessage(channelId: string, messageId: string): boolean {
+    this.confirmingResets.get(channelId)?.push(messageId);
     const reset = this.getReset(channelId);
     if (!reset) return true;
     if (BigInt(messageId) <= BigInt(reset.cutoff)) return false;
@@ -80,24 +81,48 @@ export class ConversationContextStore {
     );
   }
 
-  /** Run in the channel's queue: only successful confirmation establishes the reset cutoff. */
+  /** Run in the channel's queue; a fresh Discord confirmation ID defines successful reset ordering. */
   async resetAfterConfirmation(
     channelId: string,
-    confirm: () => Promise<unknown>,
+    confirm: () => Promise<{ id: string; retract: () => Promise<unknown> }>,
   ): Promise<void> {
     // Check writable storage before posting success, but roll back immediately:
     // other channels and human arrivals must keep their old state until success.
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.writeReset(channelId, {
-        cutoff: currentMessageCutoff(),
+        cutoff: "0",
         start: null,
       });
     } finally {
       this.db.exec("ROLLBACK");
     }
-    await confirm();
-    this.writeReset(channelId, { cutoff: currentMessageCutoff(), start: null });
+    const arrivals: string[] = [];
+    this.confirmingResets.set(channelId, arrivals);
+    try {
+      const confirmation = await confirm();
+      const cutoff = confirmation.id;
+      // A human can see Discord's success and reply before the HTTP response
+      // reaches us. Preserve that first arrival, including an unanswered turn.
+      const start = arrivals.find((id) => BigInt(id) > BigInt(cutoff)) ?? null;
+      try {
+        this.writeReset(channelId, { cutoff, start });
+      } catch (error) {
+        // Storage can still fail after the preflight. Retract success before
+        // the action runtime presents the failure; the old row stays intact.
+        try {
+          await confirmation.retract();
+        } catch (retractError) {
+          throw new AggregateError(
+            [error, retractError],
+            "Reset persistence and confirmation retraction failed",
+          );
+        }
+        throw error;
+      }
+    } finally {
+      this.confirmingResets.delete(channelId);
+    }
   }
 
   private getReset(channelId: string): ResetBoundary | undefined {
@@ -128,15 +153,4 @@ export class ConversationContextStore {
   close(): void {
     this.db.close();
   }
-}
-
-function currentMessageCutoff(): string {
-  // Discord snowflakes order creates within a millisecond. Exclude that whole
-  // millisecond so a delayed event from the confirmation cannot seed old history.
-  return SnowflakeUtil.generate({
-    timestamp: Date.now(),
-    workerId: 31n,
-    processId: 31n,
-    increment: 4095n,
-  }).toString();
 }
