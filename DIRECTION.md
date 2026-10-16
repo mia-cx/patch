@@ -45,7 +45,7 @@ backend `90c4970` is selectable behind the same API for its exact BF16 profile.
 Its final stock Patch HTTP proof has nonempty replies and durable receipt replay,
 with a cold 0/8,917 reused/evaluated count followed by 7,310/1,607. Native needs
 `LLM_TIMEOUT_MS=300000`; this does not establish GPU, quantized, or broad HF parity.
-The controlled HF trial is running in Mia's one-to-one DM, restricted to that
+The controlled HF trial is scoped to Mia's one-to-one DM, restricted to that
 channel with global command registration skipped. It uses separate trial SQLite
 settings and a fresh context starting at the first new human message; subsequent
 turns grow normally. Attributed chat-role rendering now passes both real failed
@@ -54,6 +54,10 @@ assistant text plain and reference metadata beside its reply: XML assistant
 wrappers leak into output, and cumulative metadata footers obscure recent
 dialogue in Gemma's 512-token local attention. Native qualification does not
 gate this HF trial.
+The trial is paused for Remora recall attribution work: stored dog facts retain
+Mia's source identity, but first-person recall lets Patch claim them as her own.
+Preserve the existing facts and receipts while testing explicit source-speaker
+binding in the Remora harness; Patch's chat roles do not solve recall ownership.
 The measured synthetic Patch request already uses 8,770 rendered Gemma tokens
 before Remora framing/output, so an 8,192-token profile is insufficient.
 
