@@ -80,6 +80,9 @@ const RemoraCapabilitiesSchema = Schema.Struct({
   model: Schema.String,
   backend: Backend,
   profile: Schema.String,
+  memory_delivery: Schema.optional(
+    Schema.Literals(["detached", "native-cache"]),
+  ),
   source_binding: Schema.Literal("final_user_message_exact"),
   features: Schema.Struct({
     memory: Schema.Boolean,

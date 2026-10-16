@@ -85,6 +85,7 @@
     "without_extension": "Ordinary generation with no bank access and no writes. No global default bank.",
     "unsupported": "Explicit OpenAI-shaped errors; unsupported tools, thinking, multimodal content, nonzero temperature and streaming are not silently ignored by the first HF backend.",
     "cache_prompt": "Boolean reuse request. false disables reuse. true requires a backend advertising prefix_cache and returns observed token counts, not a reuse guarantee. State changes, edits or context resets may legitimately yield zero reuse.",
+    "memory_delivery": "Optional capabilities.memory_delivery discloses the server-selected delivery mode. detached is the existing default with separate virtual attention K/V. HF native-cache is opt-in: selected source-group blocks become ordinary real tokens immediately before the final user message, including on coherent refresh. They consume context and obey native sliding attention. Changing delivery requires a separately configured service/profile, not a request field. Backend=transformers remains HF even with native-cache delivery; this does not select llama.cpp.",
     "cancellation": "Before inference completes, cancellation commits no automatic write. Nonstreaming write and receipt commit atomically before sending the completed response. A disconnect after commit is retried with the same source identity.",
     "history": "The supplied messages are the entire real-token generation history. No independent hidden history, silent eviction or resurrection of caller-discarded turns. Over-budget input is rejected explicitly."
   },
@@ -107,6 +108,7 @@
       "model": { "type": "string" },
       "backend": { "enum": ["transformers", "llama.cpp"] },
       "profile": { "type": "string" },
+      "memory_delivery": { "enum": ["detached", "native-cache"] },
       "source_binding": { "const": "final_user_message_exact" },
       "features": {
         "type": "object",
@@ -152,8 +154,9 @@
     "version": 1,
     "model": "gemma-4-e2b-it",
     "backend": "transformers",
-    "profile": "gemma-reference-448",
+    "profile": "gemma-reference-12288",
     "source_binding": "final_user_message_exact",
+    "memory_delivery": "detached",
     "features": {
       "memory": true,
       "automatic_writes": true,
@@ -167,8 +170,8 @@
       "thinking": false
     },
     "limits": {
-      "context_tokens": 448,
-      "max_output_tokens": 64,
+      "context_tokens": 12288,
+      "max_output_tokens": 256,
       "max_read_banks": 8
     }
   },
