@@ -25,7 +25,7 @@ Implemented:
 - Focused guild neighbor context around the triggering user / referenced Patch burst.
 - Basic transcript formatting with `<message>` and `<response>`.
 - Patch messages distinguished as `<response author_id="patch">`.
-- The bottom transcript block is the trigger.
+- The bottom conversation `<message>` block is the trigger.
 - Typing indicator while generating.
 - Guild response first chunk posted as a reply to the triggering message.
 - Later guild burst chunks posted as normal messages to avoid Patch replying to herself.
@@ -143,7 +143,7 @@ PASSIVE_RESPONSE_TTL_MS=30000
 MAX_GLOBAL_CONCURRENCY=1
 ```
 
-`LLM_CONTEXT_TOKENS` is used as an approximate prompt/context budget for input. `LLM_MAX_TOKENS` is only the llama.cpp output cap and does not reduce transcript context. The harness subtracts only a fixed prompt-overhead estimate for non-transcript prompt text before trimming conversation context.
+`LLM_CONTEXT_TOKENS` is the approximate total context budget. The harness reserves the assembled prompt instructions, a template/tool margin, and `LLM_MAX_TOKENS` for output (or the larger thinking allowance when enabled). The remainder is available for conversation history.
 
 `SETTINGS_DB_PATH` points at Patch's local SQLite settings database. `LLM_MODEL` seeds the persistent `llm_model` setting on first startup only; after that, `/model` updates the database and live LLM requests use the stored model.
 
@@ -165,34 +165,31 @@ Thread/forum messages are not passively followed in v0. Direct mentions may stil
 
 ## Context reconstruction
 
-### DMs
+Each DM, guild channel, and thread has a persistent starting message ID in the
+SQLite database at `SETTINGS_DB_PATH`. The first request seeds history using
+`DM_CONTEXT_MESSAGE_LIMIT`, `THREAD_CONTEXT_MESSAGE_LIMIT`, or
+`GUILD_RECENT_MESSAGE_LIMIT`. Later requests fetch all messages from that fixed
+boundary through the trigger, with pagination. The initial counts do not apply
+to subsequent turns. Message edits and deletions are reflected by Discord's
+current history; fetching failures leave the saved boundary intact.
 
-DMs do not rely on reply chains. Patch fetches recent DM history, sorts chronologically, and formats it as conversation context.
+Context grows until its approximate token budget is exceeded. Patch then keeps
+a contiguous recent suffix containing roughly half the available conversation
+tokens, persists its first message as the new starting boundary, and grows
+again. Whole messages are retained. Reply chains cannot reintroduce messages
+older than the active boundary. An edit-to-mention before the boundary gets a
+separate historical view without rewinding the chat.
 
-### Threads
+Thread context is marked `thread`; guild history is marked `neighbor` and
+relevant reply-chain entries are marked `reply_chain`. When duplicates occur,
+reply-chain context wins. Internal context labels are not included in the
+formatted transcript.
 
-Thread context fetches up to 30 recent messages from the thread, sorts them chronologically, and marks them as `context="thread"`.
-
-Thread context is intentionally DM-like: nearby thread history is relevant even when messages are not contiguous from the same author.
-
-### Guild channels
-
-Guild context combines:
-
-- strict upward reply chain as `context="reply_chain"`
-- focused neighbor context as `context="neighbor"`
-
-Neighbor context is intentionally narrow to avoid crosstalk:
-
-- includes the trigger message
-- includes contiguous previous messages from the same trigger author
-- if the trigger replies to a Patch burst, includes that referenced Patch burst and the human message immediately before it
-- stops at other human speakers for normal neighbor walkback
-- stops outside the time window
-
-When duplicate messages appear in both neighbor and reply-chain context, reply-chain context wins.
-
-Context is approximately budgeted using `LLM_CONTEXT_TOKENS`.
+Fixed response instructions precede the transcript. Participant and per-turn
+classifier metadata follow its conversation blocks, preserving the history
+prefix for llama.cpp prompt caching. Persisting a boundary preserves the chat
+view across Patch restarts; server-side KV state may need to be rebuilt.
+Compaction is deferred pending Remora recall experiments across resets.
 
 ## Prompting
 
@@ -219,7 +216,7 @@ Use XML-like transcript blocks:
 - Patch messages: `<response>`
 - Patch's real bot user ID is normalized to `author_id="patch"`
 - `author_name`, `author_id`, and optional `pronouns` are speaker identity
-- The bottom transcript block is the trigger
+- The bottom conversation `<message>` block is the trigger; the participant index and optional classifier decision follow conversation blocks
 - user-controlled content is XML-escaped and control tags are neutralized
 - when profile pronouns are unavailable or look nonsensical, transcript metadata uses `pronouns="missing"`; Patch may use they/them in passing but should report missing pronouns when asked
 

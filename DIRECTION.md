@@ -21,3 +21,9 @@ scaffold; Patch's provider uses the core extension contract directly.
 
 Start Remora conversation trials in a single-human place. Wrong-person recall
 and semantic forgetting collateral remain unresolved for shared places.
+
+Chat context grows from a persistent per-channel starting boundary until it
+reaches the token budget, then jumps forward to a recent boundary with room to
+grow again. Keep prompt prefixes stable for llama.cpp's KV cache. Evaluate
+Remora's recall across these resets before deciding whether compaction is
+needed; automatic summaries are deferred.
