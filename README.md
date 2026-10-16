@@ -87,12 +87,19 @@ metadata and a matching write receipt. Receipts and observed cache reuse are
 logged; a writer failure preserves the generated reply and logs the failure.
 
 The shared contract snapshot is [remora-contract-v1.json](spec/fixtures/remora-contract-v1.json).
-It matches Remora commit `9a63c85ea04b1635cb476273b7e4a5d5e93e3f98` semantically;
+It matches Remora commit `193e295caf7baf55eee37a5a24c5931338dbdf72` semantically;
 only JSON formatting differs.
 Read-only callers may supply `remora.speaker: { bank, id }` to identify the current
 human's attribution scope. The ID is opaque and grants no access; writable turns
 infer that scope from `write_bank` and `turn.speaker_id`. The optional
 `features.speaker_binding` capability is decoded when present.
+The low-level LLM client also supports optional `remora.identity` assistant,
+binding and label data. It sends that object only after capability negotiation
+advertises `features.entity_identity: true` with all four valid identity limits.
+It checks requests against those advertised counts and character limits while
+preserving exact IDs and labels. Missing or false support rejects even an empty
+identity object locally. Patch's DM request builder still sends its existing
+source tuple; automatic identity mapping awaits the backend handoff.
 Capabilities also retain optional `memory_delivery: "detached" | "native-cache"`.
 Delivery is selected by the service, with detached as its default. HF native-cache
 feeds recalled source blocks through ordinary token/KV input and remains

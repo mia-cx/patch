@@ -59,7 +59,7 @@ Mia's source identity, but first-person recall lets Patch claim them as her own.
 Preserve the existing facts and receipts while testing explicit source-speaker
 binding in the Remora harness; Patch's chat roles do not solve recall ownership.
 Patch supports the optional `speaker: {bank, id}` attribution field and optional
-speaker-binding capability from contract `9a63c85`. Writable turns infer identity
+speaker-binding capability from contract `193e295`. Writable turns infer identity
 from their existing source tuple. This qualifies transport only: detached recall
 still fails ownership controls. Capabilities disclose optional `memory_delivery`.
 The opt-in HF `native-cache` mode delivers recall through ordinary token/KV input;
@@ -77,8 +77,11 @@ platform SDK. Patch accepts the [entity identity semantics](https://github.com/m
 the existing tuple identifies the local human; assistant identity is separate;
 shared links are durable actor-scoped associations and labels remain request-local.
 Wire review is closed at the [additive identity draft](https://github.com/mia-cx/remora/blob/ea060f25b03e6ad82cede9db6514a805a1e1ecf1/docs/api/entity-identity-wire-draft.json).
-Canonical promotion and implementation are pending. Runtime representation,
-the client contract and stored facts remain unchanged while the trial is paused.
+The canonical contract is promoted at `193e295`. Low-level client identity transport
+requires enabled support and all four valid advertised limits, then enforces those
+limits without rewriting IDs or labels. The DM builder retains its original source
+tuple. Remora implementation and live validation are pending; stored facts and
+receipts remain unchanged, and the trial stays paused.
 The measured synthetic Patch request already uses 8,770 rendered Gemma tokens
 before Remora framing/output, so an 8,192-token profile is insufficient.
 
