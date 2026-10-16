@@ -4,9 +4,12 @@ Patch is a Discord persona and conversation partner with her own voice, taste,
 boundaries, and timing. Build the simplest useful conversation path before
 expanding the assistant features in the versioned specs.
 
-Patch's runtime is JavaScript/TypeScript. Gemma with Remora is the next model
-and memory integration; implement that path for this runtime. The earlier
-handoff's proposed Python serving bridge is superseded.
+Patch's runtime stays JavaScript/TypeScript. Remora provides an OpenAI-compatible
+inference API with optional memory-bank selection and fact-level recall controls.
+Remora can keep its Python core; Patch consumes the API and remains independent
+of the inference backend. Bank selection and write destinations are distinct,
+and Remora enforces which facts may enter recall. Before implementing the client
+integration, read [the Remora handoff](spec/remora-service-handoff.md).
 
 Protocord is the shared Discord action framework. Its canonical source is
 `mia-cx/protocord`, extracted from Prod with the core, settings, permissions,
