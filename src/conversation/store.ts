@@ -25,6 +25,9 @@ export class ConversationContextStore {
         cutoff_message_id TEXT NOT NULL,
         start_message_id TEXT
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS conversation_memory_contexts (
+        channel_id TEXT PRIMARY KEY
+      ) STRICT;
     `);
   }
 
@@ -81,6 +84,47 @@ export class ConversationContextStore {
     );
   }
 
+  /** Track memory-backed chats under this caller's API credential before sending inference. */
+  recordMemoryContext(channelId: string): void {
+    this.db
+      .prepare(
+        "INSERT OR IGNORE INTO conversation_memory_contexts (channel_id) VALUES (?)",
+      )
+      .run(channelId);
+  }
+
+  /**
+   * Fence all memory-backed history before deletion, while the generation queue is exclusive.
+   * Deleting one bank can suppress descendants in another; the server reveals no dependency inventory.
+   * The fence survives a crash or lost HTTP response; a failed deletion can therefore still reset context.
+   */
+  resetMemoryContexts(
+    fallbackChannelIds: readonly string[],
+    cutoff: string,
+  ): number {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const channels = new Set(fallbackChannelIds);
+      for (const row of this.db
+        .prepare("SELECT channel_id FROM conversation_memory_contexts")
+        .all()) {
+        if (typeof row.channel_id !== "string")
+          throw new Error("Invalid memory context channel");
+        channels.add(row.channel_id);
+      }
+      for (const channelId of channels) {
+        const reset = this.getReset(channelId);
+        if (reset && BigInt(reset.cutoff) >= BigInt(cutoff)) continue;
+        this.writeReset(channelId, { cutoff, start: null });
+      }
+      this.db.exec("COMMIT");
+      return channels.size;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   /** Run in the channel's queue; a fresh Discord confirmation ID defines successful reset ordering. */
   async resetAfterConfirmation(
     channelId: string,
@@ -106,7 +150,14 @@ export class ConversationContextStore {
       // reaches us. Preserve that first arrival, including an unanswered turn.
       const start = arrivals.find((id) => BigInt(id) > BigInt(cutoff)) ?? null;
       try {
-        this.writeReset(channelId, { cutoff, start });
+        this.db.exec("BEGIN IMMEDIATE");
+        try {
+          this.writeReset(channelId, { cutoff, start });
+          this.db.exec("COMMIT");
+        } catch (error) {
+          this.db.exec("ROLLBACK");
+          throw error;
+        }
       } catch (error) {
         // Storage can still fail after the preflight. Retract success before
         // the action runtime presents the failure; the old row stays intact.
@@ -148,6 +199,9 @@ export class ConversationContextStore {
       ON CONFLICT(channel_id) DO UPDATE SET cutoff_message_id = excluded.cutoff_message_id, start_message_id = excluded.start_message_id
     `)
       .run(channelId, reset.cutoff, reset.start);
+    this.db
+      .prepare("DELETE FROM conversation_memory_contexts WHERE channel_id = ?")
+      .run(channelId);
   }
 
   close(): void {

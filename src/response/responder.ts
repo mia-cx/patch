@@ -97,6 +97,7 @@ export async function respond(options: RespondOptions): Promise<void> {
       "response generation started",
     );
     const remora = buildRemoraRequest(config, message);
+    if (remora) contextStore.recordMemoryContext(message.channelId);
     const chain =
       contextMessages ??
       (await reconstructConversationContext(

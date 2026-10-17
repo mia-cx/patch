@@ -304,6 +304,42 @@ async function runtime(
 }
 
 describe("persistent chat context", () => {
+  // Proves explicit forgetting fences all memory-backed chats, including other banks, across restarts.
+  it("fences memory-backed chats before deletion without resetting plain conversations", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "patch-memory-reset-"));
+    resources.push(() => rmSync(dir, { recursive: true, force: true }));
+    const path = join(dir, "patch.sqlite");
+    const app = await runtime(ChannelType.DM, path);
+    const otherChannel = "1000000000000000009";
+    const unrelatedChannel = "1000000000000000010";
+    const other = await runtime(ChannelType.DM, path, otherChannel);
+    const unrelated = await runtime(ChannelType.DM, path, unrelatedChannel);
+    for (const chat of [app, other, unrelated]) {
+      chat.add(1, { content: "old fact must not return" });
+      chat.add(2);
+      await chat.context(2);
+    }
+    app.store.recordMemoryContext(CHANNEL);
+    app.store.recordMemoryContext(otherChannel);
+    expect(app.store.resetMemoryContexts([CHANNEL], packet(4).id)).toBe(2);
+    app.reopen();
+    expect(await app.context(2)).toEqual([]);
+    expect(await other.context(2)).toEqual([]);
+    expect(unrelated.store.getStart(unrelatedChannel)).toBe(packet(1).id);
+    app.add(5, {
+      content: "new conversation",
+      message_reference: { channel_id: CHANNEL, message_id: packet(1).id },
+    });
+    expect(await app.receive(5)).toBe(true);
+    expect((await app.context(5)).map((item) => item.content)).toEqual([
+      "new conversation",
+    ]);
+    // A duplicate old command cannot rewind a newer successful reset.
+    expect(app.store.resetMemoryContexts([CHANNEL], packet(3).id)).toBe(1);
+    expect(app.store.getStart(CHANNEL)).toBe(packet(5).id);
+    expect(app.store.resetMemoryContexts([], packet(6).id)).toBe(0);
+  });
+
   // Proves a confirmed native reset survives restarts and only a new human arrival starts history.
   it("starts afresh on the first human arrival after confirmation, despite stale events and replies", async () => {
     const dir = mkdtempSync(join(tmpdir(), "patch-reset-"));

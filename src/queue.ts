@@ -4,6 +4,8 @@ export type QueueOptions = {
   priority?: QueuePriority;
   bucketKey?: string;
   ttlMs?: number;
+  /** Wait for all active work, then block other jobs until this task settles. */
+  exclusive?: boolean;
 };
 
 type Job<T> = {
@@ -11,6 +13,7 @@ type Job<T> = {
   bucketKey: string;
   enqueuedAt: number;
   ttlMs?: number | undefined;
+  exclusive: boolean;
   resolve: (value: T | undefined) => void;
   reject: (error: unknown) => void;
 };
@@ -32,6 +35,8 @@ const DEFAULT_BUCKET_KEY = "global";
 
 export class GenerationQueue {
   private running = 0;
+  private exclusiveRunning = false;
+  private readonly exclusiveJobs: AnyJob[] = [];
   private readonly activeBuckets = new Set<string>();
   private readonly tiers = new Map(
     PRIORITIES.map((priority) => [priority, new TierQueue()]),
@@ -49,21 +54,26 @@ export class GenerationQueue {
       const tier = this.tiers.get(priority) ?? this.tiers.get(DEFAULT_PRIORITY);
       if (!tier) throw new Error("Generation queue is missing default tier");
 
-      tier.enqueue(bucketKey, {
+      const job: AnyJob = {
         task: task as () => Promise<unknown>,
         bucketKey,
         enqueuedAt: Date.now(),
         ttlMs: options.ttlMs,
+        exclusive: options.exclusive ?? false,
         resolve: resolve as (value: unknown) => void,
         reject,
-      });
+      };
+      if (job.exclusive) this.exclusiveJobs.push(job);
+      else tier.enqueue(bucketKey, job);
       this.schedule();
     });
   }
 
   private schedule(): void {
     while (this.running < this.maxConcurrency) {
-      const job = this.nextJob();
+      if (this.exclusiveRunning) return;
+      if (this.exclusiveJobs.length > 0 && this.running > 0) return;
+      const job = this.exclusiveJobs.shift() ?? this.nextJob();
       if (!job) return;
 
       if (isExpired(job)) {
@@ -72,15 +82,22 @@ export class GenerationQueue {
       }
 
       this.running += 1;
+      this.exclusiveRunning = job.exclusive;
       this.activeBuckets.add(job.bucketKey);
-      void job
-        .task()
-        .then(job.resolve, job.reject)
-        .finally(() => {
-          this.running -= 1;
-          this.activeBuckets.delete(job.bucketKey);
-          this.schedule();
-        });
+      void this.run(job);
+    }
+  }
+
+  private async run(job: AnyJob): Promise<void> {
+    try {
+      job.resolve(await job.task());
+    } catch (error) {
+      job.reject(error);
+    } finally {
+      this.running -= 1;
+      if (job.exclusive) this.exclusiveRunning = false;
+      this.activeBuckets.delete(job.bucketKey);
+      this.schedule();
     }
   }
 
