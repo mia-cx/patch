@@ -9,7 +9,8 @@ inference API with optional memory-bank selection and fact-level recall controls
 Remora can keep its Python core; Patch consumes the API and remains independent
 of the inference backend. Bank selection and write destinations are distinct,
 and Remora enforces which facts may enter recall. For service setup and supported
-trial behavior, read the [final Remora serving guide](https://github.com/mia-cx/remora/blob/865ade5910022188c9b8313bb76a2a4d48ced4c5/docs/api/serving.md).
+trial behavior, read the [final Remora serving guide](https://github.com/mia-cx/remora/blob/242fae2c141a7d0c5ebf8ec8dcebaec6ffc1351c/docs/api/serving.md)
+and [entity identity handback](https://github.com/mia-cx/remora/blob/242fae2c141a7d0c5ebf8ec8dcebaec6ffc1351c/docs/api/entity-identity.md).
 
 Protocord is the shared Discord action framework. Its canonical source is
 `mia-cx/protocord`, extracted from Prod with the core, settings, permissions,
@@ -52,10 +53,10 @@ turns grow normally. Attributed chat-role rendering now passes both real failed
 follow-ups cold and cached, with durable receipts and bank rows preserved. Keep
 assistant text plain and reference metadata beside its reply: XML assistant
 wrappers leak into output, and cumulative metadata footers obscure recent
-dialogue in Gemma's 512-token local attention. Native qualification does not
+dialogue in Gemma's 512-token local attention. llama.cpp qualification does not
 gate this HF trial.
-The trial is paused pending final Remora review, mode handback and Mia's trial
-decision. Earlier first-person recall let Patch claim a human's facts as her own;
+The trial is paused pending Mia's explicit mode choice and coordinated service
+readiness. Earlier first-person recall let Patch claim a human's facts as her own;
 the agreed fix preserves source authorship separately from fact subjects.
 Patch supports the optional `speaker: {bank, id}` attribution field and optional
 speaker-binding capability from contract `193e295`. Writable turns infer identity
@@ -66,7 +67,11 @@ legacy-source projection for verified primary-human facts. A copied-bank read-on
 TypeScript diagnostic on the source-projected profile now recalls the direct name,
 attributes ownership to the human and denies assistant ownership. Repeated replies
 agree, all eight calls reuse 7,310 SYSTEM tokens, and both bank copies and policies
-remain unchanged. This is captured-case evidence, with final review still pending.
+remain unchanged. Reviewed source `ba87a90` and final guide `242fae2` are delivered;
+R5/R6 are closed, with 732 parent CPU tests passing and three native-asset skips.
+The validated flags are `--memory-delivery native-cache --entity-identity --legacy-source-projection`;
+the profile is `gemma-reference-12288-native-cache-source-projected`.
+It remains opt-in; detached is the default and llama.cpp entity support is unqualified.
 Mia accepts conversational intrusion as an E2B model limitation, not a Remora release
 blocker. Stop relevance and LoRA work; retain the observed intrusion in the handback.
 The memory representation uses explicit third-person facts bound to generic stable
@@ -81,8 +86,8 @@ Wire review is closed at the [additive identity draft](https://github.com/mia-cx
 The canonical contract is promoted at `193e295`. Low-level client identity transport
 requires enabled support and all four valid advertised limits, then enforces those
 limits without rewriting IDs or labels. The DM builder retains its original source
-tuple. Remora's final mode review and trial handback are pending; stored facts and
-receipts remain unchanged, and the trial stays paused.
+tuple. Stored facts and receipts remain unchanged. Inference services are stopped;
+the bot and reset publication await Mia's choice and Remora's `18787` readiness.
 The measured synthetic Patch request already uses 8,770 rendered Gemma tokens
 before Remora framing/output, so an 8,192-token profile is insufficient.
 
@@ -96,4 +101,4 @@ success. The next new human arrival establishes an empty conversation's starting
 boundary, even without a reply. Pending resets survive restarts; older queued
 turns, edits and reply ancestors cannot restore history. Saved Remora memories
 remain intact. The implementation is verified; native command publication and
-trial restart await the Remora ownership fix.
+trial restart await Mia's explicit profile choice and coordinated service startup.

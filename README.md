@@ -99,16 +99,25 @@ advertises `features.entity_identity: true` with all four valid identity limits.
 It checks requests against those advertised counts and character limits while
 preserving exact IDs and labels. Missing or false support rejects even an empty
 identity object locally. Patch's DM request builder still sends its existing
-source tuple; automatic identity mapping awaits the backend handoff.
+source tuple, without automatic assistant identities or shared bindings.
 Capabilities also retain optional `memory_delivery: "detached" | "native-cache"`.
 Delivery is selected by the service, with detached as its default. HF native-cache
 feeds recalled source blocks through ordinary token/KV input and remains
 `backend: "transformers"`; its profile is `gemma-reference-12288-native-cache`.
-The actual read-only TypeScript diagnostic agrees with the captured ownership
-improvement, but still produces irrelevant recall and an indirect name answer.
-See Remora's [speaker and delivery guide](https://github.com/mia-cx/remora/blob/8b0642fd48f26c6723a21f0aff0b0bf9241ee1e7/docs/api/source-speaker-and-delivery.md)
-for the failed foreign/legacy ownership and other qualification controls.
-The trial remains paused.
+The final reviewed HF source is
+[Remora `ba87a90`](https://github.com/mia-cx/remora/commit/ba87a90d179ca3d82abf9503aaa4a45ef266744c).
+Its [entity identity guide](https://github.com/mia-cx/remora/blob/242fae2c141a7d0c5ebf8ec8dcebaec6ffc1351c/docs/api/entity-identity.md)
+covers the validated opt-in selection:
+`--memory-delivery native-cache --entity-identity --legacy-source-projection`.
+That profile is `gemma-reference-12288-native-cache-source-projected`, with
+12,288 context tokens, 256 output tokens and eight read banks. Legacy projection
+is a source-verified read-only view that preserves stored facts and receipts.
+The actual TypeScript diagnostic now recalls the captured name and human owner
+and denies assistant ownership. All eight read-only calls reuse 7,310 already-warm
+SYSTEM tokens and preserve original/copy bank rows and policies. Intrusion and
+other small-model quality limits remain documented; Mia accepts them as E2B
+limitations. The trial and reset publication remain paused until Mia explicitly
+chooses this profile and Remora confirms coordinated service readiness.
 [remora-patch-request.json](spec/fixtures/remora-patch-request.json) is the archived
 qualification request with Patch's actual persona and fictional history in the
 original transcript format. The real TypeScript client smoke passed against the
@@ -122,12 +131,12 @@ Remora added a native SYSTEM checkpoint reports **7,310 reused tokens and 1,601
 evaluated tokens** on both calls, with nonempty replies and identical successful
 source receipts. [The cache smoke responses](spec/remora-http-cache-smoke-2026-10-16.json)
 verify persona-prefix reuse; they do not prove entire-history KV continuity or a
-throughput improvement. The reviewed HF backend is
+throughput improvement. The original HF integration was qualified on
 [Remora `58626f9`](https://github.com/mia-cx/remora/commit/58626f9f5f67fe5061cb2ff92c7cc8f86cb3de7c),
-ready for a controlled single-human DM trial. The final
-[serving guide](https://github.com/mia-cx/remora/blob/865ade5910022188c9b8313bb76a2a4d48ced4c5/docs/api/serving.md)
+before the later identity work. The current
+[serving guide](https://github.com/mia-cx/remora/blob/242fae2c141a7d0c5ebf8ec8dcebaec6ffc1351c/docs/api/serving.md)
 and [HF Patch handback](https://github.com/mia-cx/remora/blob/66f86295869a9c8ceb71195def08b14d67358a5c/docs/api/patch-handoff-2026-10-16.md)
-cover launch, server-owned policy grants, validated behavior, and remaining limits.
+cover launch/policy and the archival integration proof respectively.
 The controlled HF trial uses one owner DM with
 `DISCORD_TRIAL_DM_CHANNEL_ID` and separate SQLite settings. Existing global
 Discord command registration is skipped in that mode.
