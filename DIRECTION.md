@@ -82,7 +82,12 @@ caller-supplied labels; Patch may resolve them through its Discord adapter or
 Protocord. Core extraction, storage and recall must work without any harness or
 platform SDK. Patch accepts the [entity identity semantics](https://github.com/mia-cx/remora/blob/e5670f158ede3a2781dc5f18e9fb2ddbde2484b2/docs/api/entity-identity-proposal.md):
 the existing tuple identifies the local human; assistant identity is separate;
-shared links are durable actor-scoped associations and labels remain request-local.
+shared links are durable actor-scoped associations. Current labels are request-local.
+Next, harness-supplied names should be retained as attributed details of the stable
+actor/entity and available during recall, including after context resets. Patch
+resolves names; Remora owns the generic association and its authorization. Renames
+preserve identity, and equal names never merge people. Agree the persistence seam
+before changing the current label contract or writing identity metadata.
 Wire review is closed at the [additive identity draft](https://github.com/mia-cx/remora/blob/ea060f25b03e6ad82cede9db6514a805a1e1ecf1/docs/api/entity-identity-wire-draft.json).
 The canonical contract is promoted at `193e295`. Low-level client identity transport
 requires enabled support and all four valid advertised limits, then enforces those
