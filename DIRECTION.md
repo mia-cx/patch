@@ -86,8 +86,13 @@ shared links are durable actor-scoped associations. Current labels are request-l
 Next, harness-supplied names should be retained as attributed details of the stable
 actor/entity and available during recall, including after context resets. Patch
 resolves names; Remora owns the generic association and its authorization. Renames
-preserve identity, and equal names never merge people. Agree the persistence seam
-before changing the current label contract or writing identity metadata.
+preserve identity, and equal names never merge people. Caller review accepts the
+additive `identity.names` draft: separately negotiated support,
+source-bound harness facts, frozen retries and a separate write acknowledgement.
+Forgetting redacts name evidence while retaining retry digests; moving a local
+actor to a shared entity creates a new name fact without rebinding old evidence.
+Canonical promotion and backend implementation remain pending; the live trial
+continues on the existing contract.
 Wire review is closed at the [additive identity draft](https://github.com/mia-cx/remora/blob/ea060f25b03e6ad82cede9db6514a805a1e1ecf1/docs/api/entity-identity-wire-draft.json).
 The canonical contract is promoted at `193e295`. Low-level client identity transport
 requires enabled support and all four valid advertised limits, then enforces those
