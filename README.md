@@ -82,7 +82,7 @@ deletion receipts. Shared evidence conflicts leave saved facts intact. Discord
 messages remain; new human assertions can teach a fact again. Existing source
 receipts are retained by Remora.
 
-The client and actions are implemented against contract `b21abf2`; backend
+The client and actions implement contract `f00a364`; backend
 qualification and development-bot publication are pending.
 
 ## Remora DM integration
@@ -121,7 +121,7 @@ metadata and a matching write receipt. Receipts and observed cache reuse are
 logged; a writer failure preserves the generated reply and logs the failure.
 
 The shared contract snapshot is [remora-contract-v1.json](spec/fixtures/remora-contract-v1.json).
-It matches Remora commit `b21abf2` semantically, preserving the earlier name and identity contract;
+It matches Remora commit `f00a364` semantically, preserving the earlier name and identity contract;
 only JSON formatting differs.
 Read-only callers may supply `remora.speaker: { bank, id }` to identify the current
 human's attribution scope. The ID is opaque and grants no access; writable turns
