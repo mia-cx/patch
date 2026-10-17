@@ -98,8 +98,9 @@ shared channel/server banks follow Discord access and management permissions.
 Show actual authorized records and storage receipts. Explicit forgetting must
 invalidate memory caches and affected caller history; a model reply is not proof
 of deletion. Keep Remora's API generic and require separate deletion grants.
-The client and private `/memory` actions implement contract `f00a364`; backend
-qualification and command publication are pending. All 183 Patch tests pass.
+The `/memory` commands are published and the scoped bot is online against reviewed
+Remora runtime `4e95553`, contract `f00a364` ([management guide](https://github.com/mia-cx/remora/blob/54f7bd6/docs/api/memory-management.md)).
+All 183 Patch tests and 14 isolated HTTP checks pass; the other five commands were preserved.
 The memory representation uses explicit third-person facts bound to generic stable
 entity references, keeping fact subjects separate
 from source authors and preserving raw evidence and receipts. Names are optional

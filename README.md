@@ -82,8 +82,10 @@ deletion receipts. Shared evidence conflicts leave saved facts intact. Discord
 messages remain; new human assertions can teach a fact again. Existing source
 receipts are retained by Remora.
 
-The client and actions implement contract `f00a364`; backend
-qualification and development-bot publication are pending.
+The commands are published for the development bot, which is online against
+reviewed Remora management runtime `4e95553` and contract `f00a364`.
+All 183 Patch tests and 14 isolated HTTP checks pass; the other five global
+commands were preserved. See the [Remora management guide](https://github.com/mia-cx/remora/blob/54f7bd6/docs/api/memory-management.md).
 
 ## Remora DM integration
 
