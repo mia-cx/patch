@@ -11,10 +11,19 @@ import type { ConversationContextStore } from "../conversation/store.js";
 import type { LlmClient } from "../llm/client.js";
 import type { ModelCatalog } from "../llm/model-catalog.js";
 import type { Logger } from "../logger.js";
+import type { RemoraMemoryClient } from "../memory/client.js";
+import type { MemoryScope } from "../memory/scope.js";
 import type { GenerationQueue } from "../queue.js";
 import type { SettingsStore } from "../settings/store.js";
 
-export type ActionPermission = "owner" | "delete_messages";
+export type ActionPermission =
+  | "owner"
+  | "delete_messages"
+  | {
+      kind: "memory";
+      scope: MemoryScope;
+      operation: "read" | "forget";
+    };
 export type Action<Input, Output = void> = ProtocordAction<
   Input,
   Output,
@@ -28,6 +37,7 @@ export type ActionContext = {
   client: Pick<Client, "channels"> & { user: { id: string } | null };
   config: Config;
   llm: LlmClient;
+  memory: RemoraMemoryClient;
   logger: Logger;
   queue: GenerationQueue;
   modelCatalog: ModelCatalog;

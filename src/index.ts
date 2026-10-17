@@ -29,6 +29,7 @@ import { getBotIdentity } from "./identity.js";
 import { LlmClient } from "./llm/client.js";
 import { ModelCatalog } from "./llm/model-catalog.js";
 import { createLogger } from "./logger.js";
+import { RemoraMemoryClient } from "./memory/client.js";
 import { buildResponseContextBudget } from "./prompts/response.js";
 import { GenerationQueue } from "./queue.js";
 import { respond } from "./response/responder.js";
@@ -56,8 +57,12 @@ const settings = new SettingsStore(config.settingsDbPath, {
 });
 const contextStore = new ConversationContextStore(config.settingsDbPath);
 const llm = new LlmClient(config, settings);
+const memory = new RemoraMemoryClient(config);
 if (config.remoraDmEnabled) {
   const capabilities = await llm.initializeRemora();
+  await memory.initialize(capabilities);
+  if (config.discordTrialDmChannelId)
+    contextStore.recordMemoryContext(config.discordTrialDmChannelId);
   const budget = buildResponseContextBudget(config, "dm");
   if (
     budget.promptTokens + (budget.responseTokens ?? 0) >=
@@ -86,6 +91,7 @@ const actionContext = {
   client,
   config,
   llm,
+  memory,
   logger,
   queue,
   modelCatalog,
@@ -153,7 +159,8 @@ client.on(Events.MessageUpdate, (oldMessage, newMessage) => {
 client.on(Events.InteractionCreate, (interaction) => {
   if (
     config.discordTrialDmChannelId &&
-    interaction.channelId !== config.discordTrialDmChannelId
+    interaction.channelId !== config.discordTrialDmChannelId &&
+    !(interaction.isChatInputCommand() && interaction.commandName === "memory")
   )
     return;
   void dispatchInteraction({

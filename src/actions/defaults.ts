@@ -1,6 +1,7 @@
 import type { ActionRegistry } from "./context.js";
 import { deleteMessagesAction } from "./delete.js";
 import { leaveThreadAction } from "./leave.js";
+import { memoryAction } from "./memory.js";
 import { modelAction } from "./model.js";
 import { actionRegistry } from "./registry.js";
 import { reloadRuntimeAction } from "./reload.js";
@@ -14,4 +15,5 @@ export function registerDefaultActions(
   registry.registerAction(modelAction);
   registry.registerAction(reloadRuntimeAction);
   registry.registerAction(resetContextAction);
+  registry.registerAction(memoryAction);
 }

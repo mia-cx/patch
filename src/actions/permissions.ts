@@ -4,6 +4,7 @@ import {
 } from "discord.js";
 import type { Authorize } from "protocord";
 import type { Config } from "../config.js";
+import { memoryPermissionFailure } from "../memory/scope.js";
 import type { ActionContext, ActionPermission } from "./context.js";
 
 type OwnerConfig = Pick<Config, "botOwnerUserIds">;
@@ -35,6 +36,17 @@ export const authorizeAction: Authorize<ActionContext, ActionPermission> = (
   invocation,
   context,
 ) => {
+  if (typeof permission !== "string") {
+    const interaction = invocation.rawEvent;
+    if (!isSlashInteraction(interaction))
+      return { authorized: false, reason: "use /memory to manage memories." };
+    const reason = memoryPermissionFailure(
+      permission.scope,
+      permission.operation,
+      interaction,
+    );
+    return reason ? { authorized: false, reason } : { authorized: true };
+  }
   const userId = invocation.requester?.id;
   if (permission === "owner") {
     return userId && isOwner(userId, context.config)

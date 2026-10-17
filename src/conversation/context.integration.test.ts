@@ -26,6 +26,7 @@ import { LlmClient, type LlmMessage } from "../llm/client.js";
 import { ModelCatalog } from "../llm/model-catalog.js";
 import type { RemoraRequest, RemoraResponse } from "../llm/remora.js";
 import { createLogger } from "../logger.js";
+import { RemoraMemoryClient } from "../memory/client.js";
 import { GenerationQueue } from "../queue.js";
 import { respond } from "../response/responder.js";
 import { SettingsStore } from "../settings/store.js";
@@ -198,6 +199,7 @@ async function runtime(
     client: { channels: client.channels, user: { id: BOT } },
     config,
     llm,
+    memory: new RemoraMemoryClient(config),
     logger,
     settings,
     queue: new GenerationQueue(2),
@@ -321,6 +323,17 @@ describe("persistent chat context", () => {
     }
     app.store.recordMemoryContext(CHANNEL);
     app.store.recordMemoryContext(otherChannel);
+    const db = new DatabaseSync(path);
+    db.exec(`CREATE TRIGGER fail_memory_fence BEFORE INSERT ON conversation_resets
+      WHEN NEW.channel_id = '${otherChannel}'
+      BEGIN SELECT RAISE(ABORT, 'memory fence unavailable'); END;`);
+    expect(() =>
+      app.store.resetMemoryContexts([CHANNEL], packet(4).id),
+    ).toThrow("memory fence unavailable");
+    expect(app.store.getStart(CHANNEL)).toBe(packet(1).id);
+    expect(other.store.getStart(otherChannel)).toBe(packet(1).id);
+    db.exec("DROP TRIGGER fail_memory_fence");
+    db.close();
     expect(app.store.resetMemoryContexts([CHANNEL], packet(4).id)).toBe(2);
     app.reopen();
     expect(await app.context(2)).toEqual([]);

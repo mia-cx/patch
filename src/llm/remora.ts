@@ -129,6 +129,7 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     speaker_binding: Schema.optional(Schema.Boolean),
     entity_identity: Schema.optional(Schema.Boolean),
     harness_names: Schema.optional(Schema.Boolean),
+    memory_management: Schema.optional(Schema.Boolean),
     streaming: Schema.Boolean,
     tools: Schema.Boolean,
     thinking: Schema.Boolean,
@@ -155,10 +156,29 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     max_harness_name_chars: Schema.optional(
       PositiveInteger.check(Schema.isLessThanOrEqualTo(128)),
     ),
+    max_memory_page_size: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(100)),
+    ),
+    max_memory_forget_ids: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(100)),
+    ),
+    max_memory_request_id_chars: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(256)),
+    ),
   }),
 });
 
 /** Decodes runtime limits; the contract's example profile is not a default. */
-export const parseRemoraCapabilities = Schema.decodeUnknownSync(
-  RemoraCapabilitiesSchema,
-);
+export function parseRemoraCapabilities(value: unknown) {
+  const capabilities = Schema.decodeUnknownSync(RemoraCapabilitiesSchema)(
+    value,
+  );
+  if (
+    capabilities.features.memory_management &&
+    (capabilities.limits.max_memory_page_size === undefined ||
+      capabilities.limits.max_memory_forget_ids === undefined ||
+      capabilities.limits.max_memory_request_id_chars === undefined)
+  )
+    throw new Error("Remora memory management requires all three limits");
+  return capabilities;
+}

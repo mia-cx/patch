@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import {
   type APIApplicationCommandAutocompleteInteraction,
   type APIApplicationCommandInteractionDataOption,
@@ -8,6 +9,7 @@ import {
   ChannelType,
   ChatInputCommandInteraction,
   Client,
+  ClientUser,
   InteractionResponseType,
   InteractionType,
   Locale,
@@ -21,7 +23,9 @@ import { ConversationContextStore } from "../conversation/store.js";
 import { dispatchInteraction } from "../discord/actions/dispatch.js";
 import { LlmClient } from "../llm/client.js";
 import { ModelCatalog } from "../llm/model-catalog.js";
+import { parseRemoraCapabilities } from "../llm/remora.js";
 import { createLogger } from "../logger.js";
+import { RemoraMemoryClient } from "../memory/client.js";
 import { GenerationQueue } from "../queue.js";
 import { SettingsStore } from "../settings/store.js";
 import { buildModelVisibleActions, toLlmTools } from "./action-context.js";
@@ -40,7 +44,63 @@ const resources: (() => void)[] = [];
 afterEach(() => {
   for (const close of resources.splice(0)) close();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
+
+const managementFixture: {
+  memory_management: { examples: { capabilities_with_management: unknown } };
+} = JSON.parse(
+  readFileSync(
+    new URL("../../spec/fixtures/remora-contract-v1.json", import.meta.url),
+    "utf8",
+  ),
+);
+const managementCaps = parseRemoraCapabilities(
+  managementFixture.memory_management.examples.capabilities_with_management,
+);
+const READ_ACCESS =
+  PermissionsBitField.Flags.ViewChannel |
+  PermissionsBitField.Flags.ReadMessageHistory;
+const REVISION = "a".repeat(64);
+
+function memoryOptions(
+  operation: "list" | "forget" | "clear",
+  scope: "personal" | "channel" | "server",
+  ids = "5, 2",
+  confirm = true,
+): APIApplicationCommandInteractionDataOption[] {
+  return [
+    {
+      name: operation,
+      type: ApplicationCommandOptionType.Subcommand,
+      options: [
+        ...(operation === "forget"
+          ? [
+              {
+                type: ApplicationCommandOptionType.String as const,
+                name: "ids",
+                value: ids,
+              },
+            ]
+          : []),
+        ...(operation === "clear"
+          ? [
+              {
+                type: ApplicationCommandOptionType.Boolean as const,
+                name: "confirm",
+                value: confirm,
+              },
+            ]
+          : []),
+        {
+          type: ApplicationCommandOptionType.String,
+          name: "scope",
+          value: scope,
+        },
+      ],
+    },
+  ];
+}
 
 // Discord constructs these from gateway packets. Subclasses expose the SDK's
 // protected constructor so the tests exercise its real parsing and responses.
@@ -63,8 +123,21 @@ class Autocomplete extends AutocompleteInteraction {
   }
 }
 
+class BotUser extends ClientUser {
+  constructor(client: Client<true>) {
+    super(client, {
+      id: BOT,
+      username: "Patch",
+      discriminator: "0",
+      avatar: null,
+      bot: true,
+    });
+  }
+}
+
 async function runtime(thread = true) {
   const client = new Client<true>({ intents: [] });
+  client.user = new BotUser(client);
   const botMessage = {
     id: "1000000000000000007",
     channel_id: CHANNEL,
@@ -159,6 +232,7 @@ async function runtime(thread = true) {
     settings,
     contextStore,
     llm,
+    memory: new RemoraMemoryClient(config),
     queue: new GenerationQueue(1),
     modelCatalog: new ModelCatalog(llm, logger),
   };
@@ -230,6 +304,302 @@ async function runtime(thread = true) {
 }
 
 describe("Patch's Protocord integration", () => {
+  // Proves invalid user-supplied targets stop before management requests or context resets.
+  it.each(["0", "1.5", "1e2", "9007199254740992", "2,2"])(
+    "refuses malformed memory IDs %s",
+    async (ids) => {
+      const app = await runtime(false);
+      app.context.contextStore.setStart(CHANNEL, MESSAGE);
+      const fetch = vi.fn(async () => Response.json(managementCaps));
+      vi.stubGlobal("fetch", fetch);
+      await app.dispatch(
+        app.command(
+          "memory",
+          memoryOptions("forget", "channel", ids),
+          MEMBER,
+          READ_ACCESS | PermissionsBitField.Flags.ManageMessages,
+        ),
+      );
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/remora/capabilities"),
+        expect.anything(),
+      );
+      expect(app.context.contextStore.getStart(CHANNEL)).toBe(MESSAGE);
+      expect(app.rest.patch).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          body: expect.objectContaining({
+            content: expect.stringContaining("whole-number IDs"),
+          }),
+        }),
+      );
+    },
+  );
+
+  // Proves an ordinary member can inspect a readable server bank without clipping long facts.
+  it("exports complete server memories privately when the list exceeds a Discord message", async () => {
+    const app = await runtime(false);
+    const data = [
+      {
+        id: 2,
+        text: "Long fictional evidence. ".repeat(200),
+        kind: "fact",
+        source: "user",
+        subjects: {},
+      },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/capabilities")) return Response.json(managementCaps);
+        expect(new URL(url).searchParams.get("bank")).toBe(
+          `discord:guild:${GUILD}`,
+        );
+        return Response.json({
+          object: "remora.memory.list",
+          version: 1,
+          bank: `discord:guild:${GUILD}`,
+          revision: REVISION,
+          data,
+          next_cursor: null,
+        });
+      }),
+    );
+    await app.dispatch(
+      app.command(
+        "memory",
+        memoryOptions("list", "server"),
+        MEMBER,
+        READ_ACCESS,
+      ),
+    );
+    const file = app.rest.patch.mock.calls.at(-1)?.[1]?.files?.[0];
+    expect(file?.name).toBe("memories.json");
+    expect(file?.data.toString()).toBe(JSON.stringify(data, null, 2));
+    expect(app.rest.post).toHaveBeenCalledTimes(1);
+    expect(app.rest.post.mock.calls[0]?.[1]?.body).toMatchObject({
+      data: { flags: MessageFlags.Ephemeral },
+    });
+  });
+
+  // Proves a private guild invocation resolves only the caller's DM and never posts memory content publicly.
+  it("inspects personal memories from a guild through the actual SDK's own-DM lookup", async () => {
+    const app = await runtime(false);
+    const dm = "1000000000000000020";
+    app.rest.post.mockImplementation(async (route) => {
+      if (route === "/users/@me/channels")
+        return {
+          id: dm,
+          type: ChannelType.DM,
+          recipients: [
+            {
+              id: MEMBER,
+              username: "member",
+              discriminator: "0",
+              avatar: null,
+            },
+          ],
+        };
+      return undefined;
+    });
+    const fetch = vi.fn(async (url: string) => {
+      if (url.endsWith("/capabilities")) return Response.json(managementCaps);
+      expect(new URL(url).searchParams.get("bank")).toBe(`discord:dm:${dm}`);
+      return Response.json({
+        object: "remora.memory.list",
+        version: 1,
+        bank: `discord:dm:${dm}`,
+        revision: REVISION,
+        data: [
+          {
+            id: 2,
+            text: "A fictional personal fact.",
+            kind: "fact",
+            source: "user",
+            subjects: {},
+          },
+        ],
+        next_cursor: null,
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    await app.dispatch(
+      app.command("memory", memoryOptions("list", "personal"), MEMBER),
+    );
+    expect(app.rest.post).toHaveBeenCalledWith(
+      "/users/@me/channels",
+      expect.objectContaining({ body: { recipient_id: MEMBER } }),
+    );
+    expect(app.rest.patch).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        body: expect.objectContaining({
+          content: "your personal memories\n\n#2 A fictional personal fact.",
+          allowed_mentions: expect.objectContaining({ parse: [] }),
+        }),
+      }),
+    );
+    expect(
+      app.rest.post.mock.calls.some(
+        ([route]) => route === `/channels/${CHANNEL}/messages`,
+      ),
+    ).toBe(false);
+    expect(app.rest.post.mock.calls[0]?.[1]?.body).toMatchObject({
+      data: { flags: MessageFlags.Ephemeral },
+    });
+  });
+
+  // Proves Discord permission rejection precedes Remora access, including for the bot owner.
+  it.each(["channel", "server"] as const)(
+    "rejects unprivileged %s forgetting before any backend request",
+    async (scope) => {
+      const app = await runtime(false);
+      const fetch = vi.fn();
+      vi.stubGlobal("fetch", fetch);
+      const permissions =
+        scope === "server"
+          ? READ_ACCESS | PermissionsBitField.Flags.ManageMessages
+          : READ_ACCESS;
+      await app.dispatch(
+        app.command(
+          "memory",
+          memoryOptions("forget", scope),
+          OWNER,
+          permissions,
+        ),
+      );
+      expect(fetch).not.toHaveBeenCalled();
+      expect(app.rest.patch).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          body: expect.objectContaining({
+            content: expect.stringContaining(
+              scope === "server" ? "Manage Server" : "Manage Messages",
+            ),
+          }),
+        }),
+      );
+    },
+  );
+
+  // Proves explicit clear confirmation is required before inspecting or changing storage/history.
+  it("leaves memories and conversation history intact without clear confirmation", async () => {
+    const app = await runtime(false);
+    app.context.contextStore.setStart(CHANNEL, MESSAGE);
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    await app.dispatch(
+      app.command(
+        "memory",
+        memoryOptions("clear", "server", "", false),
+        MEMBER,
+        READ_ACCESS | PermissionsBitField.Flags.ManageGuild,
+      ),
+    );
+    expect(fetch).not.toHaveBeenCalled();
+    expect(app.context.contextStore.getStart(CHANNEL)).toBe(MESSAGE);
+    expect(app.rest.patch).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        body: expect.objectContaining({
+          content: expect.stringContaining("nothing deleted"),
+        }),
+      }),
+    );
+  });
+
+  // Proves commands acknowledge actual receipts, preserve failed deletions, and fence all supplied memory history first.
+  it.each(["forget", "clear", "conflict", "lost_response"] as const)(
+    "reports the actual %s result with durable caller-history fencing",
+    async (scenario) => {
+      const app = await runtime(false);
+      const otherMemoryChat = "1000000000000000030";
+      const plainChat = "1000000000000000040";
+      for (const channel of [CHANNEL, otherMemoryChat, plainChat])
+        app.context.contextStore.setStart(channel, "1");
+      app.context.contextStore.recordMemoryContext(otherMemoryChat);
+      let mutations = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit) => {
+          if (url.endsWith("/capabilities"))
+            return Response.json(managementCaps);
+          const bank = `discord:guild:${GUILD}`;
+          if (init.method !== "POST")
+            return Response.json({
+              object: "remora.memory.list",
+              version: 1,
+              bank,
+              revision: REVISION,
+              data: [],
+              next_cursor: null,
+            });
+          mutations++;
+          expect(app.context.contextStore.allowsMessage(CHANNEL, "1")).toBe(
+            false,
+          );
+          expect(
+            app.context.contextStore.allowsMessage(otherMemoryChat, "1"),
+          ).toBe(false);
+          expect(app.context.contextStore.getStart(plainChat)).toBe("1");
+          const operation = scenario === "clear" ? "clear" : "forget";
+          const expected = {
+            bank,
+            expected_revision: REVISION,
+            request_id: "1000000000000000009",
+            ...(operation === "forget" ? { ids: [2, 5] } : {}),
+          };
+          expect(JSON.parse(String(init.body))).toEqual(expected);
+          if (scenario === "conflict")
+            return Response.json(
+              { error: { code: "shared_evidence_conflict" } },
+              { status: 409 },
+            );
+          if (scenario === "lost_response") throw new Error("socket closed");
+          return Response.json({
+            object: "remora.memory.mutation",
+            version: 1,
+            bank,
+            request_id: expected.request_id,
+            operation,
+            replayed: false,
+            deleted_ids: operation === "forget" ? [2, 5] : null,
+            deleted_count: operation === "forget" ? 2 : 3,
+            dependent_suppression: { bank, visible_active_count: 0 },
+            revision: "b".repeat(64),
+            cache_invalidated: true,
+            reset_required: true,
+          });
+        }),
+      );
+      await app.dispatch(
+        app.command(
+          "memory",
+          memoryOptions(scenario === "clear" ? "clear" : "forget", "server"),
+          MEMBER,
+          READ_ACCESS | PermissionsBitField.Flags.ManageGuild,
+        ),
+      );
+      expect(mutations).toBe(1);
+      const content =
+        scenario === "conflict"
+          ? "share evidence"
+          : scenario === "lost_response"
+            ? "couldn't confirm"
+            : `forgot ${scenario === "clear" ? 3 : 2} memories from this server.`;
+      expect(app.rest.patch).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          body: expect.objectContaining({
+            content: expect.stringContaining(content),
+          }),
+        }),
+      );
+      expect(app.context.contextStore.getStart(CHANNEL)).toBeUndefined();
+    },
+  );
+
   it("persists an owner's model switch and presents one private response", async () => {
     const app = await runtime();
     await app.dispatch(
