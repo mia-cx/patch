@@ -116,8 +116,9 @@ The actual TypeScript diagnostic now recalls the captured name and human owner
 and denies assistant ownership. All eight read-only calls reuse 7,310 already-warm
 SYSTEM tokens and preserve original/copy bank rows and policies. Intrusion and
 other small-model quality limits remain documented; Mia accepts them as E2B
-limitations. The trial and reset publication remain paused until Mia explicitly
-chooses this profile and Remora confirms coordinated service readiness.
+limitations. Mia approved this profile on 2026-10-17. The scoped DM trial is online
+with Discord READY and authenticated Remora capabilities verified; existing
+conversation boundaries, memory facts and source receipts are preserved.
 [remora-patch-request.json](spec/fixtures/remora-patch-request.json) is the archived
 qualification request with Patch's actual persona and fictional history in the
 original transcript format. The real TypeScript client smoke passed against the
@@ -141,9 +142,10 @@ The controlled HF trial uses one owner DM with
 `DISCORD_TRIAL_DM_CHANNEL_ID` and separate SQLite settings. Existing global
 Discord command registration is skipped in that mode.
 
-The native `/context reset` command must already be registered globally to appear
-in a trial DM; guild commands cannot be invoked in DMs. Publishing it is a separate
-release step. With a ready Discord client and Patch's default action registry,
+The native `/context reset` command was published globally for the development bot
+on 2026-10-17, preserving the other four commands. Guild commands cannot be invoked
+in DMs. For another deployment, with a ready Discord client and Patch's default
+action registry,
 upsert only `getDiscordCommandRegistration(registry).find(command =>
 command.name === "context")` through `client.application.commands.create(payload)`.
 This uses Protocord's command payload, including DM availability, without replacing

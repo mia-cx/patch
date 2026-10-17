@@ -55,8 +55,9 @@ assistant text plain and reference metadata beside its reply: XML assistant
 wrappers leak into output, and cumulative metadata footers obscure recent
 dialogue in Gemma's 512-token local attention. llama.cpp qualification does not
 gate this HF trial.
-The trial is paused pending Mia's explicit mode choice and coordinated service
-readiness. Earlier first-person recall let Patch claim a human's facts as her own;
+Mia approved the validated HF profile, and the scoped DM trial is online with
+Discord READY and Remora capabilities verified. Earlier first-person recall let
+Patch claim a human's facts as her own;
 the agreed fix preserves source authorship separately from fact subjects.
 Patch supports the optional `speaker: {bank, id}` attribution field and optional
 speaker-binding capability from contract `193e295`. Writable turns infer identity
@@ -86,8 +87,8 @@ Wire review is closed at the [additive identity draft](https://github.com/mia-cx
 The canonical contract is promoted at `193e295`. Low-level client identity transport
 requires enabled support and all four valid advertised limits, then enforces those
 limits without rewriting IDs or labels. The DM builder retains its original source
-tuple. Stored facts and receipts remain unchanged. Inference services are stopped;
-the bot and reset publication await Mia's choice and Remora's `18787` readiness.
+tuple. Stored facts and receipts remain unchanged. Remora serves the approved
+profile on `18787`; coordinate any model or service restart while the trial runs.
 The measured synthetic Patch request already uses 8,770 rendered Gemma tokens
 before Remora framing/output, so an 8,192-token profile is insufficient.
 
@@ -100,5 +101,6 @@ Owner-only `/context reset` waits for an active reply to finish, then confirms
 success. The next new human arrival establishes an empty conversation's starting
 boundary, even without a reply. Pending resets survive restarts; older queued
 turns, edits and reply ancestors cannot restore history. Saved Remora memories
-remain intact. The implementation is verified; native command publication and
-trial restart await Mia's explicit profile choice and coordinated service startup.
+remain intact. The implementation is verified, and `/context reset` is published
+globally for the development bot's DM use. Other commands were preserved; scoped
+trial startup continues to skip automatic registration.
