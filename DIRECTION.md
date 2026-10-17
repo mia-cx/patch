@@ -73,10 +73,15 @@ R5/R6 are closed, with 732 parent CPU tests passing and three native-asset skips
 The validated flags are `--memory-delivery native-cache --entity-identity --legacy-source-projection`;
 the profile is `gemma-reference-12288-native-cache-source-projected`.
 It remains opt-in; detached is the default and llama.cpp entity support is unqualified.
-Conversational intrusion remains observed in the E2B trial. Mia has now authorized
-separate contextual retrieval and null-recall work with matched positive and
-negative checks on the frozen model. Keep it isolated from names and the live
-trial; coordinate any GPU window before changing the shared model lease. No LoRA.
+A captured 2026-10-17 intrusion is causally tied to irrelevant Remora recall:
+the reconstructed persona and 22 history messages contain no dog name, yet cold
+and warm recall reproduce the off-topic dog reply. An empty fact allowlist and
+bare Gemma both produce a relevant follow-up; restoring recall restores the
+failure. All bank rows and policy bytes are unchanged. This establishes a
+retrieval failure in this case; a fix remains unqualified. Mia authorized separate
+contextual retrieval and null-recall work with matched positive and negative
+checks on the frozen model. Keep it isolated from names and the live trial;
+coordinate any GPU window before changing the shared model lease. No LoRA.
 The memory representation uses explicit third-person facts bound to generic stable
 entity references, keeping fact subjects separate
 from source authors and preserving raw evidence and receipts. Names are optional

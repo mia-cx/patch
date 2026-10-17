@@ -121,9 +121,13 @@ That profile is `gemma-reference-12288-native-cache-source-projected`, with
 is a source-verified read-only view that preserves stored facts and receipts.
 The actual TypeScript diagnostic now recalls the captured name and human owner
 and denies assistant ownership. All eight read-only calls reuse 7,310 already-warm
-SYSTEM tokens and preserve original/copy bank rows and policies. Intrusion and
-other small-model quality limits remain documented; Mia accepts them as E2B
-limitations. Mia approved this profile on 2026-10-17. The scoped DM trial is online
+SYSTEM tokens and preserve original/copy bank rows and policies. A later captured
+intrusion is causally tied to irrelevant Remora recall: cold and warm recall
+produce an off-topic dog reply, an empty fact allowlist and bare Gemma produce the
+same relevant follow-up, and restoring recall restores the failure. The
+reconstructed persona/history contains no dog name; bank rows and policy bytes
+remain unchanged. Contextual retrieval work is isolated and no fix is qualified.
+Mia approved this profile on 2026-10-17. The scoped DM trial is online
 with Discord READY and authenticated Remora capabilities verified; existing
 conversation boundaries, memory facts and source receipts are preserved.
 [remora-patch-request.json](spec/fixtures/remora-patch-request.json) is the archived
