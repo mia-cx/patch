@@ -6,7 +6,7 @@ type IdentityActor = {
   id: string;
 };
 
-/** Caller-owned actor associations and presentation labels; never grants access. */
+/** Caller-owned identity data; declarations never grant bank or fact access. */
 export type RemoraIdentity = {
   assistant?: { bank: string; id: string };
   bindings?: Array<{ actor: IdentityActor; entity: string }>;
@@ -14,6 +14,8 @@ export type RemoraIdentity = {
     | { actor: IdentityActor; entity?: never; label: string }
     | { entity: string; actor?: never; label: string }
   >;
+  /** Durable harness observations, separately negotiated and bound to a writable source. */
+  names?: Array<{ actor: IdentityActor; name: string }>;
 };
 
 /** Optional Remora controls; bank selection never grants recall permission. */
@@ -51,6 +53,20 @@ const RemoraResponseSchema = Schema.Struct({
       source_id: Schema.String,
       revision: NonNegativeInteger,
       replayed: Schema.Boolean,
+      harness_names: Schema.optional(
+        Schema.Struct({
+          saved: Schema.Array(PositiveInteger),
+          unchanged: Schema.Array(PositiveInteger),
+          superseded: Schema.Array(PositiveInteger),
+          suppressed: Schema.Array(
+            Schema.Struct({
+              bank: Schema.String,
+              role: Schema.Literals(["human", "assistant"]),
+              id: Schema.String,
+            }),
+          ),
+        }),
+      ),
       result: Schema.Struct({
         saved: Schema.Array(PositiveInteger),
         reinforced: Schema.Array(PositiveInteger),
@@ -88,6 +104,8 @@ export function parseRemoraResponse(
     throw new Error("Remora response has no matching source write receipt");
   if (!request.turn && response.writes !== null)
     throw new Error("Remora returned a write receipt for a read-only request");
+  if (request.identity?.names !== undefined && !response.writes?.harness_names)
+    throw new Error("Remora response has no harness name acknowledgement");
   return response;
 }
 
@@ -110,6 +128,7 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     prefix_cache: Schema.Boolean,
     speaker_binding: Schema.optional(Schema.Boolean),
     entity_identity: Schema.optional(Schema.Boolean),
+    harness_names: Schema.optional(Schema.Boolean),
     streaming: Schema.Boolean,
     tools: Schema.Boolean,
     thinking: Schema.Boolean,
@@ -128,6 +147,12 @@ const RemoraCapabilitiesSchema = Schema.Struct({
       PositiveInteger.check(Schema.isLessThanOrEqualTo(256)),
     ),
     max_identity_label_chars: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(128)),
+    ),
+    max_harness_names: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(2)),
+    ),
+    max_harness_name_chars: Schema.optional(
       PositiveInteger.check(Schema.isLessThanOrEqualTo(128)),
     ),
   }),

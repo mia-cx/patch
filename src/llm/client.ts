@@ -64,9 +64,12 @@ type IdentityLimits = {
   labelChars: number;
 };
 
+type HarnessNameLimits = { names: number; nameChars: number };
+
 export class LlmClient {
   private maxOutputTokens = Number.POSITIVE_INFINITY;
   private identityLimits: IdentityLimits | undefined;
+  private harnessNameLimits: HarnessNameLimits | undefined;
 
   constructor(
     private readonly config: Config,
@@ -76,6 +79,7 @@ export class LlmClient {
   /** Checks capabilities and bounds shared config/output limits before Discord connects. */
   async initializeRemora() {
     this.identityLimits = undefined;
+    this.harnessNameLimits = undefined;
     const response = await fetch(
       `${this.config.llmBaseUrl}/remora/capabilities`,
       {
@@ -105,6 +109,16 @@ export class LlmClient {
       )
         throw new Error("Remora entity identity requires all four limits");
       identityLimits = { bindings, labels, idChars, labelChars };
+    }
+    let harnessNameLimits: HarnessNameLimits | undefined;
+    if (features.harness_names) {
+      if (!identityLimits)
+        throw new Error("Remora harness names require entity identity support");
+      const { max_harness_names: names, max_harness_name_chars: nameChars } =
+        limits;
+      if (names === undefined || nameChars === undefined)
+        throw new Error("Remora harness names require both name limits");
+      harnessNameLimits = { names, nameChars };
     }
     if (
       !features.memory ||
@@ -151,6 +165,7 @@ export class LlmClient {
       limits.max_output_tokens,
     );
     this.identityLimits = identityLimits;
+    this.harnessNameLimits = harnessNameLimits;
     return capabilities;
   }
 
@@ -253,6 +268,20 @@ export class LlmClient {
         throw new Error(
           "Remora identity label exceeds advertised character limit",
         );
+    }
+    if (identity.names !== undefined) {
+      const names = this.harnessNameLimits;
+      if (!names)
+        throw new Error("Remora harness names have not been negotiated");
+      if (identity.names.length < 1 || identity.names.length > names.names)
+        throw new Error("Remora harness names exceed advertised count limits");
+      for (const { actor, name } of identity.names) {
+        ids.push(actor.id);
+        if (!/\S/.test(name) || Array.from(name).length > names.nameChars)
+          throw new Error(
+            "Remora harness name must be nonblank and within advertised character limits",
+          );
+      }
     }
     if (ids.some((id) => Array.from(id).length > limits.idChars))
       throw new Error("Remora identity ID exceeds advertised character limit");

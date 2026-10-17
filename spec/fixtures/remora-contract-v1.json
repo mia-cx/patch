@@ -21,32 +21,55 @@
         "type": "array",
         "uniqueItems": true,
         "maxItems": 8,
-        "items": { "type": "string", "minLength": 1 }
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
       },
-      "write_bank": { "type": "string", "minLength": 1 },
+      "write_bank": {
+        "type": "string",
+        "minLength": 1
+      },
       "speaker": {
         "type": "object",
         "additionalProperties": false,
         "required": ["bank", "id"],
         "properties": {
-          "bank": { "type": "string", "minLength": 1 },
-          "id": { "type": "string", "minLength": 1 }
+          "bank": {
+            "type": "string",
+            "minLength": 1
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
-      "identity": { "$ref": "#/definitions/identity" },
+      "identity": {
+        "$ref": "#/definitions/identity"
+      },
       "turn": {
         "type": "object",
         "additionalProperties": false,
         "required": ["id", "revision", "speaker_id", "text"],
         "properties": {
-          "id": { "type": "string", "minLength": 1 },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
           "revision": {
             "type": "integer",
             "minimum": 0,
             "maximum": 9007199254740991
           },
-          "speaker_id": { "type": "string", "minLength": 1 },
-          "text": { "type": "string", "minLength": 1 }
+          "speaker_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
       "recall": {
@@ -55,11 +78,15 @@
         "properties": {
           "allow": {
             "type": "array",
-            "items": { "$ref": "#/definitions/fact_ref" }
+            "items": {
+              "$ref": "#/definitions/fact_ref"
+            }
           },
           "deny": {
             "type": "array",
-            "items": { "$ref": "#/definitions/fact_ref" }
+            "items": {
+              "$ref": "#/definitions/fact_ref"
+            }
           }
         }
       }
@@ -79,13 +106,69 @@
       "maxLength": 128,
       "pattern": "\\S"
     },
+    "harness_name_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor", "name"],
+      "properties": {
+        "actor": {
+          "$ref": "#/definitions/identity_actor"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "\\S"
+        }
+      }
+    },
+    "harness_names_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["saved", "unchanged", "superseded", "suppressed"],
+      "properties": {
+        "saved": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "unchanged": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "superseded": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "suppressed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/identity_actor"
+          }
+        }
+      }
+    },
     "identity_speaker": {
       "type": "object",
       "additionalProperties": false,
       "required": ["bank", "id"],
       "properties": {
-        "bank": { "type": "string", "minLength": 1, "pattern": "\\S" },
-        "id": { "$ref": "#/definitions/identity_id" }
+        "bank": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "id": {
+          "$ref": "#/definitions/identity_id"
+        }
       }
     },
     "identity_actor": {
@@ -93,16 +176,34 @@
       "additionalProperties": false,
       "required": ["bank", "role", "id"],
       "properties": {
-        "bank": { "type": "string", "minLength": 1, "pattern": "\\S" },
-        "role": { "enum": ["human", "assistant"] },
-        "id": { "$ref": "#/definitions/identity_id" }
+        "bank": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "role": {
+          "enum": ["human", "assistant"]
+        },
+        "id": {
+          "$ref": "#/definitions/identity_id"
+        }
       }
     },
     "identity": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "assistant": { "$ref": "#/definitions/identity_speaker" },
+        "assistant": {
+          "$ref": "#/definitions/identity_speaker"
+        },
+        "names": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/definitions/harness_name_observation"
+          }
+        },
         "bindings": {
           "type": "array",
           "maxItems": 16,
@@ -111,8 +212,12 @@
             "additionalProperties": false,
             "required": ["actor", "entity"],
             "properties": {
-              "actor": { "$ref": "#/definitions/identity_actor" },
-              "entity": { "$ref": "#/definitions/identity_id" }
+              "actor": {
+                "$ref": "#/definitions/identity_actor"
+              },
+              "entity": {
+                "$ref": "#/definitions/identity_id"
+              }
             }
           }
         },
@@ -126,8 +231,12 @@
                 "additionalProperties": false,
                 "required": ["actor", "label"],
                 "properties": {
-                  "actor": { "$ref": "#/definitions/identity_actor" },
-                  "label": { "$ref": "#/definitions/identity_label" }
+                  "actor": {
+                    "$ref": "#/definitions/identity_actor"
+                  },
+                  "label": {
+                    "$ref": "#/definitions/identity_label"
+                  }
                 }
               },
               {
@@ -135,8 +244,12 @@
                 "additionalProperties": false,
                 "required": ["entity", "label"],
                 "properties": {
-                  "entity": { "$ref": "#/definitions/identity_id" },
-                  "label": { "$ref": "#/definitions/identity_label" }
+                  "entity": {
+                    "$ref": "#/definitions/identity_id"
+                  },
+                  "label": {
+                    "$ref": "#/definitions/identity_label"
+                  }
                 }
               }
             ]
@@ -149,8 +262,14 @@
       "additionalProperties": false,
       "required": ["bank", "id"],
       "properties": {
-        "bank": { "type": "string", "minLength": 1 },
-        "id": { "type": "integer", "minimum": 1 }
+        "bank": {
+          "type": "string",
+          "minLength": 1
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        }
       }
     }
   },
@@ -158,7 +277,8 @@
     "write_bank_and_turn": "Both present or both absent. A writable destination must be independently granted; reading a bank grants no write permission.",
     "authorization": "Bearer-authenticated server policy grants banks and facts. Requests can only select or narrow those grants. speaker_id is attribution, never authentication.",
     "speaker": "Optional remora.speaker declares the current human's attribution scope: authenticated principal, speaker.bank and exact opaque speaker.id. IDs are not normalized or interpreted. Writable requests infer the same scope from write_bank and turn.speaker_id; an explicit conflicting bank or ID is a 400 speaker_binding_mismatch before inference or bank access. Speaker binding grants no reads, writes or flows and opens no additional bank. An unselected speaker bank can only supply an unmatched attribution scope. Missing identity remains unknown. Recall quotes preserve named third parties and grammatical subjects; a source author is not necessarily the subject. Attribution that changes rendered recall invalidates conditioned memory while compatible bare SYSTEM reuse remains possible.",
-    "identity": "Optional remora.identity requires features.entity_identity=true and all four valid advertised identity limits. Missing/false support forbids identity, including {}. Current human remains the existing local speaker; assistant={bank,id} separately designates the current local assistant. Explicit bindings map (principal,bank,role,id) to an entity ID in the server-derived principal namespace. Omitted bindings retain established targets; new bindings require a new writable source/revision for its current actors in the write bank and commit atomically with the receipt. Read-only calls cannot establish/retarget bindings; completed retries cannot retro-create them. Names are optional request-local labels, never identity joins or grants. Known conflicts reject before inference; commit rechecks conflicts atomically. Explicit assistant on a completed retry must match the recorded local bank/id exactly; legacy sources with no assistant record cannot acquire one through a retry. See entity-identity-proposal.md for the accepted lifecycle and source/subject distinction.",
+    "identity": "Optional remora.identity requires features.entity_identity=true and all four valid advertised identity limits. Missing/false support forbids identity, including {}. Current human remains the existing local speaker; assistant={bank,id} separately designates the current local assistant. Explicit bindings map (principal,bank,role,id) to an entity ID in the server-derived principal namespace. Omitted bindings retain established targets; new bindings require a new writable source/revision for its current actors in the write bank and commit atomically with the receipt. Read-only calls cannot establish/retarget bindings; completed retries cannot retro-create them. Labels remain optional request-local presentation, never identity joins or grants. Known conflicts reject before inference; commit rechecks conflicts atomically. Explicit assistant on a completed retry must match the recorded local bank/id exactly; legacy sources with no assistant record cannot acquire one through a retry. See entity-identity-proposal.md for the accepted lifecycle and source/subject distinction.",
+    "harness_names": "Optional identity.names requires separately advertised features.harness_names=true, entity_identity=true and all six valid advertised identity/name limits. Missing/false support rejects its presence, including an empty list. One or two unique current source actors in the selected write bank may receive exact harness-supplied names; write_bank and turn are required. Names never join identities, open banks or become human-stated evidence. Save ordinary authorized facts with source=harness and separately bound metadata evidence in the accepted-source transaction. Same-name reuse also requires an identical resolved EntityRef. A rename never rewrites old references or human-declared names. Completed sources may omit names or repeat the original exact declaration, verified by canonical digest; changed/new declarations are 409 source_name_conflict. Forget redacts observation and harness-evidence plaintext while preserving digests and the original receipt. A names-sent request requires writes.harness_names acknowledgement; an omitted-names completed retry may return the original optional acknowledgement. See harness-name-proposal.md for the accepted lifecycle, privacy boundaries, source revision rules and implementation status.",
     "recall": "Eligible refs are intersected with server grants and provenance restrictions before retrieval and every refresh. Missing allow means all otherwise permitted refs; allow=[] means none. deny further subtracts refs.",
     "cross_bank_writes": "Reading several banks does not authorize publishing their facts into the write bank. Server policy must grant source-bank to destination-bank flows; derived facts retain restrictive provenance. No implicit permission promotion.",
     "without_extension": "Ordinary generation with no bank access and no writes. No global default bank.",
@@ -182,13 +302,27 @@
       "source_binding"
     ],
     "properties": {
-      "object": { "const": "remora.capabilities" },
-      "version": { "const": 1 },
-      "model": { "type": "string" },
-      "backend": { "enum": ["transformers", "llama.cpp"] },
-      "profile": { "type": "string" },
-      "memory_delivery": { "enum": ["detached", "native-cache"] },
-      "source_binding": { "const": "final_user_message_exact" },
+      "object": {
+        "const": "remora.capabilities"
+      },
+      "version": {
+        "const": 1
+      },
+      "model": {
+        "type": "string"
+      },
+      "backend": {
+        "enum": ["transformers", "llama.cpp"]
+      },
+      "profile": {
+        "type": "string"
+      },
+      "memory_delivery": {
+        "enum": ["detached", "native-cache"]
+      },
+      "source_binding": {
+        "const": "final_user_message_exact"
+      },
       "features": {
         "type": "object",
         "additionalProperties": false,
@@ -204,17 +338,42 @@
           "thinking"
         ],
         "properties": {
-          "memory": { "type": "boolean" },
-          "automatic_writes": { "type": "boolean" },
-          "multi_bank": { "type": "boolean" },
-          "fact_filter": { "type": "boolean" },
-          "source_revisions": { "type": "boolean" },
-          "prefix_cache": { "type": "boolean" },
-          "speaker_binding": { "type": "boolean" },
-          "entity_identity": { "type": "boolean" },
-          "streaming": { "type": "boolean" },
-          "tools": { "type": "boolean" },
-          "thinking": { "type": "boolean" }
+          "memory": {
+            "type": "boolean"
+          },
+          "automatic_writes": {
+            "type": "boolean"
+          },
+          "multi_bank": {
+            "type": "boolean"
+          },
+          "fact_filter": {
+            "type": "boolean"
+          },
+          "source_revisions": {
+            "type": "boolean"
+          },
+          "prefix_cache": {
+            "type": "boolean"
+          },
+          "speaker_binding": {
+            "type": "boolean"
+          },
+          "entity_identity": {
+            "type": "boolean"
+          },
+          "harness_names": {
+            "type": "boolean"
+          },
+          "streaming": {
+            "type": "boolean"
+          },
+          "tools": {
+            "type": "boolean"
+          },
+          "thinking": {
+            "type": "boolean"
+          }
         }
       },
       "limits": {
@@ -222,9 +381,17 @@
         "additionalProperties": false,
         "required": ["context_tokens", "max_output_tokens", "max_read_banks"],
         "properties": {
-          "context_tokens": { "type": "integer", "minimum": 1 },
-          "max_output_tokens": { "type": "integer", "minimum": 1 },
-          "max_read_banks": { "const": 8 },
+          "context_tokens": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "max_output_tokens": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "max_read_banks": {
+            "const": 8
+          },
           "max_identity_bindings": {
             "type": "integer",
             "minimum": 1,
@@ -244,6 +411,16 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 128
+          },
+          "max_harness_names": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2
+          },
+          "max_harness_name_chars": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 128
           }
         }
       }
@@ -253,7 +430,11 @@
       "properties": {
         "features": {
           "required": ["entity_identity"],
-          "properties": { "entity_identity": { "const": true } }
+          "properties": {
+            "entity_identity": {
+              "const": true
+            }
+          }
         }
       }
     },
@@ -269,7 +450,47 @@
           ]
         }
       }
-    }
+    },
+    "allOf": [
+      {
+        "if": {
+          "required": ["features"],
+          "properties": {
+            "features": {
+              "required": ["harness_names"],
+              "properties": {
+                "harness_names": {
+                  "const": true
+                }
+              }
+            }
+          }
+        },
+        "then": {
+          "required": ["limits"],
+          "properties": {
+            "features": {
+              "required": ["entity_identity"],
+              "properties": {
+                "entity_identity": {
+                  "const": true
+                }
+              }
+            },
+            "limits": {
+              "required": [
+                "max_identity_bindings",
+                "max_identity_labels",
+                "max_identity_id_chars",
+                "max_identity_label_chars",
+                "max_harness_names",
+                "max_harness_name_chars"
+              ]
+            }
+          }
+        }
+      }
+    ]
   },
   "capabilities_example": {
     "object": "remora.capabilities",
@@ -328,6 +549,74 @@
       "max_identity_label_chars": 128
     }
   },
+  "harness_names_request_example": {
+    "model": "gemma-4-e2b-it",
+    "temperature": 0,
+    "max_tokens": 64,
+    "cache_prompt": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "I have a dog."
+      }
+    ],
+    "remora": {
+      "read_banks": ["place:demo"],
+      "write_bank": "place:demo",
+      "turn": {
+        "id": "event:demo:1",
+        "revision": 0,
+        "speaker_id": "actor:7",
+        "text": "I have a dog."
+      },
+      "identity": {
+        "names": [
+          {
+            "actor": {
+              "bank": "place:demo",
+              "role": "human",
+              "id": "actor:7"
+            },
+            "name": "Aster"
+          }
+        ]
+      }
+    }
+  },
+  "harness_names_capabilities_example": {
+    "object": "remora.capabilities",
+    "version": 1,
+    "model": "gemma-4-e2b-it",
+    "backend": "transformers",
+    "profile": "gemma-reference-12288-harness-names",
+    "source_binding": "final_user_message_exact",
+    "memory_delivery": "detached",
+    "features": {
+      "memory": true,
+      "automatic_writes": true,
+      "multi_bank": true,
+      "fact_filter": true,
+      "source_revisions": true,
+      "prefix_cache": true,
+      "speaker_binding": true,
+      "entity_identity": true,
+      "harness_names": true,
+      "streaming": false,
+      "tools": false,
+      "thinking": false
+    },
+    "limits": {
+      "context_tokens": 12288,
+      "max_output_tokens": 256,
+      "max_read_banks": 8,
+      "max_identity_bindings": 16,
+      "max_identity_labels": 64,
+      "max_identity_id_chars": 256,
+      "max_identity_label_chars": 128,
+      "max_harness_names": 2,
+      "max_harness_name_chars": 128
+    }
+  },
   "response_extension_schema": {
     "type": "object",
     "additionalProperties": false,
@@ -340,25 +629,50 @@
       "cache"
     ],
     "properties": {
-      "version": { "const": 1 },
-      "backend": { "enum": ["transformers", "llama.cpp"] },
-      "read_banks": { "type": "array", "items": { "type": "string" } },
+      "version": {
+        "const": 1
+      },
+      "backend": {
+        "enum": ["transformers", "llama.cpp"]
+      },
+      "read_banks": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
       "selected": {
         "type": "array",
-        "items": { "$ref": "#/definitions/fact_ref" }
+        "items": {
+          "$ref": "#/definitions/fact_ref"
+        }
       },
       "writes": {
         "oneOf": [
-          { "type": "null" },
+          {
+            "type": "null"
+          },
           {
             "type": "object",
             "additionalProperties": false,
             "required": ["bank", "source_id", "revision", "replayed", "result"],
             "properties": {
-              "bank": { "type": "string" },
-              "source_id": { "type": "string" },
-              "revision": { "type": "integer", "minimum": 0 },
-              "replayed": { "type": "boolean" },
+              "bank": {
+                "type": "string"
+              },
+              "source_id": {
+                "type": "string"
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "harness_names": {
+                "$ref": "#/definitions/harness_names_receipt"
+              },
               "result": {
                 "type": "object",
                 "additionalProperties": false,
@@ -373,22 +687,38 @@
                 "properties": {
                   "saved": {
                     "type": "array",
-                    "items": { "type": "integer", "minimum": 1 }
+                    "items": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
                   },
                   "reinforced": {
                     "type": "array",
-                    "items": { "type": "integer", "minimum": 1 }
+                    "items": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
                   },
                   "superseded": {
                     "type": "array",
-                    "items": { "type": "integer", "minimum": 1 }
+                    "items": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
                   },
                   "forgotten": {
                     "type": "array",
-                    "items": { "type": "integer", "minimum": 1 }
+                    "items": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
                   },
-                  "error": { "type": ["string", "null"] },
-                  "unmatched_forget": { "type": "boolean" }
+                  "error": {
+                    "type": ["string", "null"]
+                  },
+                  "unmatched_forget": {
+                    "type": "boolean"
+                  }
                 }
               }
             }
@@ -405,10 +735,20 @@
           "invalidated"
         ],
         "properties": {
-          "requested": { "type": "boolean" },
-          "reused_tokens": { "type": "integer", "minimum": 0 },
-          "evaluated_tokens": { "type": "integer", "minimum": 0 },
-          "invalidated": { "type": ["string", "null"] }
+          "requested": {
+            "type": "boolean"
+          },
+          "reused_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "evaluated_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "invalidated": {
+            "type": ["string", "null"]
+          }
         }
       }
     }
@@ -424,12 +764,17 @@
         "role": "user",
         "content": "Prior caller-owned transcript and participant context."
       },
-      { "role": "user", "content": "My piano teacher is Elin." }
+      {
+        "role": "user",
+        "content": "My piano teacher is Elin."
+      }
     ],
     "temperature": 0,
     "max_tokens": 64,
     "cache_prompt": true,
-    "chat_template_kwargs": { "enable_thinking": false },
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
     "remora": {
       "read_banks": ["discord:dm:example"],
       "write_bank": "discord:dm:example",
@@ -443,18 +788,31 @@
   },
   "readonly_speaker_request_example": {
     "model": "gemma-4-e2b-it",
-    "messages": [{ "role": "user", "content": "Who is my piano teacher?" }],
+    "messages": [
+      {
+        "role": "user",
+        "content": "Who is my piano teacher?"
+      }
+    ],
     "temperature": 0,
     "max_tokens": 64,
     "cache_prompt": true,
     "remora": {
       "read_banks": ["discord:dm:example"],
-      "speaker": { "bank": "discord:dm:example", "id": "discord:user:example" }
+      "speaker": {
+        "bank": "discord:dm:example",
+        "id": "discord:user:example"
+      }
     }
   },
   "identity_request_example": {
     "model": "gemma-4-e2b-it",
-    "messages": [{ "role": "user", "content": "I have a dog." }],
+    "messages": [
+      {
+        "role": "user",
+        "content": "I have a dog."
+      }
+    ],
     "temperature": 0,
     "max_tokens": 64,
     "cache_prompt": true,
@@ -468,14 +826,26 @@
         "text": "I have a dog."
       },
       "identity": {
-        "assistant": { "bank": "place:a", "id": "account:helper" },
+        "assistant": {
+          "bank": "place:a",
+          "id": "account:helper"
+        },
         "bindings": [
           {
-            "actor": { "bank": "place:a", "role": "human", "id": "local:7" },
+            "actor": {
+              "bank": "place:a",
+              "role": "human",
+              "id": "local:7"
+            },
             "entity": "person:alpha"
           }
         ],
-        "labels": [{ "entity": "person:alpha", "label": "Alex" }]
+        "labels": [
+          {
+            "entity": "person:alpha",
+            "label": "Alex"
+          }
+        ]
       }
     }
   },
@@ -487,7 +857,10 @@
     "choices": [
       {
         "index": 0,
-        "message": { "role": "assistant", "content": "Got it." },
+        "message": {
+          "role": "assistant",
+          "content": "Got it."
+        },
         "finish_reason": "stop"
       }
     ],
