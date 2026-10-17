@@ -73,8 +73,10 @@ R5/R6 are closed, with 732 parent CPU tests passing and three native-asset skips
 The validated flags are `--memory-delivery native-cache --entity-identity --legacy-source-projection`;
 the profile is `gemma-reference-12288-native-cache-source-projected`.
 It remains opt-in; detached is the default and llama.cpp entity support is unqualified.
-Mia accepts conversational intrusion as an E2B model limitation, not a Remora release
-blocker. Stop relevance and LoRA work; retain the observed intrusion in the handback.
+Conversational intrusion remains observed in the E2B trial. Mia has now authorized
+separate contextual retrieval and null-recall work with matched positive and
+negative checks on the frozen model. Keep it isolated from names and the live
+trial; coordinate any GPU window before changing the shared model lease. No LoRA.
 The memory representation uses explicit third-person facts bound to generic stable
 entity references, keeping fact subjects separate
 from source authors and preserving raw evidence and receipts. Names are optional
@@ -91,10 +93,13 @@ additive `identity.names` draft: separately negotiated support,
 source-bound harness facts, frozen retries and a separate write acknowledgement.
 Forgetting redacts name evidence while retaining retry digests; moving a local
 actor to a shared entity creates a new name fact without rebinding old evidence.
-Canonical promotion and backend implementation remain pending; the live trial
-continues on the existing contract.
+The name contract is promoted at `6b5e18c`. Patch's low-level transport checks the
+separate name capability and all six limits, preserves exact declarations, and
+requires the sibling acknowledgement even if the model writer fails. Backend
+implementation is pending; the live DM builder sends its original tuple without
+name observations. The client passes 145 tests plus typecheck and build smoke.
 Wire review is closed at the [additive identity draft](https://github.com/mia-cx/remora/blob/ea060f25b03e6ad82cede9db6514a805a1e1ecf1/docs/api/entity-identity-wire-draft.json).
-The canonical contract is promoted at `193e295`. Low-level client identity transport
+The canonical contract snapshot is `6b5e18c`. Low-level client identity transport
 requires enabled support and all four valid advertised limits, then enforces those
 limits without rewriting IDs or labels. The DM builder retains its original source
 tuple. Stored facts and receipts remain unchanged. Remora serves the approved

@@ -87,7 +87,7 @@ metadata and a matching write receipt. Receipts and observed cache reuse are
 logged; a writer failure preserves the generated reply and logs the failure.
 
 The shared contract snapshot is [remora-contract-v1.json](spec/fixtures/remora-contract-v1.json).
-It matches Remora commit `193e295caf7baf55eee37a5a24c5931338dbdf72` semantically;
+It matches Remora commit `6b5e18c` semantically;
 only JSON formatting differs.
 Read-only callers may supply `remora.speaker: { bank, id }` to identify the current
 human's attribution scope. The ID is opaque and grants no access; writable turns
@@ -100,6 +100,12 @@ It checks requests against those advertised counts and character limits while
 preserving exact IDs and labels. Missing or false support rejects even an empty
 identity object locally. Patch's DM request builder still sends its existing
 source tuple, without automatic assistant identities or shared bindings.
+Optional `identity.names` transport additionally requires
+`features.harness_names: true` and both name limits, alongside the four identity
+limits. It preserves exact names and source identities across retries, rejects
+missing name-write acknowledgements, and accepts their original optional receipt
+on retries that omit names. The DM builder does not yet supply name observations;
+Remora's backend implementation is still pending.
 Capabilities also retain optional `memory_delivery: "detached" | "native-cache"`.
 Delivery is selected by the service, with detached as its default. HF native-cache
 feeds recalled source blocks through ordinary token/KV input and remains
