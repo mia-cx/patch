@@ -17,12 +17,19 @@ const contract: {
     remora: RemoraRequest;
   };
   identity_request_example: { messages: LlmMessage[]; remora: RemoraRequest };
+  harness_names_request_example: {
+    messages: LlmMessage[];
+    remora: RemoraRequest;
+  };
   response_example: {
     choices: { message: { content: string } }[];
     remora: RemoraResponse;
   };
   capabilities_example: ReturnType<typeof parseRemoraCapabilities>;
   identity_capabilities_example: ReturnType<typeof parseRemoraCapabilities>;
+  harness_names_capabilities_example: ReturnType<
+    typeof parseRemoraCapabilities
+  >;
 } = JSON.parse(
   readFileSync(
     new URL("../../spec/fixtures/remora-contract-v1.json", import.meta.url),
@@ -306,6 +313,326 @@ describe("Remora contract over the LLM HTTP interface", () => {
       ),
     );
     await expect(new LlmClient(config).initializeRemora()).rejects.toThrow();
+  });
+
+  // Proves source-bound names survive retries and their receipt remains independent of model writes.
+  it("preserves canonical names and acknowledgements across generation retries", async () => {
+    const config = loadConfig({
+      DISCORD_TOKEN: "test",
+      DISCORD_CLIENT_ID: "test",
+      LLM_TEMPERATURE: "0",
+    });
+    const request = contract.harness_names_request_example;
+    const turn = request.remora.turn;
+    const writes = contract.response_example.remora.writes;
+    if (!turn || !writes) throw new Error("Canonical writable fixture missing");
+    const acknowledgement = {
+      saved: [2],
+      unchanged: [],
+      superseded: [],
+      suppressed: [],
+    };
+    const requests: RemoraRequest[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        if (url.endsWith("/remora/capabilities"))
+          return Response.json(contract.harness_names_capabilities_example);
+        const body: { remora: RemoraRequest } = JSON.parse(String(init.body));
+        requests.push(body.remora);
+        return Response.json({
+          ...contract.response_example,
+          remora: {
+            ...contract.response_example.remora,
+            writes: body.remora.turn
+              ? {
+                  ...writes,
+                  bank: request.remora.write_bank,
+                  source_id: turn.id,
+                  revision: turn.revision,
+                  replayed: requests.length > 1,
+                  result: {
+                    ...writes.result,
+                    saved: [],
+                    error: "writer unavailable",
+                  },
+                  harness_names: acknowledgement,
+                }
+              : null,
+          },
+        });
+      }),
+    );
+    const llm = new LlmClient(config);
+    await llm.initializeRemora();
+    const first = await llm.complete(request);
+    const retry = await llm.complete({
+      ...request,
+      maxTokens: 32,
+      enableThinking: false,
+    });
+    const omitted = await llm.complete({
+      ...request,
+      remora: { ...request.remora, identity: {} },
+    });
+    const readonly = await llm.complete({
+      messages: request.messages,
+      remora: {
+        read_banks: request.remora.read_banks,
+        speaker: { bank: "place:demo", id: "actor:7" },
+      },
+    });
+    expect(requests.slice(0, 2)).toEqual([request.remora, request.remora]);
+    for (const response of [first, retry, omitted]) {
+      expect(response.content).toBe("Got it.");
+      expect(response.remora?.writes?.harness_names).toEqual(acknowledgement);
+      expect(response.remora?.writes?.result.error).toBe("writer unavailable");
+    }
+    expect(retry.remora?.writes?.replayed).toBe(true);
+    expect(omitted.remora?.writes?.replayed).toBe(true);
+    expect(requests[2]?.identity?.names).toBeUndefined();
+    expect(readonly.remora?.writes).toBeNull();
+  });
+
+  // Proves name writes are gated independently of identity support, even with advertised limits.
+  it.each([undefined, false])(
+    "blocks name declarations when name support is %s",
+    async (support) => {
+      const config = loadConfig({
+        DISCORD_TOKEN: "test",
+        DISCORD_CLIENT_ID: "test",
+        LLM_TEMPERATURE: "0",
+      });
+      const fetch = vi.fn(async () =>
+        Response.json({
+          ...contract.harness_names_capabilities_example,
+          features: {
+            ...contract.harness_names_capabilities_example.features,
+            harness_names: support,
+          },
+        }),
+      );
+      vi.stubGlobal("fetch", fetch);
+      const llm = new LlmClient(config);
+      const request = contract.harness_names_request_example;
+      await expect(llm.complete(request)).rejects.toThrow("negotiated");
+      await llm.initializeRemora();
+      await expect(llm.complete(request)).rejects.toThrow("negotiated");
+      await expect(
+        llm.complete({
+          ...request,
+          remora: { ...request.remora, identity: { names: [] } },
+        }),
+      ).rejects.toThrow("negotiated");
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  // Proves clients cannot enable name writes without identity and all six valid limits.
+  it.each([
+    ["max_identity_bindings", undefined],
+    ["max_identity_labels", undefined],
+    ["max_identity_id_chars", undefined],
+    ["max_identity_label_chars", undefined],
+    ["max_harness_names", undefined],
+    ["max_harness_name_chars", undefined],
+    ["max_harness_names", 0],
+    ["max_harness_names", 3],
+    ["max_harness_name_chars", 129],
+    ["max_harness_name_chars", 1.5],
+  ] as const)("rejects enabled name limit %s=%s", async (field, value) => {
+    const config = loadConfig({
+      DISCORD_TOKEN: "test",
+      DISCORD_CLIENT_ID: "test",
+      LLM_TEMPERATURE: "0",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          ...contract.harness_names_capabilities_example,
+          limits: {
+            ...contract.harness_names_capabilities_example.limits,
+            [field]: value,
+          },
+        }),
+      ),
+    );
+    await expect(new LlmClient(config).initializeRemora()).rejects.toThrow();
+  });
+
+  it.each([undefined, false])(
+    "rejects enabled names when identity support is %s",
+    async (support) => {
+      const config = loadConfig({
+        DISCORD_TOKEN: "test",
+        DISCORD_CLIENT_ID: "test",
+        LLM_TEMPERATURE: "0",
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({
+            ...contract.harness_names_capabilities_example,
+            features: {
+              ...contract.harness_names_capabilities_example.features,
+              entity_identity: support,
+            },
+          }),
+        ),
+      );
+      await expect(new LlmClient(config).initializeRemora()).rejects.toThrow(
+        "require entity identity",
+      );
+    },
+  );
+
+  // Proves exact Unicode names cross HTTP while actual smaller limits and renegotiation stop writes.
+  it("honors actual name limits and clears them when negotiation changes", async () => {
+    const config = loadConfig({
+      DISCORD_TOKEN: "test",
+      DISCORD_CLIENT_ID: "test",
+      LLM_TEMPERATURE: "0",
+    });
+    let capabilities: ReturnType<typeof parseRemoraCapabilities> = {
+      ...contract.harness_names_capabilities_example,
+      limits: {
+        ...contract.harness_names_capabilities_example.limits,
+        max_harness_names: 1,
+        max_harness_name_chars: 4,
+        max_identity_id_chars: 16,
+      },
+    };
+    const example = contract.harness_names_request_example;
+    const original = example.remora.identity?.names?.[0];
+    const turn = example.remora.turn;
+    const writes = contract.response_example.remora.writes;
+    if (!original || !turn || !writes)
+      throw new Error("Canonical name fixture missing");
+    const name = { ...original, name: " 🦊🦊 " };
+    const request = {
+      ...example,
+      remora: { ...example.remora, identity: { names: [name] } },
+    };
+    const requests: RemoraRequest[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        if (url.endsWith("/remora/capabilities"))
+          return Response.json(capabilities);
+        const body: { remora: RemoraRequest } = JSON.parse(String(init.body));
+        requests.push(body.remora);
+        return Response.json({
+          ...contract.response_example,
+          remora: {
+            ...contract.response_example.remora,
+            writes: {
+              ...writes,
+              bank: example.remora.write_bank,
+              source_id: turn.id,
+              harness_names: {
+                saved: [],
+                unchanged: [],
+                superseded: [],
+                suppressed: [original.actor],
+              },
+            },
+          },
+        });
+      }),
+    );
+    const llm = new LlmClient(config);
+    await llm.initializeRemora();
+    const result = await llm.complete(request);
+    expect(requests[0]).toEqual(request.remora);
+    expect(result.remora?.writes?.harness_names?.suppressed).toEqual([
+      original.actor,
+    ]);
+    for (const names of [
+      [],
+      [name, { ...name, actor: { ...name.actor, id: "actor:8" } }],
+      [{ ...name, name: "🦊".repeat(5) }],
+      [{ ...name, name: "\u00a0 \n" }],
+      [{ ...name, actor: { ...name.actor, id: "x".repeat(17) } }],
+    ])
+      await expect(
+        llm.complete({
+          ...request,
+          remora: { ...request.remora, identity: { names } },
+        }),
+      ).rejects.toThrow("advertised");
+
+    capabilities = {
+      ...capabilities,
+      features: { ...capabilities.features, harness_names: false },
+    };
+    await llm.initializeRemora();
+    await expect(llm.complete(request)).rejects.toThrow("not been negotiated");
+    await llm.complete({
+      ...request,
+      remora: { ...request.remora, identity: { labels: [] } },
+    });
+    capabilities = {
+      ...capabilities,
+      features: { ...capabilities.features, harness_names: true },
+      limits: { ...capabilities.limits, max_harness_name_chars: undefined },
+    };
+    await expect(llm.initializeRemora()).rejects.toThrow();
+    await expect(llm.complete(request)).rejects.toThrow("not been negotiated");
+    expect(requests).toHaveLength(2);
+  });
+
+  // Proves a server cannot silently ignore names or return an unusable acknowledgement.
+  it.each([
+    ["missing", undefined],
+    ["null", null],
+    ["incomplete", { saved: [2] }],
+    [
+      "invalid ID",
+      { saved: [0], unchanged: [], superseded: [], suppressed: [] },
+    ],
+    [
+      "invalid actor",
+      {
+        saved: [],
+        unchanged: [],
+        superseded: [],
+        suppressed: [{ bank: "place:demo", role: "bot", id: "actor:7" }],
+      },
+    ],
+  ])("rejects a %s name acknowledgement", async (_label, acknowledgement) => {
+    const config = loadConfig({
+      DISCORD_TOKEN: "test",
+      DISCORD_CLIENT_ID: "test",
+      LLM_TEMPERATURE: "0",
+    });
+    const request = contract.harness_names_request_example;
+    const turn = request.remora.turn;
+    const writes = contract.response_example.remora.writes;
+    if (!turn || !writes) throw new Error("Canonical writable fixture missing");
+    const fetch = vi.fn(async (url: string) =>
+      Response.json(
+        url.endsWith("/remora/capabilities")
+          ? contract.harness_names_capabilities_example
+          : {
+              ...contract.response_example,
+              remora: {
+                ...contract.response_example.remora,
+                writes: {
+                  ...writes,
+                  bank: request.remora.write_bank,
+                  source_id: turn.id,
+                  harness_names: acknowledgement,
+                },
+              },
+            },
+      ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const llm = new LlmClient(config);
+    await llm.initializeRemora();
+    await expect(llm.complete(request)).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   // Proves durable failed-write receipts remain visible without discarding the generated answer.
