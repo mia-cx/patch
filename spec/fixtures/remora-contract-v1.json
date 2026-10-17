@@ -271,6 +271,331 @@
           "minimum": 1
         }
       }
+    },
+    "management_bank": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "\\S"
+    },
+    "management_request_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "\\S"
+    },
+    "management_fact_id": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "management_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "management_revision": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "management_cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "management_stored_string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "management_actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bank", "role", "id"],
+      "properties": {
+        "bank": {
+          "$ref": "#/definitions/management_stored_string"
+        },
+        "role": {
+          "enum": ["human", "assistant"]
+        },
+        "id": {
+          "$ref": "#/definitions/management_stored_string"
+        }
+      }
+    },
+    "management_entity_ref": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["principal", "actor"],
+          "properties": {
+            "principal": {
+              "$ref": "#/definitions/management_stored_string"
+            },
+            "actor": {
+              "$ref": "#/definitions/management_actor"
+            },
+            "description": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["principal", "entity"],
+          "properties": {
+            "principal": {
+              "$ref": "#/definitions/management_stored_string"
+            },
+            "entity": {
+              "$ref": "#/definitions/management_stored_string"
+            },
+            "description": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["principal", "unknown"],
+          "properties": {
+            "principal": {
+              "$ref": "#/definitions/management_stored_string"
+            },
+            "unknown": {
+              "$ref": "#/definitions/management_stored_string"
+            },
+            "description": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "management_memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "text", "kind", "source", "subjects"],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/management_fact_id"
+        },
+        "text": {
+          "type": "string",
+          "description": "Complete stored text, verbatim, never truncated."
+        },
+        "kind": {
+          "enum": ["fact", "tombstone"]
+        },
+        "source": {
+          "enum": ["user", "confirmed", "self"]
+        },
+        "subjects": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^@\\{[0-9a-f]{64}\\}$"
+          },
+          "additionalProperties": {
+            "$ref": "#/definitions/management_entity_ref"
+          }
+        }
+      }
+    },
+    "management_list_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "object",
+        "version",
+        "bank",
+        "revision",
+        "data",
+        "next_cursor"
+      ],
+      "properties": {
+        "object": {
+          "const": "remora.memory.list"
+        },
+        "version": {
+          "const": 1
+        },
+        "bank": {
+          "$ref": "#/definitions/management_bank"
+        },
+        "revision": {
+          "$ref": "#/definitions/management_revision"
+        },
+        "data": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/definitions/management_memory"
+          }
+        },
+        "next_cursor": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/definitions/management_cursor"
+            }
+          ]
+        }
+      }
+    },
+    "management_forget_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bank", "ids", "request_id", "expected_revision"],
+      "properties": {
+        "bank": {
+          "$ref": "#/definitions/management_bank"
+        },
+        "ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/management_fact_id"
+          }
+        },
+        "request_id": {
+          "$ref": "#/definitions/management_request_id"
+        },
+        "expected_revision": {
+          "$ref": "#/definitions/management_revision"
+        }
+      }
+    },
+    "management_clear_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bank", "request_id", "expected_revision"],
+      "properties": {
+        "bank": {
+          "$ref": "#/definitions/management_bank"
+        },
+        "request_id": {
+          "$ref": "#/definitions/management_request_id"
+        },
+        "expected_revision": {
+          "$ref": "#/definitions/management_revision"
+        }
+      }
+    },
+    "management_mutation_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "object",
+        "version",
+        "bank",
+        "request_id",
+        "operation",
+        "replayed",
+        "deleted_ids",
+        "deleted_count",
+        "dependent_suppression",
+        "revision",
+        "cache_invalidated",
+        "reset_required"
+      ],
+      "properties": {
+        "object": {
+          "const": "remora.memory.mutation"
+        },
+        "version": {
+          "const": 1
+        },
+        "bank": {
+          "$ref": "#/definitions/management_bank"
+        },
+        "request_id": {
+          "$ref": "#/definitions/management_request_id"
+        },
+        "operation": {
+          "enum": ["forget", "clear"]
+        },
+        "replayed": {
+          "type": "boolean"
+        },
+        "deleted_ids": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 100,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/definitions/management_fact_id"
+              }
+            }
+          ]
+        },
+        "deleted_count": {
+          "$ref": "#/definitions/management_count"
+        },
+        "dependent_suppression": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bank", "visible_active_count"],
+          "properties": {
+            "bank": {
+              "$ref": "#/definitions/management_bank"
+            },
+            "visible_active_count": {
+              "$ref": "#/definitions/management_count"
+            }
+          }
+        },
+        "revision": {
+          "$ref": "#/definitions/management_revision"
+        },
+        "cache_invalidated": {
+          "const": true
+        },
+        "reset_required": {
+          "const": true
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "operation": {
+              "const": "forget"
+            },
+            "deleted_ids": {
+              "type": "array"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "clear"
+            },
+            "deleted_ids": {
+              "type": "null"
+            },
+            "dependent_suppression": {
+              "properties": {
+                "visible_active_count": {
+                  "const": 0
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   },
   "rules": {
@@ -373,6 +698,9 @@
           },
           "thinking": {
             "type": "boolean"
+          },
+          "memory_management": {
+            "type": "boolean"
           }
         }
       },
@@ -421,6 +749,21 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 128
+          },
+          "max_memory_page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "max_memory_forget_ids": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "max_memory_request_id_chars": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
           }
         }
       }
@@ -485,6 +828,33 @@
                 "max_identity_label_chars",
                 "max_harness_names",
                 "max_harness_name_chars"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "if": {
+          "required": ["features"],
+          "properties": {
+            "features": {
+              "required": ["memory_management"],
+              "properties": {
+                "memory_management": {
+                  "const": true
+                }
+              }
+            }
+          }
+        },
+        "then": {
+          "required": ["limits"],
+          "properties": {
+            "limits": {
+              "required": [
+                "max_memory_page_size",
+                "max_memory_forget_ids",
+                "max_memory_request_id_chars"
               ]
             }
           }
@@ -1029,5 +1399,452 @@
         }
       }
     }
-  ]
+  ],
+  "memory_management": {
+    "status": "Canonical additive management contract. Optional feature negotiation is required; this fixture makes no running-backend capability claim.",
+    "cli": {
+      "flag": "--memory-management",
+      "default": false,
+      "effect": "Advertise features.memory_management=true with all three limits and enable the routes. Without it the routes return 400 unsupported_feature."
+    },
+    "routes": {
+      "list": "GET /v1/remora/memories?bank=<bank>&cursor=<cursor>&limit=<n>",
+      "forget": "POST /v1/remora/memories/forget",
+      "clear": "POST /v1/remora/memories/clear"
+    },
+    "capabilities_additions": {
+      "features": {
+        "memory_management": true
+      },
+      "limits": {
+        "max_memory_page_size": 100,
+        "max_memory_forget_ids": 100,
+        "max_memory_request_id_chars": 256
+      }
+    },
+    "policy_client_addition_schema": {
+      "description": "Optional forget_banks property of a policy client entry. Omission grants no forgetting. write_banks never grants forgetting.",
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/definitions/management_fact_id"
+            }
+          }
+        ]
+      },
+      "propertyNames": {
+        "$ref": "#/definitions/management_bank"
+      }
+    },
+    "list_query": {
+      "bank": "Required. Non-blank, at most 256 Unicode code points, exact and untrimmed, valid UTF-8 after percent-decoding.",
+      "cursor": "Optional. Value of a previous next_cursor.",
+      "limit": "Optional decimal integer 1..max_memory_page_size. Default 50, clamped to the advertised page size.",
+      "other": "Unknown or repeated parameters are 400 invalid_parameter."
+    },
+    "schemas": {
+      "list_response": {
+        "$ref": "#/definitions/management_list_response"
+      },
+      "forget_request": {
+        "$ref": "#/definitions/management_forget_request"
+      },
+      "clear_request": {
+        "$ref": "#/definitions/management_clear_request"
+      },
+      "mutation_receipt": {
+        "$ref": "#/definitions/management_mutation_receipt"
+      }
+    },
+    "normative_notes": [
+      "Request limits are the advertised values; the schema maxima are ceilings. maxLength counts Unicode code points. Pattern \\S requires one non-whitespace character and never transforms the value.",
+      "deleted_ids is sorted ascending and deleted_count equals its length for forget. Clear reports the actual physical row count.",
+      "The cursor binds principal, bank, policy revision, catalog revision and a safe-integer last ID.",
+      "A stored visible ID or computed count beyond 9007199254740991 fails closed with 409 memory_id_out_of_range before any mutation or output.",
+      "The cursor is HMAC-authenticated, possibly with an ephemeral per-instance key. A forged, malformed, unknown-version or pre-restart cursor is 400 invalid_cursor. A scope, policy or catalog mismatch is 409 cursor_stale.",
+      "GET never migrates or writes. Mutations may create a management ledger; fact data is never migrated and no model runs.",
+      "Forget flags local descendants reached through raw and qualified transitive same-bank edges, and otherwise-readable local round-trips through a foreign bank. Foreign rows and caches are never mutated. visible_active_count excludes hidden and foreign rows.",
+      "Forget collects each root's primary source, all mentions, and the exact paired user/assistant source events. If any unrelated retained local statement would lose evidence, considering all rows, statuses and grants, the request is 409 shared_evidence_conflict. Roots and genuinely flagged descendants are related; equal actors are not.",
+      "On success the whole evidence utterance is redacted and identity_sources.context for the exact affected source tuples becomes the JSON {}. Clear does this for every utterance and identity context in the bank.",
+      "api_source_events, identity_sources.assistant, sticky identity bindings and source keys stay byte-exact. No new source, re-extraction or revision. Audit metadata is retained; this is not physical erasure.",
+      "reset_required=true obliges the caller to clear every memory-backed context under the authenticated principal after a success and after a replay. The receipt discloses no inventory of dependency banks.",
+      "A transaction failure rolls back and returns 500 memory_management_error with no internals. A failure after commit, such as file cleanup, is logged and never reported as a rollback. The atomic cache-token invalidation keeps the old file unreachable."
+    ],
+    "examples": {
+      "capabilities_without_management": {
+        "object": "remora.capabilities",
+        "version": 1,
+        "model": "gemma-4-e2b-it",
+        "backend": "transformers",
+        "profile": "gemma-reference-12288",
+        "source_binding": "final_user_message_exact",
+        "memory_delivery": "detached",
+        "features": {
+          "memory": true,
+          "automatic_writes": true,
+          "multi_bank": true,
+          "fact_filter": true,
+          "source_revisions": true,
+          "prefix_cache": true,
+          "speaker_binding": true,
+          "streaming": false,
+          "tools": false,
+          "thinking": false
+        },
+        "limits": {
+          "context_tokens": 12288,
+          "max_output_tokens": 256,
+          "max_read_banks": 8
+        }
+      },
+      "capabilities_with_management": {
+        "object": "remora.capabilities",
+        "version": 1,
+        "model": "gemma-4-e2b-it",
+        "backend": "transformers",
+        "profile": "gemma-reference-12288",
+        "source_binding": "final_user_message_exact",
+        "memory_delivery": "detached",
+        "features": {
+          "memory": true,
+          "automatic_writes": true,
+          "multi_bank": true,
+          "fact_filter": true,
+          "source_revisions": true,
+          "prefix_cache": true,
+          "speaker_binding": true,
+          "memory_management": true,
+          "streaming": false,
+          "tools": false,
+          "thinking": false
+        },
+        "limits": {
+          "context_tokens": 12288,
+          "max_output_tokens": 256,
+          "max_read_banks": 8,
+          "max_memory_page_size": 100,
+          "max_memory_forget_ids": 100,
+          "max_memory_request_id_chars": 256
+        }
+      },
+      "policy_client": {
+        "token_sha256": "<sha256 of a local bearer token>",
+        "principal": "example-harness",
+        "read_banks": {
+          "place:a": null,
+          "place:b": [4, 9]
+        },
+        "write_banks": ["place:a", "place:b"],
+        "forget_banks": {
+          "place:a": null,
+          "place:b": [9]
+        },
+        "flows": []
+      },
+      "list_first_page": {
+        "request": "GET /v1/remora/memories?bank=place%3Aa&limit=2",
+        "response": {
+          "object": "remora.memory.list",
+          "version": 1,
+          "bank": "place:a",
+          "revision": "1795f22e89d4fa62aabc9b4b4f07740de3bb1831d204802dc7266114bd2fa485",
+          "data": [
+            {
+              "id": 1,
+              "text": "My piano teacher is Elin.",
+              "kind": "fact",
+              "source": "user",
+              "subjects": {}
+            },
+            {
+              "id": 2,
+              "text": "@{a693f928c7284a0f870e587693d04eb8c4c390d7b78704852fa7f56239855e16} has a dog named Taro.",
+              "kind": "fact",
+              "source": "user",
+              "subjects": {
+                "@{a693f928c7284a0f870e587693d04eb8c4c390d7b78704852fa7f56239855e16}": {
+                  "principal": "example-harness",
+                  "actor": {
+                    "bank": "place:a",
+                    "role": "human",
+                    "id": "local:7"
+                  }
+                }
+              }
+            }
+          ],
+          "next_cursor": "djEuZXhhbXBsZS5wYWdlMg"
+        }
+      },
+      "list_next_page": {
+        "request": "GET /v1/remora/memories?bank=place%3Aa&cursor=djEuZXhhbXBsZS5wYWdlMg&limit=2",
+        "response": {
+          "object": "remora.memory.list",
+          "version": 1,
+          "bank": "place:a",
+          "revision": "1795f22e89d4fa62aabc9b4b4f07740de3bb1831d204802dc7266114bd2fa485",
+          "data": [
+            {
+              "id": 3,
+              "text": "@{e7efb474bd2bd03b39ef2612e9ff61b252cd1c0a69bd1a4bede34f2266bff9d7} walks Taro on Sundays.",
+              "kind": "fact",
+              "source": "confirmed",
+              "subjects": {
+                "@{e7efb474bd2bd03b39ef2612e9ff61b252cd1c0a69bd1a4bede34f2266bff9d7}": {
+                  "principal": "example-harness",
+                  "unknown": "event:1#r1",
+                  "description": "a neighbour"
+                }
+              }
+            },
+            {
+              "id": 5,
+              "text": "Unicorns",
+              "kind": "tombstone",
+              "source": "user",
+              "subjects": {}
+            }
+          ],
+          "next_cursor": null
+        }
+      },
+      "list_empty_bank": {
+        "request": "GET /v1/remora/memories?bank=place%3Aempty",
+        "response": {
+          "object": "remora.memory.list",
+          "version": 1,
+          "bank": "place:empty",
+          "revision": "c323a522055bf6364926e82ccfecc5fcfd788184c3287c15cbd7f13fc69d8fd0",
+          "data": [],
+          "next_cursor": null
+        }
+      },
+      "forget": {
+        "request": {
+          "bank": "place:a",
+          "ids": [2],
+          "request_id": "cmd:forget:1",
+          "expected_revision": "1795f22e89d4fa62aabc9b4b4f07740de3bb1831d204802dc7266114bd2fa485"
+        },
+        "response": {
+          "object": "remora.memory.mutation",
+          "version": 1,
+          "bank": "place:a",
+          "request_id": "cmd:forget:1",
+          "operation": "forget",
+          "replayed": false,
+          "deleted_ids": [2],
+          "deleted_count": 1,
+          "dependent_suppression": {
+            "bank": "place:a",
+            "visible_active_count": 1
+          },
+          "revision": "e9a7ad5dccad4331d4bba5d2596f134220b17e26aa1e9374585d920ef9228bd2",
+          "cache_invalidated": true,
+          "reset_required": true
+        }
+      },
+      "forget_replay": {
+        "request": {
+          "bank": "place:a",
+          "ids": [2],
+          "request_id": "cmd:forget:1",
+          "expected_revision": "1795f22e89d4fa62aabc9b4b4f07740de3bb1831d204802dc7266114bd2fa485"
+        },
+        "response": {
+          "object": "remora.memory.mutation",
+          "version": 1,
+          "bank": "place:a",
+          "request_id": "cmd:forget:1",
+          "operation": "forget",
+          "replayed": true,
+          "deleted_ids": [2],
+          "deleted_count": 1,
+          "dependent_suppression": {
+            "bank": "place:a",
+            "visible_active_count": 1
+          },
+          "revision": "e9a7ad5dccad4331d4bba5d2596f134220b17e26aa1e9374585d920ef9228bd2",
+          "cache_invalidated": true,
+          "reset_required": true
+        }
+      },
+      "clear": {
+        "request": {
+          "bank": "place:a",
+          "request_id": "cmd:clear:1",
+          "expected_revision": "e9a7ad5dccad4331d4bba5d2596f134220b17e26aa1e9374585d920ef9228bd2"
+        },
+        "response": {
+          "object": "remora.memory.mutation",
+          "version": 1,
+          "bank": "place:a",
+          "request_id": "cmd:clear:1",
+          "operation": "clear",
+          "replayed": false,
+          "deleted_ids": null,
+          "deleted_count": 7,
+          "dependent_suppression": {
+            "bank": "place:a",
+            "visible_active_count": 0
+          },
+          "revision": "2a690a3a370ca5ef1c55da5218faf3aebbfee00b865da4218f8168625197e31e",
+          "cache_invalidated": true,
+          "reset_required": true
+        }
+      }
+    },
+    "errors": [
+      {
+        "status": 400,
+        "body": {
+          "error": {
+            "message": "Memory management is not supported",
+            "type": "invalid_request_error",
+            "param": null,
+            "code": "unsupported_feature"
+          }
+        }
+      },
+      {
+        "status": 400,
+        "body": {
+          "error": {
+            "message": "ids must contain unique positive integers",
+            "type": "invalid_request_error",
+            "param": "ids",
+            "code": "invalid_parameter"
+          }
+        }
+      },
+      {
+        "status": 400,
+        "body": {
+          "error": {
+            "message": "The cursor is invalid",
+            "type": "invalid_request_error",
+            "param": "cursor",
+            "code": "invalid_cursor"
+          }
+        }
+      },
+      {
+        "status": 403,
+        "body": {
+          "error": {
+            "message": "The memory operation is not authorized",
+            "type": "permission_error",
+            "param": "ids",
+            "code": "memory_forbidden"
+          }
+        }
+      },
+      {
+        "status": 404,
+        "body": {
+          "error": {
+            "message": "A requested memory was not found",
+            "type": "invalid_request_error",
+            "param": "ids",
+            "code": "memory_not_found"
+          }
+        }
+      },
+      {
+        "status": 409,
+        "body": {
+          "error": {
+            "message": "The memory list changed; restart from the first page",
+            "type": "invalid_request_error",
+            "param": "cursor",
+            "code": "cursor_stale"
+          }
+        }
+      },
+      {
+        "status": 409,
+        "body": {
+          "error": {
+            "message": "The bank changed since it was listed",
+            "type": "invalid_request_error",
+            "param": "expected_revision",
+            "code": "memory_revision_conflict"
+          }
+        }
+      },
+      {
+        "status": 409,
+        "body": {
+          "error": {
+            "message": "The request_id was used with a different request",
+            "type": "invalid_request_error",
+            "param": "request_id",
+            "code": "management_request_conflict"
+          }
+        }
+      },
+      {
+        "status": 409,
+        "body": {
+          "error": {
+            "message": "Forgetting would remove evidence for another retained memory",
+            "type": "invalid_request_error",
+            "param": "ids",
+            "code": "shared_evidence_conflict"
+          }
+        }
+      },
+      {
+        "status": 409,
+        "body": {
+          "error": {
+            "message": "A stored memory ID or count cannot be represented safely",
+            "type": "invalid_request_error",
+            "param": null,
+            "code": "memory_id_out_of_range"
+          }
+        }
+      },
+      {
+        "status": 409,
+        "body": {
+          "error": {
+            "message": "The policy changed; nothing was deleted",
+            "type": "invalid_request_error",
+            "param": null,
+            "code": "policy_changed"
+          }
+        }
+      },
+      {
+        "status": 409,
+        "body": {
+          "error": {
+            "message": "The request was cancelled; nothing was deleted",
+            "type": "invalid_request_error",
+            "param": null,
+            "code": "request_cancelled"
+          }
+        }
+      },
+      {
+        "status": 500,
+        "body": {
+          "error": {
+            "message": "The memory operation failed; nothing was deleted",
+            "type": "server_error",
+            "param": null,
+            "code": "memory_management_error"
+          }
+        }
+      }
+    ]
+  }
 }
