@@ -77,11 +77,21 @@ A captured 2026-10-17 intrusion is causally tied to irrelevant Remora recall:
 the reconstructed persona and 22 history messages contain no dog name, yet cold
 and warm recall reproduce the off-topic dog reply. An empty fact allowlist and
 bare Gemma both produce a relevant follow-up; restoring recall restores the
-failure. All bank rows and policy bytes are unchanged. This establishes a
-retrieval failure in this case; a fix remains unqualified. Mia authorized separate
-contextual retrieval and null-recall work with matched positive and negative
-checks on the frozen model. Keep it isolated from names and the live trial;
-coordinate any GPU window before changing the shared model lease. No LoRA.
+failure. All bank rows and policy bytes are unchanged.
+The authorized fix is now live on `18787`: reviewed runtime `d0b8b52`, released
+with release docs `70ba7c9`, adds the optional turn-start relevance gate using
+frozen head C100/-5. The active profile is
+`gemma-reference-12288-native-cache-source-projected-turn-relevance`.
+Read the [turn relevance guide](https://github.com/mia-cx/remora/blob/70ba7c9c8a4a9c0cf7bef12b6dde97ebe271c000/docs/api/turn-relevance.md)
+for the mechanism and launch artifact checks. Raw partial-reply refresh is
+unchanged. The 27 behavioral checks, one-shot fresh64 gates, public HTTP checks
+and eight actual TypeScript calls pass; the captured music reply stays relevant,
+name and human ownership remain correct, and the assistant denies owning the dog.
+All eight TS calls reuse 7,310 SYSTEM tokens with `writes:null`; bank rows,
+cache files and policies are preserved. Patch is online with the new startup profile and
+Discord READY. Caller, persona, source tuple and history stay unchanged. Names
+remain separately gated. Coordinate any GPU window before changing the shared
+model lease. No LoRA.
 The memory representation uses explicit third-person facts bound to generic stable
 entity references, keeping fact subjects separate
 from source authors and preserving raw evidence and receipts. Names are optional

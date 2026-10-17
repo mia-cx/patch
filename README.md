@@ -111,7 +111,7 @@ Capabilities also retain optional `memory_delivery: "detached" | "native-cache"`
 Delivery is selected by the service, with detached as its default. HF native-cache
 feeds recalled source blocks through ordinary token/KV input and remains
 `backend: "transformers"`; its profile is `gemma-reference-12288-native-cache`.
-The final reviewed HF source is
+The reviewed identity baseline is
 [Remora `ba87a90`](https://github.com/mia-cx/remora/commit/ba87a90d179ca3d82abf9503aaa4a45ef266744c).
 Its [entity identity guide](https://github.com/mia-cx/remora/blob/242fae2c141a7d0c5ebf8ec8dcebaec6ffc1351c/docs/api/entity-identity.md)
 covers the validated opt-in selection:
@@ -126,8 +126,21 @@ intrusion is causally tied to irrelevant Remora recall: cold and warm recall
 produce an off-topic dog reply, an empty fact allowlist and bare Gemma produce the
 same relevant follow-up, and restoring recall restores the failure. The
 reconstructed persona/history contains no dog name; bank rows and policy bytes
-remain unchanged. Contextual retrieval work is isolated and no fix is qualified.
-Mia approved this profile on 2026-10-17. The scoped DM trial is online
+remain unchanged.
+
+The authorized fix is live on reviewed runtime `d0b8b52`, released with
+[Remora `70ba7c9`](https://github.com/mia-cx/remora/commit/70ba7c9c8a4a9c0cf7bef12b6dde97ebe271c000).
+Its optional turn-start relevance gate uses frozen Gemma with head C100/-5;
+partial-reply refresh retains the original retriever. The active profile is
+`gemma-reference-12288-native-cache-source-projected-turn-relevance`, with the
+same 12,288/256/eight-bank limits. The 27 behavioral checks, one-shot fresh64
+gates, public HTTP checks and eight actual TypeScript calls pass. Those TS pairs
+produce a relevant music follow-up, recall the correct name and human owner, and
+deny assistant ownership. Every call returns `writes:null` and reuses 7,310 SYSTEM
+tokens; bank rows, cache files and policies remain unchanged. The
+[turn relevance guide](https://github.com/mia-cx/remora/blob/70ba7c9c8a4a9c0cf7bef12b6dde97ebe271c000/docs/api/turn-relevance.md)
+covers the gate and launch artifact checks. Harness name mapping stays disabled.
+The scoped DM trial is online on the released profile
 with Discord READY and authenticated Remora capabilities verified; existing
 conversation boundaries, memory facts and source receipts are preserved.
 [remora-patch-request.json](spec/fixtures/remora-patch-request.json) is the archived
