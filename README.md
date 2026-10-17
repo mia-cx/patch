@@ -52,6 +52,39 @@ channels keep their context. An active reply finishes before reset confirms, and
 queued old turns are skipped. Remora's saved memories, grants, source identities,
 and write receipts are preserved; this command resets conversation context only.
 
+## Saved memory controls
+
+Protocord exposes private `/memory` commands backed by Remora's deterministic
+management API:
+
+- `/memory list [scope:personal|channel|server]` shows all readable records and
+  their IDs. Long lists become a complete JSON attachment.
+- `/memory forget ids:2,5 [scope:...]` deletes only the chosen IDs.
+- `/memory clear confirm:true [scope:...]` clears the entire selected bank,
+  including archived records and forgetting rules.
+
+Scope defaults to personal in a DM and channel in a server. Personal scope always
+resolves the invoking user's own DM, including when invoked privately in a server.
+Channel and server inspection requires View Channel and Read Message History.
+Forgetting channel memories requires Manage Messages; forgetting server memories
+requires Manage Server. Bot ownership adds no memory permission override.
+
+The service must advertise `features.memory_management: true` with all three
+valid management limits. Its policy separately grants reading and forgetting:
+`write_banks` is insufficient, and clearing requires full-bank read and forget
+grants. Scope selection never provisions a bank or grants access.
+
+Mutation commands drain active generations and durably reset all memory-backed
+conversation histories under Patch's API credential before requesting deletion.
+The reset is conservative: it survives a lost response even when deletion cannot
+be confirmed. The private result says whether context was reset and reports actual
+deletion receipts. Shared evidence conflicts leave saved facts intact. Discord
+messages remain; new human assertions can teach a fact again. Existing source
+receipts are retained by Remora.
+
+The client and actions are implemented against contract `b21abf2`; backend
+qualification and development-bot publication are pending.
+
 ## Remora DM integration
 
 `REMORA_DM_ENABLED=true` enables memory for text turns in one-to-one DMs. Point
@@ -60,8 +93,9 @@ service. The validated profiles require `LLM_TEMPERATURE=0`, thinking disabled,
 and activity updates disabled. Memory remains off by default.
 
 Set `DISCORD_TRIAL_DM_CHANNEL_ID` for a trial confined to one DM. Patch then
-subscribes only to DM events, ignores other channels, and skips global command
-registration. Use a separate `SETTINGS_DB_PATH` to keep trial settings and context
+subscribes only to DM events, confines conversation replies to that DM, and skips
+automatic global command registration. `/memory` can still be invoked in other
+places with the required permissions. Use a separate `SETTINGS_DB_PATH` to keep trial settings and context
 boundaries apart from other runs.
 
 Each DM reads and writes `discord:dm:<channelId>`. `REMORA_READ_BANKS` adds up to
@@ -87,7 +121,7 @@ metadata and a matching write receipt. Receipts and observed cache reuse are
 logged; a writer failure preserves the generated reply and logs the failure.
 
 The shared contract snapshot is [remora-contract-v1.json](spec/fixtures/remora-contract-v1.json).
-It matches Remora commit `6b5e18c` semantically;
+It matches Remora commit `b21abf2` semantically, preserving the earlier name and identity contract;
 only JSON formatting differs.
 Read-only callers may supply `remora.speaker: { bank, id }` to identify the current
 human's attribution scope. The ID is opaque and grants no access; writable turns
