@@ -104,8 +104,9 @@ Optional `identity.names` transport additionally requires
 `features.harness_names: true` and both name limits, alongside the four identity
 limits. It preserves exact names and source identities across retries, rejects
 missing name-write acknowledgements, and accepts their original optional receipt
-on retries that omit names. The DM builder does not yet supply name observations;
-Remora's backend implementation is still pending.
+on retries that omit names. The DM builder does not yet supply name observations.
+Remora's name backend `2f64afd` has passed CPU review; separate model validation
+is pending before enabling the mapping.
 Capabilities also retain optional `memory_delivery: "detached" | "native-cache"`.
 Delivery is selected by the service, with detached as its default. HF native-cache
 feeds recalled source blocks through ordinary token/KV input and remains

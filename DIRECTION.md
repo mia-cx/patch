@@ -95,9 +95,12 @@ Forgetting redacts name evidence while retaining retry digests; moving a local
 actor to a shared entity creates a new name fact without rebinding old evidence.
 The name contract is promoted at `6b5e18c`. Patch's low-level transport checks the
 separate name capability and all six limits, preserves exact declarations, and
-requires the sibling acknowledgement even if the model writer fails. Backend
-implementation is pending; the live DM builder sends its original tuple without
-name observations. The client passes 145 tests plus typecheck and build smoke.
+requires the sibling acknowledgement even if the model writer fails. Remora's
+isolated name backend `2f64afd` is CPU-reviewed: 806 tests pass with three native
+asset skips. Its [name guide](https://github.com/mia-cx/remora/blob/b2e8b8cf9cb4aabd7e11e2e1c687ae1c1046bc63/docs/api/harness-names.md)
+records the implementation; separate model evidence is still required before
+enabling the DM name mapping. The builder keeps its original tuple without name
+observations. The client passes 145 tests plus typecheck and build smoke.
 Wire review is closed at the [additive identity draft](https://github.com/mia-cx/remora/blob/ea060f25b03e6ad82cede9db6514a805a1e1ecf1/docs/api/entity-identity-wire-draft.json).
 The canonical contract snapshot is `6b5e18c`. Low-level client identity transport
 requires enabled support and all four valid advertised limits, then enforces those
