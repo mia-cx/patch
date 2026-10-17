@@ -92,6 +92,12 @@ cache files and policies are preserved. Patch is online with the new startup pro
 Discord READY. Caller, persona, source tuple and history stay unchanged. Names
 remain separately gated. Coordinate any GPU window before changing the shared
 model lease. No LoRA.
+Memory inspection and forgetting belong to Protocord slash commands backed by
+deterministic Remora management endpoints. Users control their personal DM bank;
+shared channel/server banks follow Discord access and management permissions.
+Show actual authorized records and storage receipts. Explicit forgetting must
+invalidate memory caches and affected caller history; a model reply is not proof
+of deletion. Keep Remora's API generic and require separate deletion grants.
 The memory representation uses explicit third-person facts bound to generic stable
 entity references, keeping fact subjects separate
 from source authors and preserving raw evidence and receipts. Names are optional
