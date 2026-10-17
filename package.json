@@ -17,6 +17,7 @@
     "fix": "biome check --write .",
     "test": "vitest run",
     "remora:smoke": "tsx test/remora-smoke.ts",
+    "remora:memory-smoke": "tsx test/remora-memory-smoke.ts",
     "test:watch": "vitest"
   },
   "dependencies": {
