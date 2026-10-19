@@ -36,8 +36,9 @@ Patch's Protocord actions now include:
 `LLM_TOOL_MODE=auto` uses native OpenAI tool calls when supported and tagged
 text when Remora advertises `tools:false`. Other modes are `native`, `tagged`
 and `off`. `MAX_TOOL_CALLS` defaults to three and is capped at eight per turn.
-Results return to the model; only the initial request supplies a writable Remora
-source. Tool continuations retain the current speaker and use read-only recall.
+Results return to the model. Legacy Remora profiles write only the initial human
+source; tool continuations use read-only recall. The offline
+[evidence integration](spec/all-stream-evidence.md) also binds individual web results.
 
 Web requests identify Patch, Protocord and Node.js HTTPS. Browser-style fallback
 agents retain that identity. Every redirect resolves and pins a public IP;
@@ -95,11 +96,15 @@ and write receipts are preserved; this command resets conversation context only.
 Protocord exposes private `/memory` commands backed by Remora's deterministic
 management API:
 
-- `/memory list [scope:personal|channel|server]` shows all readable records and
+- `/memory list [scope:personal|channel|server] [kind:all|fact|evidence]` shows readable records and
   their IDs. Long lists become a complete JSON attachment.
-- `/memory forget ids:2,5 [scope:...]` deletes only the chosen IDs.
+- `/memory forget ids:2,5 [scope:...] [kind:fact|evidence]` deletes only the chosen namespace's IDs.
+- `/memory forget-source id:2 [context:0] [scope:...]` erases a listed evidence source and its dependent copies.
 - `/memory clear confirm:true [scope:...]` clears the entire selected bank,
-  including archived records and forgetting rules.
+  including archived records, forgetting rules and evidence on evidence-enabled profiles.
+
+The evidence options and source erasure are staged offline. They require the
+negotiated companion contract; existing fact-only profiles retain their behavior.
 
 Scope defaults to personal in a DM and channel in a server. Personal scope always
 resolves the invoking user's own DM, including when invoked privately in a server.
@@ -193,6 +198,12 @@ name and identity contracts. The canonical source SHA256 is
 `f90ecb2120f1053da54e2d53239cc6ec873370b8fa709ba3aece329a5a9dd0e3`.
 The companion [memory-search.json](spec/fixtures/memory-search.json) resolves its
 contract references to the local snapshot filename; JSON formatting also differs.
+The independently negotiated [all-stream-evidence.json](spec/fixtures/all-stream-evidence.json)
+matches Remora companion `60cbdf5`, SHA256
+`c7b377b423a5f927f54245e59dbf6a9c173198eb5c0116c5e52741314fffd6da`.
+Its offline caller mapping and current generated-output limits are documented
+in [the integration guide](spec/all-stream-evidence.md). No evidence profile or
+observation cutoff is installed in the held trial.
 Read-only callers may supply `remora.speaker: { bank, id }` to identify the current
 human's attribution scope. The ID is opaque and grants no access; writable turns
 infer that scope from `write_bank` and `turn.speaker_id`. The optional

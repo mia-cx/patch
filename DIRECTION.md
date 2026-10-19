@@ -21,7 +21,11 @@ Patch actions use Protocord's shared validation, authorization and trigger lifec
 Plain model text sends normally; optional reply metadata targets a visible message ID.
 Reactions, own-message edits/deletion, threads, polls, stickers and fixed-text follow-ups are implemented.
 DDG search/fetch identifies Patch/Protocord; persistent scoped notes offer no code execution.
-Next: all model inputs and outputs—user queries, tool results, its own reasoning and replies—must be eligible for passive memory.
+All model inputs and outputs should be eligible for passive memory, preserving each source's origin.
+Offline evidence transport/controls target Remora `e6d5754`, companion `60cbdf5`; see [caller mapping](spec/all-stream-evidence.md).
+Raw human and individual web sources use exact views, frozen contexts and a durable creation-ID cutoff.
+Earlier messages and transformed assistant history stay untracked. The current persona blocks generated retention.
+No evidence profile, cutoff, command update or rollout is installed; Patch stays offline pending coordinated qualification.
 Tools are enabled in the scoped DM trial for actual-model evaluation; games remain deferred. See [v2](spec/v2.md).
 
 Mia added only guild `1559060271404945512`, channel `1561529690953490442`, alongside the owner DM.
@@ -36,17 +40,9 @@ selection never adds write destinations or grants.
 Runtime capabilities bound context/output; write receipts and observed cache reuse
 are validated. Classifier, activity, and formatting calls have no memory access.
 The shared contract and synthetic full-persona request are in `spec/fixtures`.
-The real TypeScript HTTP smoke passes against the isolated HF 12,288-token
-profile: full-persona replies are nonempty and generation retries replay the same
-durable write result. A second real smoke with Remora's native SYSTEM checkpoint
-reports 7,310 reused persona-prefix tokens and 1,601 evaluated tokens on each call.
-That proves persona-prefix reuse, not entire-history KV continuity. Remora's
-HF source `58626f9` was used for the initial controlled single-human DM trial.
-Final service/native docs are released at `865ade5`; the native CPU development
-backend `90c4970` is selectable behind the same API for its exact BF16 profile.
-Its final stock Patch HTTP proof has nonempty replies and durable receipt replay,
-with a cold 0/8,917 reused/evaluated count followed by 7,310/1,607. Native needs
-`LLM_TIMEOUT_MS=300000`; this does not establish GPU, quantized, or broad HF parity.
+Initial HF/native TypeScript smokes establish durable retries and 7,310-token SYSTEM reuse,
+not whole-history continuity. Native CPU qualification is limited to its exact BF16 assets;
+see the released guides at `865ade5`. It does not establish GPU or broad HF parity.
 The controlled HF trial is scoped to Mia's one-to-one DM, restricted to that
 channel with global command registration skipped. It uses separate trial SQLite
 settings and a fresh context starting at the first new human message; subsequent
@@ -102,7 +98,7 @@ of deletion. Keep Remora's API generic and require separate deletion grants.
 The `/memory` commands are published against reviewed
 Remora runtime `4e95553`, contract `f00a364` ([management guide](https://github.com/mia-cx/remora/blob/54f7bd6/docs/api/memory-management.md)).
 Active-recall client `87760e8` is installed; `memory_search` stays hidden until Remora advertises support and four valid limits.
-The memory representation uses explicit third-person facts bound to generic stable
+Canonical facts use explicit third-person statements bound to generic stable
 entity references, keeping fact subjects separate
 from source authors and preserving raw evidence and receipts. Names are optional
 caller-supplied labels; Patch may resolve them through its Discord adapter or
