@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { ChannelType, Client, ClientUser } from "discord.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ActionContext } from "../actions/context.js";
@@ -12,6 +13,7 @@ import {
 } from "../discord/discord-js-adapter.js";
 import { LlmClient } from "../llm/client.js";
 import { ModelCatalog } from "../llm/model-catalog.js";
+import { parseRemoraCapabilities } from "../llm/remora.js";
 import { createLogger } from "../logger.js";
 import { RemoraMemoryClient } from "../memory/client.js";
 import { GenerationQueue } from "../queue.js";
@@ -34,6 +36,7 @@ afterEach(() => {
   for (const close of resources.splice(0).reverse()) close();
   vi.restoreAllMocks();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 class Bot extends ClientUser {
@@ -203,6 +206,7 @@ async function runtime(guild = false, remora = false) {
     DISCORD_TOKEN: "test",
     DISCORD_CLIENT_ID: BOT,
     LLM_TOOL_MODE: "tagged",
+    LLM_BASE_URL: "http://remora.test/v1",
     REMORA_DM_ENABLED: String(remora),
   });
   const logger = createLogger(false);
@@ -266,6 +270,140 @@ const call = (name: string, args: object) =>
   `<tool_call>${JSON.stringify({ name, arguments: args })}</tool_call>`;
 
 describe("complete harness with the actual Discord SDK", () => {
+  // Proves explicit recall returns qualified facts through the model loop without rewriting the human source or widening selected banks.
+  it("searches caller-selected banks through Protocord and continues read-only", async () => {
+    const app = await runtime(false, true);
+    app.config.remoraReadBanks = ["place:extra"];
+    const contract: {
+      capabilities_example: ReturnType<typeof parseRemoraCapabilities>;
+    } = JSON.parse(
+      readFileSync(
+        new URL("../../spec/fixtures/remora-contract-v1.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    await app.memory.initialize(
+      parseRemoraCapabilities({
+        ...contract.capabilities_example,
+        features: {
+          ...contract.capabilities_example.features,
+          memory_search: true,
+        },
+        limits: {
+          ...contract.capabilities_example.limits,
+          max_search_results: 2,
+          max_search_banks: 2,
+          max_search_query_chars: 2048,
+          max_search_query_tokens: 256,
+        },
+      }),
+    );
+    const bank = `discord:dm:${CHANNEL}`;
+    const marker = `@{${"a".repeat(64)}}`;
+    const hit = {
+      bank,
+      id: 2,
+      text: `${marker} has a dog named Aster.`,
+      kind: "fact",
+      source: "user",
+      subjects: { [marker]: { principal: "test", entity: "another-person" } },
+      source_actor: {
+        principal: "test",
+        actor: { bank, role: "human", id: "original-speaker" },
+      },
+      score: 0.8,
+    };
+    const request = vi.fn(async (_url: string, _init: RequestInit) =>
+      Response.json({
+        object: "remora.memory.search",
+        version: 1,
+        query: "dog ownership",
+        read_banks: [bank, "place:extra"],
+        data: [hit],
+        revisions: { [bank]: "a".repeat(64), "place:extra": "b".repeat(64) },
+      }),
+    );
+    vi.stubGlobal("fetch", request);
+    app.complete
+      .mockResolvedValueOnce({
+        content: call("memory_search", { query: "dog ownership" }),
+      })
+      .mockResolvedValueOnce({ content: "found the ownership record" });
+    await app.run();
+    expect(request.mock.calls[0]).toEqual([
+      "http://remora.test/v1/remora/memories/search",
+      expect.objectContaining({ method: "POST" }),
+    ]);
+    expect(JSON.parse(String(request.mock.calls[0]?.[1].body))).toEqual({
+      query: "dog ownership",
+      read_banks: [bank, "place:extra"],
+      limit: 2,
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    const second = app.complete.mock.calls[1]?.[0];
+    expect(app.complete.mock.calls[0]?.[0].remora?.turn?.text).toBe(
+      "look that up",
+    );
+    expect(second?.remora?.turn).toBeUndefined();
+    expect(second?.remora?.write_bank).toBeUndefined();
+    expect(second?.messages.at(-1)).toEqual({
+      role: "user",
+      content: "look that up",
+    });
+    const results = second?.messages
+      .find((message) => message.content.startsWith("Harness tool results"))
+      ?.content.split("\n")
+      .slice(1)
+      .join("\n");
+    expect(JSON.parse(results ?? "[]")[0]?.output.data).toEqual([hit]);
+  });
+
+  // Proves absent capability, absent scope and model-provided bank arguments cannot reach the recall endpoint.
+  it.each(["disabled", "no_scope", "widen"] as const)(
+    "blocks memory search for %s",
+    async (failure) => {
+      const app = await runtime(false, failure !== "no_scope");
+      const contract: {
+        capabilities_example: ReturnType<typeof parseRemoraCapabilities>;
+      } = JSON.parse(
+        readFileSync(
+          new URL(
+            "../../spec/fixtures/remora-contract-v1.json",
+            import.meta.url,
+          ),
+          "utf8",
+        ),
+      );
+      await app.memory.initialize(
+        parseRemoraCapabilities({
+          ...contract.capabilities_example,
+          features: {
+            ...contract.capabilities_example.features,
+            memory_search: failure !== "disabled",
+          },
+          limits: {
+            ...contract.capabilities_example.limits,
+            max_search_results: 2,
+            max_search_banks: 2,
+            max_search_query_chars: 2048,
+            max_search_query_tokens: 256,
+          },
+        }),
+      );
+      const request = vi.fn();
+      vi.stubGlobal("fetch", request);
+      app.complete.mockResolvedValue({
+        content: call("memory_search", {
+          query: "dog ownership",
+          ...(failure === "widen"
+            ? { read_banks: ["another-persons-bank"] }
+            : {}),
+        }),
+      });
+      await app.run();
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
   // Proves plain model output stays ordinary in guilds, while explicit replies target the selected message without pinging.
   it.each([false, true])(
     "opts into a reply only when requested: %s",
