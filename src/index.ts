@@ -34,6 +34,9 @@ import { buildResponseContextBudget } from "./prompts/response.js";
 import { GenerationQueue } from "./queue.js";
 import { respond } from "./response/responder.js";
 import { SettingsStore } from "./settings/store.js";
+import { startFollowups } from "./tools/followups.js";
+import { HarnessStore } from "./tools/store.js";
+import { WebClient } from "./tools/web.js";
 
 const MENTION_CACHE_LIMIT = 5_000;
 
@@ -97,11 +100,16 @@ const actionContext = {
   modelCatalog,
   settings,
   contextStore,
+  harness: {
+    store: new HarnessStore(config.settingsDbPath),
+    web: new WebClient(),
+  },
 };
 
 registerDefaultActions(actionRegistry);
 
 client.once(Events.ClientReady, (readyClient) => {
+  startFollowups(actionContext);
   startActivityLoop({ client: readyClient, config, llm, logger, queue });
 
   void modelCatalog.refresh().catch((error) => {

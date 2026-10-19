@@ -25,6 +25,8 @@
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.45.2",
     "effect": "4.0.0-beta.78",
+    "ipaddr.js": "^2.5.0",
+    "linkedom": "^0.18.13",
     "pino": "^9.6.0",
     "protocord": "workspace:*"
   },

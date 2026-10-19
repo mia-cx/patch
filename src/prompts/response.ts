@@ -1,6 +1,6 @@
 import type { Config } from "../config.js";
 import type { ContextBudget } from "../conversation/context.js";
-import type { LlmMessage } from "../llm/client.js";
+import type { LlmMessage, LlmTool } from "../llm/client.js";
 import {
   RESPONSE_TRANSCRIPT_PREFIX_PROMPT_FILES,
   RESPONSE_TRANSCRIPT_SUFFIX_PROMPT_FILES,
@@ -15,23 +15,31 @@ const MODE_PROMPT_FILES: Record<ResponseTranscriptMode, string> = {
   thread: "system/05-transcript-thread.md",
 };
 
-const PROMPT_TOKEN_MARGIN = 1_024;
+export const RESPONSE_TEMPLATE_TOKEN_MARGIN = 1_024;
 
 /** Reserves the assembled instructions, generation allowance, and template/tool headroom. */
 export function buildResponseContextBudget(
   config: Config,
   mode: ResponseTranscriptMode,
   nativeHistory = config.remoraDmEnabled && mode === "dm",
+  actionsPrompt = "",
+  nativeTools: readonly LlmTool[] = [],
 ): ContextBudget {
   const promptChars = buildResponseMessages(
     nativeHistory ? [] : "",
     mode,
-    "",
+    actionsPrompt,
     nativeHistory ? "" : undefined,
   ).reduce((total, message) => total + message.content.length, 0);
   return {
     contextTokens: config.llmContextTokens,
-    promptTokens: Math.ceil(promptChars / 4) + PROMPT_TOKEN_MARGIN,
+    promptTokens:
+      Math.ceil(promptChars / 4) +
+      RESPONSE_TEMPLATE_TOKEN_MARGIN +
+      (nativeTools.length
+        ? Math.ceil(JSON.stringify(nativeTools).length / 4)
+        : 0) +
+      (actionsPrompt ? 1_536 : 0),
     responseTokens: config.llmEnableThinking
       ? Math.max(config.llmMaxTokens, config.llmThinkingMaxTokens)
       : config.llmMaxTokens,

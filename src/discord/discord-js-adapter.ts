@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   type Client,
   type Attachment as DiscordAttachment,
@@ -75,6 +76,8 @@ export class DiscordJsAdapter implements DiscordAdapter {
     const message = await channel.send({
       content,
       allowedMentions: buildAllowedMentions(options.allowedMentionUsers),
+      nonce: randomUUID().replaceAll("-", "").slice(0, 25),
+      enforceNonce: true,
     });
     return toConversationMessage(message, this.botUserId);
   }
@@ -97,6 +100,8 @@ export class DiscordJsAdapter implements DiscordAdapter {
       content,
       reply: { messageReference: target.messageId, failIfNotExists: false },
       allowedMentions: buildAllowedMentions(options.allowedMentionUsers),
+      nonce: randomUUID().replaceAll("-", "").slice(0, 25),
+      enforceNonce: true,
     };
 
     const message = await channel.send(messageOptions);

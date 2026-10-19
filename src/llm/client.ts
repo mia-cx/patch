@@ -8,8 +8,14 @@ import {
 } from "./remora.js";
 
 export type LlmMessage = {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
+  tool_call_id?: string;
+  tool_calls?: Array<{
+    id: string;
+    type: "function";
+    function: { name: string; arguments: string };
+  }>;
 };
 
 export type LlmTool = {
@@ -67,6 +73,8 @@ type IdentityLimits = {
 type HarnessNameLimits = { names: number; nameChars: number };
 
 export class LlmClient {
+  /** Native tools are disabled when a negotiated backend rejects them. */
+  supportsTools = true;
   private maxOutputTokens = Number.POSITIVE_INFINITY;
   private identityLimits: IdentityLimits | undefined;
   private harnessNameLimits: HarnessNameLimits | undefined;
@@ -93,6 +101,7 @@ export class LlmClient {
       );
     const capabilities = parseRemoraCapabilities(await response.json());
     const { features, limits } = capabilities;
+    this.supportsTools = features.tools;
     let identityLimits: IdentityLimits | undefined;
     if (features.entity_identity) {
       const {

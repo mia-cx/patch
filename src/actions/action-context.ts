@@ -12,7 +12,7 @@ export type ModelVisibleAction = {
   name: string;
   description: string;
   usage: string;
-  inputSchemaJson: unknown;
+  inputSchemaJson: Readonly<Record<string, unknown>>;
   available: boolean;
   unavailableReason?: string | undefined;
 };
@@ -82,11 +82,58 @@ export function formatAvailableActionsPrompt(
   ].join("\n");
 }
 
+/** Keep local-model tool instructions small; Protocord retains the complete validators. */
+export function formatCompactActionsPrompt(
+  actions: readonly ModelVisibleAction[],
+): string {
+  const available = actions.filter((action) => action.available);
+  if (!available.length) return "";
+  return [
+    "Available tools (omit optional arguments instead of passing null):",
+    ...available.map((action) => {
+      const schema = action.inputSchemaJson;
+      const required = new Set(
+        Array.isArray(schema.required) ? schema.required : [],
+      );
+      const properties = schema.properties;
+      const args =
+        properties && typeof properties === "object"
+          ? Object.entries(properties)
+              .map(
+                ([key, value]) =>
+                  `${key}${required.has(key) ? "" : "?"}:${compactType(value, !required.has(key))}`,
+              )
+              .join(", ")
+          : "";
+      return `${action.name}(${args}) ${action.description.slice(0, 100)}`;
+    }),
+  ].join("\n");
+}
+
+function compactType(value: unknown, optional = false): string {
+  if (!value || typeof value !== "object") return "value";
+  if ("anyOf" in value && Array.isArray(value.anyOf))
+    return value.anyOf
+      .map((member: unknown) => compactType(member))
+      .filter((type: string) => !optional || type !== "null")
+      .join("|");
+  if ("enum" in value && Array.isArray(value.enum))
+    return value.enum.map(String).join("|");
+  if ("type" in value && typeof value.type === "string") {
+    if (value.type === "array" && "items" in value)
+      return `${compactType(value.items)}[]`;
+    return value.type;
+  }
+  return "value";
+}
+
 function formatAvailableAction(action: ModelVisibleAction): string {
   return [
     `<action name="${escapeAttribute(action.name)}" action_name="${escapeAttribute(action.actionName)}">`,
     `<description>${escapeTranscriptText(action.description)}</description>`,
-    `<usage>${escapeTranscriptText(action.usage)}</usage>`,
+    ...(action.usage === action.description
+      ? []
+      : [`<usage>${escapeTranscriptText(action.usage)}</usage>`]),
     `<input_schema>${escapeTranscriptText(JSON.stringify(action.inputSchemaJson))}</input_schema>`,
     "</action>",
   ].join("\n");

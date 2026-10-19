@@ -20,6 +20,7 @@ type ToolCallTrigger<Input = unknown> = TriggerDefinition<
   ActionPermission
 > & {
   input: ActionInput<Input>;
+  continueAfter?: boolean;
 };
 
 type ToolCallEvent = {
@@ -33,6 +34,7 @@ export function toolCall<Input>(input: {
   description: string;
   usage: string;
   input: ActionInput<Input>;
+  continueAfter?: boolean;
 }): ToolCallTrigger<Input> {
   return { ...input, providerId: TOOL_CALL_PROVIDER_ID };
 }
@@ -81,7 +83,7 @@ export async function dispatchToolCall(input: {
   context: ActionContext;
   message: Message;
   toolCall: LlmToolCall;
-}): Promise<void> {
+}): Promise<{ output: unknown; continueAfter: boolean }> {
   const result = await input.registry.dispatch({
     providerId: TOOL_CALL_PROVIDER_ID,
     triggerName: input.toolCall.name,
@@ -95,4 +97,15 @@ export async function dispatchToolCall(input: {
   if (result.outcome.status !== "executed")
     throw new Error(result.outcome.reason);
   if (result.presentationError !== undefined) throw result.presentationError;
+  const trigger = input.registry.getTrigger(
+    TOOL_CALL_PROVIDER_ID,
+    input.toolCall.name,
+  )?.trigger;
+  return {
+    output: result.outcome.output,
+    continueAfter:
+      trigger !== undefined &&
+      isToolCallTrigger(trigger) &&
+      trigger.continueAfter === true,
+  };
 }

@@ -173,7 +173,9 @@ async function leaveThread(
     thread,
     sanitizeFarewell(options.farewell),
     log,
+    options.toolScope,
   );
+  options.toolScope?.signal.throwIfAborted();
   await thread.leave();
 }
 
@@ -194,19 +196,27 @@ async function sendFarewell(
   thread: ThreadChannel,
   farewell: string,
   log: Logger,
+  toolScope?: ActionContext["toolScope"],
 ): Promise<void> {
   const [first, ...rest] = splitDiscordResponse(farewell);
   if (!first) throw new Error("leave farewell split into no chunks");
 
   log.debug({ chunkCount: rest.length + 1 }, "sending leave farewell chunks");
   const interaction = invocation.rawEvent;
+  toolScope?.signal.throwIfAborted();
   if (isSlashInteraction(interaction)) {
     await interaction.editReply({
       content: first,
       allowedMentions: NO_MENTIONS,
     });
   } else {
-    await thread.send({ content: first, allowedMentions: NO_MENTIONS });
+    await thread.send({
+      content: first,
+      allowedMentions: NO_MENTIONS,
+      ...(toolScope
+        ? { nonce: `${toolScope.nonce.slice(0, 23)}-0`, enforceNonce: true }
+        : {}),
+    });
   }
 
   for (const [offset, chunk] of rest.entries()) {
@@ -215,7 +225,17 @@ async function sendFarewell(
       { index, chunkLength: chunk.length },
       "sending leave follow-up chunk",
     );
-    await thread.send({ content: chunk, allowedMentions: NO_MENTIONS });
+    toolScope?.signal.throwIfAborted();
+    await thread.send({
+      content: chunk,
+      allowedMentions: NO_MENTIONS,
+      ...(toolScope
+        ? {
+            nonce: `${toolScope.nonce.slice(0, 20)}-${index}`,
+            enforceNonce: true,
+          }
+        : {}),
+    });
   }
 }
 

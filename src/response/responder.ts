@@ -1,15 +1,15 @@
 import type { Message } from "discord.js";
 import {
   buildModelVisibleActions,
-  formatAvailableActionsPrompt,
+  formatCompactActionsPrompt,
   toLlmTools,
 } from "../actions/action-context.js";
 import type { ActionContext, ActionRegistry } from "../actions/context.js";
-import { dispatchToolCall } from "../actions/tool-calls.js";
 import type { ClassifierDecision } from "../classifier/response-classifier.js";
 import type { Config } from "../config.js";
 import {
   reconstructConversationContext,
+  rolloverConversationContext,
   summarizeContext,
 } from "../conversation/context.js";
 import {
@@ -40,10 +40,16 @@ import type {
 import type { RemoraRequest } from "../llm/remora.js";
 import type { Logger } from "../logger.js";
 import {
+  RESPONSE_TEMPLATE_TOKEN_MARGIN,
   type ResponseTranscriptMode,
   buildResponseContextBudget,
   buildResponseMessages,
 } from "../prompts/response.js";
+import {
+  OUTPUT_INSTRUCTIONS,
+  TAGGED_TOOL_INSTRUCTIONS,
+} from "../tools/output.js";
+import { runToolTurn } from "../tools/turn.js";
 
 const FAILURE_MESSAGE =
   "sorry, brain fog. couldn't get my thoughts into a usable shape. try that again?";
@@ -97,27 +103,57 @@ export async function respond(options: RespondOptions): Promise<void> {
       "response generation started",
     );
     const remora = buildRemoraRequest(config, message);
+    const availableActions = await buildAvailableActions({
+      message,
+      actionContext,
+      actionRegistry,
+    });
+    const mode = config.llmToolMode ?? "auto";
+    if (mode === "native" && llm.supportsTools === false)
+      throw new Error("Backend does not support native tools");
+    const tagged =
+      mode === "tagged" || (mode === "auto" && llm.supportsTools === false);
+    const enabledActions = mode === "off" ? [] : availableActions;
+    const actionTools = toLlmTools(enabledActions);
+    const tools = tagged ? [] : actionTools;
+    const availableActionsPrompt = [
+      OUTPUT_INSTRUCTIONS,
+      ...(tagged && actionTools.length ? [TAGGED_TOOL_INSTRUCTIONS] : []),
+      formatCompactActionsPrompt(enabledActions),
+    ]
+      .filter(Boolean)
+      .join("\n\n");
     if (remora) contextStore.recordMemoryContext(message.channelId);
-    const chain =
-      contextMessages ??
-      (await reconstructConversationContext(
-        adapter,
-        message,
-        botUserId,
-        log,
-        pronounProvider,
-        {
-          store: contextStore,
-          budget: buildResponseContextBudget(
-            config,
-            getResponseTranscriptMode(message),
-            remora !== undefined,
-          ),
-          dmContextMessageLimit: config.dmContextMessageLimit,
-          threadContextMessageLimit: config.threadContextMessageLimit,
-          guildRecentMessageLimit: config.guildRecentMessageLimit,
-        },
-      ));
+    const budget = buildResponseContextBudget(
+      config,
+      getResponseTranscriptMode(message),
+      remora !== undefined,
+      availableActionsPrompt,
+      tools,
+    );
+    const chain = contextMessages
+      ? rolloverConversationContext(contextMessages, budget)
+      : await reconstructConversationContext(
+          adapter,
+          message,
+          botUserId,
+          log,
+          pronounProvider,
+          {
+            store: contextStore,
+            budget,
+            dmContextMessageLimit: config.dmContextMessageLimit,
+            threadContextMessageLimit: config.threadContextMessageLimit,
+            guildRecentMessageLimit: config.guildRecentMessageLimit,
+          },
+        );
+    // The classifier assembled history before tool discovery; apply the final budget too.
+    if (contextMessages && chain.length !== contextMessages.length) {
+      const start = chain[0]?.id;
+      const previous = contextStore.getStart(message.channelId);
+      if (start && (!previous || BigInt(start) > BigInt(previous)))
+        contextStore.setStart(message.channelId, start);
+    }
     if (chain.length === 0) return;
     const transcript = buildTranscript(chain, botUserId);
     const history = remora
@@ -135,14 +171,6 @@ export async function respond(options: RespondOptions): Promise<void> {
       log.debug({ transcript: transcriptText }, "built transcript");
     }
 
-    const availableActions = await buildAvailableActions({
-      message,
-      actionContext,
-      actionRegistry,
-    });
-    const availableActionsPrompt =
-      formatAvailableActionsPrompt(availableActions);
-    const tools = toLlmTools(availableActions);
     const promptTranscript = remora
       ? formatTranscriptMessages(transcript, message.id)
       : transcriptText;
@@ -176,55 +204,71 @@ export async function respond(options: RespondOptions): Promise<void> {
     const timeout = setTimeout(() => controller.abort(), config.llmTimeoutMs);
 
     try {
-      const generated = await generateResponse({
-        llm,
-        promptMessages,
+      const generated = await runToolTurn({
+        messages: promptMessages,
+        message,
+        ...(actionContext ? { context: actionContext } : {}),
+        ...(actionRegistry ? { registry: actionRegistry } : {}),
+        visibleMessageIds: new Set([
+          message.id,
+          ...chain
+            .filter((item) => item.channelId === message.channelId)
+            .map((item) => item.id),
+        ]),
+        allowedTools: new Set(actionTools.map((tool) => tool.function.name)),
+        maxCalls: config.maxToolCalls ?? 3,
+        maxInputChars: Math.max(
+          0,
+          (budget.contextTokens -
+            (budget.responseTokens ?? 0) -
+            RESPONSE_TEMPLATE_TOKEN_MARGIN) *
+            4,
+        ),
+        nativeTools: tools,
+        native: !tagged,
         signal: controller.signal,
-        enableThinking: config.llmEnableThinking,
-        thinkingMaxTokens: config.llmThinkingMaxTokens,
-        thinkingTimeoutMs: config.llmThinkingTimeoutMs,
-        tools,
-        ...(remora ? { remora } : {}),
+        generate: async (messages, continuation, remainingCalls) => {
+          const requestRemora =
+            continuation && remora ? readOnlyRemora(remora) : remora;
+          const result = await generateResponse({
+            llm,
+            promptMessages: messages,
+            signal: controller.signal,
+            enableThinking: config.llmEnableThinking,
+            thinkingMaxTokens: config.llmThinkingMaxTokens,
+            thinkingTimeoutMs: config.llmThinkingTimeoutMs,
+            tools: remainingCalls ? tools : [],
+            ...(requestRemora ? { remora: requestRemora } : {}),
+          });
+          return result.response;
+        },
+        onResponse(response) {
+          if (!response.remora) return;
+          const receipt = response.remora.writes;
+          if (receipt?.result.error) {
+            log.warn(
+              { remora: response.remora },
+              "Remora automatic write failed",
+            );
+          } else {
+            log.info({ remora: response.remora }, "Remora response received");
+          }
+        },
       });
-      const { response } = generated;
-      if (response.remora) {
-        const receipt = response.remora.writes;
-        if (receipt?.result.error) {
-          log.warn(
-            { remora: response.remora },
-            "Remora automatic write failed",
-          );
-        } else {
-          log.info({ remora: response.remora }, "Remora response received");
-        }
-      }
-
-      if (response.toolCalls?.length) {
-        await executeToolCalls({
-          response,
-          message,
-          actionContext,
-          actionRegistry,
-          log,
-        });
-        return;
-      }
+      if (!generated.content) return;
 
       const content = await repairMissingSplitHints({
         llm,
-        content: generated.content,
+        content: stripUnicodeEmoji(generated.content.trim()),
         signal: controller.signal,
         log,
       });
 
       if (config.llmTraceLogging) {
-        log.debug(
-          { rawResponse: response.raw, sanitizedContent: content },
-          "llm response trace",
-        );
+        log.debug({ sanitizedContent: content }, "llm response trace");
       } else {
         log.debug(
-          { finishReason: response.finishReason, timings: response.timings },
+          { sourceCount: generated.sources.length },
           "llm response complete",
         );
       }
@@ -232,9 +276,10 @@ export async function respond(options: RespondOptions): Promise<void> {
       await sendChunks(
         adapter,
         message,
-        content,
+        withSources(content, generated.sources),
         [...transcript.participantUserIds],
         log,
+        generated.replyTo,
       );
     } finally {
       clearTimeout(timeout);
@@ -243,12 +288,7 @@ export async function respond(options: RespondOptions): Promise<void> {
     log.error({ error }, "failed to generate response");
     if (silentFailure) return;
 
-    const failure = message.inGuild()
-      ? message.reply({
-          content: FAILURE_MESSAGE,
-          allowedMentions: { parse: [], repliedUser: false },
-        })
-      : adapter.sendMessage(message.channelId, FAILURE_MESSAGE);
+    const failure = adapter.sendMessage(message.channelId, FAILURE_MESSAGE);
 
     await failure.catch((replyError) => {
       log.error({ error: replyError }, "failed to send failure response");
@@ -315,34 +355,31 @@ async function repairMissingSplitHints(options: {
   return repaired;
 }
 
-async function executeToolCalls(options: {
-  response: LlmResponse;
-  message: Message;
-  actionContext?: ActionContext | undefined;
-  actionRegistry?: ActionRegistry | undefined;
-  log: Logger;
-}): Promise<void> {
-  if (!options.actionContext || !options.actionRegistry) {
-    throw new Error(
-      "LLM returned tool calls but action execution is unavailable",
-    );
-  }
+/** Follow-up reads retain speaker and recall policy without re-observing the human source. */
+function readOnlyRemora(remora: RemoraRequest): RemoraRequest {
+  const speaker =
+    remora.speaker ??
+    (remora.write_bank && remora.turn
+      ? { bank: remora.write_bank, id: remora.turn.speaker_id }
+      : undefined);
+  return {
+    read_banks: remora.read_banks,
+    ...(speaker ? { speaker } : {}),
+    ...(remora.recall ? { recall: remora.recall } : {}),
+  };
+}
 
-  for (const toolCall of options.response.toolCalls ?? []) {
-    options.log.debug(
-      {
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-      },
-      "executing LLM tool call action",
-    );
-    await dispatchToolCall({
-      registry: options.actionRegistry,
-      context: options.actionContext,
-      message: options.message,
-      toolCall,
-    });
-  }
+function withSources(
+  content: string,
+  sources: Array<{ title: string; url: string; kind: string }>,
+) {
+  const missing = sources.filter((source) => !content.includes(source.url));
+  if (!missing.length) return content;
+  const links = missing.map(
+    (source) =>
+      `[${source.title.replaceAll(/[\[\]\\\r\n]/g, " ").slice(0, 90)}](${source.url.replaceAll("(", "%28").replaceAll(")", "%29")})${source.kind === "search" ? " (search)" : ""}`,
+  );
+  return `${content}\n\nSources: ${links.join(" · ")}`;
 }
 
 function withClassifierDecisionBlock(
@@ -406,7 +443,7 @@ async function completeAndSanitize(
       ...(request.tools.length > 0 ? { toolChoice: "auto" as const } : {}),
     });
     if (response.toolCalls?.length) return { content: "", response };
-    const content = stripUnicodeEmoji(response.content.trim());
+    const content = response.content.trim();
     if (content) return { content, response };
 
     throw new Error(
@@ -422,7 +459,7 @@ async function completeAndSanitize(
       ...(request.tools.length > 0 ? { toolChoice: "auto" as const } : {}),
     });
     if (retry.toolCalls?.length) return { content: "", response: retry };
-    const retryContent = stripUnicodeEmoji(retry.content.trim());
+    const retryContent = retry.content.trim();
     if (retryContent) return { content: retryContent, response: retry };
 
     throw new Error(
@@ -448,7 +485,7 @@ async function completeAndRequireContent(
     ...(request.tools.length > 0 ? { toolChoice: "auto" as const } : {}),
   });
   if (response.toolCalls?.length) return { content: "", response };
-  const content = stripUnicodeEmoji(response.content.trim());
+  const content = response.content.trim();
   if (content) return { content, response };
 
   throw new Error(
@@ -481,6 +518,7 @@ async function sendChunks(
   content: string,
   participantUserIds: string[],
   log: Logger,
+  replyTo?: string,
 ): Promise<void> {
   const chunks = splitDiscordResponse(content);
   log.debug(
@@ -491,7 +529,7 @@ async function sendChunks(
     "sending Discord response chunks",
   );
 
-  if (!trigger.inGuild()) {
+  if (!replyTo) {
     for (const [index, chunk] of chunks.entries()) {
       if (index > 0) {
         await waitForFollowupTyping(adapter, trigger.channelId, chunk, log);
@@ -518,11 +556,26 @@ async function sendChunks(
     { index: 0, chunkLength: first.length },
     "sending Discord reply chunk",
   );
-  await adapter.sendReply(
-    { channelId: trigger.channelId, messageId: trigger.id },
-    first,
-    { allowedMentionUsers: participantUserIds },
-  );
+  try {
+    await adapter.sendReply(
+      { channelId: trigger.channelId, messageId: replyTo },
+      first,
+      { allowedMentionUsers: participantUserIds },
+    );
+  } catch (error) {
+    if (
+      !(
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === 10008
+      )
+    )
+      throw error;
+    await adapter.sendMessage(trigger.channelId, first, {
+      allowedMentionUsers: participantUserIds,
+    });
+  }
   log.debug({ index: 0 }, "sent Discord reply chunk");
 
   for (const [offset, chunk] of rest.entries()) {

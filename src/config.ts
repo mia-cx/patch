@@ -15,6 +15,8 @@ export type Config = {
   llmTimeoutMs: number;
   llmMaxTokens: number;
   llmTemperature: number;
+  llmToolMode: "auto" | "native" | "tagged" | "off";
+  maxToolCalls: number;
   remoraDmEnabled: boolean;
   remoraReadBanks: readonly string[];
   botOwnerUserIds: ReadonlySet<string>;
@@ -55,6 +57,8 @@ const ConfigSchema = Schema.Struct({
   llmTimeoutMs: PositiveInteger,
   llmMaxTokens: PositiveInteger,
   llmTemperature: NonNegativeNumber,
+  llmToolMode: Schema.Literals(["auto", "native", "tagged", "off"]),
+  maxToolCalls: PositiveInteger,
   remoraDmEnabled: Schema.Boolean,
   remoraReadBanks: Schema.Array(Schema.String),
   botOwnerUserIds: Schema.ReadonlySet(Schema.String),
@@ -96,6 +100,8 @@ export function loadConfigEffect(env: NodeJS.ProcessEnv = process.env) {
       llmTimeoutMs: integer(env.LLM_TIMEOUT_MS, 120_000),
       llmMaxTokens: integer(env.LLM_MAX_TOKENS, 512),
       llmTemperature: number(env.LLM_TEMPERATURE, 0.55),
+      llmToolMode: env.LLM_TOOL_MODE ?? "auto",
+      maxToolCalls: Math.min(integer(env.MAX_TOOL_CALLS, 3), 8),
       remoraDmEnabled: boolean(env.REMORA_DM_ENABLED, false),
       remoraReadBanks: splitCsv(env.REMORA_READ_BANKS),
       botOwnerUserIds: new Set(splitCsv(env.BOT_OWNER_USER_IDS)),

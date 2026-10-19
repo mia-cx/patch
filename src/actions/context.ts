@@ -15,6 +15,8 @@ import type { RemoraMemoryClient } from "../memory/client.js";
 import type { MemoryScope } from "../memory/scope.js";
 import type { GenerationQueue } from "../queue.js";
 import type { SettingsStore } from "../settings/store.js";
+import type { HarnessStore } from "../tools/store.js";
+import type { WebClient } from "../tools/web.js";
 
 export type ActionPermission =
   | "owner"
@@ -43,6 +45,12 @@ export type ActionContext = {
   modelCatalog: ModelCatalog;
   settings: SettingsStore;
   contextStore: ConversationContextStore;
+  harness?: { store: HarnessStore; web: WebClient };
+  toolScope?: {
+    messageIds: ReadonlySet<string>;
+    signal: AbortSignal;
+    nonce: string;
+  };
   channel?: Pick<Message["channel"], "isThread"> | null | undefined;
 };
 

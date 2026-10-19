@@ -184,6 +184,7 @@ export const memoryAction: Action<typeof MemoryArgs.Type> = {
             fallback.push(context.config.discordTrialDmChannelId);
           context.contextStore.resetMemoryContexts(fallback, interaction.id);
           fenced = true;
+          context.harness?.store.invalidateConversationData();
           const request = {
             bank: bank.bank,
             request_id: requestId,
