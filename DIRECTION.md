@@ -17,12 +17,12 @@ Protocord is the shared Discord action framework. Its canonical source is
 and AI scaffold. Patch consumes it as a pinned submodule at `vendor/protocord`
 through pnpm workspace dependencies. Publishing packages is deferred.
 
-Patch owns concrete Discord actions; Protocord owns their shared validation,
-availability, authorization, execution, presentation and triggers. Design the next
-harness tools around reactions, chosen reply targets, threads and self-initiated
-stateful activities; keep daily play and active games durable. Add `web_search`,
-`web_fetch` with sources and persistent scoped text notes, without shell or code
-execution. Model and slash triggers share actions; Protocord's AI remains a scaffold.
+Patch actions use Protocord's shared validation, authorization and trigger lifecycle.
+Plain model text sends normally; optional reply metadata targets a visible message ID.
+Next: reactions, own-message edits/deletion, threads, polls, stickers and follow-ups.
+Use DDG search/fetch with Patch/Protocord identity and browser-style fallback agents.
+Keep scoped, persistent text notes with no shell or code execution.
+Map games now; defer implementation and keep daily play durable when built. See [v2](spec/v2.md).
 
 Start Remora conversation trials in a single-human place. Wrong-person recall
 and semantic forgetting collateral remain unresolved for shared places.
@@ -56,8 +56,8 @@ assistant text plain and reference metadata beside its reply: XML assistant
 wrappers leak into output, and cumulative metadata footers obscure recent
 dialogue in Gemma's 512-token local attention. llama.cpp qualification does not
 gate this HF trial.
-Mia approved the validated HF profile; the scoped DM trial is currently held
-offline for Remora passive-memory work until its readiness handback. Earlier recall let
+Mia approved the validated HF profile. Keep the DM trial offline until Remora's
+owning thread explicitly hands it back for resume. Earlier recall let
 Patch claim a human's facts as her own;
 the agreed fix preserves source authorship separately from fact subjects.
 Patch supports the optional `speaker: {bank, id}` attribution field and optional
