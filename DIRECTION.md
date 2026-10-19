@@ -17,11 +17,11 @@ Protocord is the shared Discord action framework. Its canonical source is
 and AI scaffold. Patch consumes it as a pinned submodule at `vendor/protocord`
 through pnpm workspace dependencies. Publishing packages is deferred.
 
-Patch's commands and model actions use Protocord's shared validation,
-availability, authorization, execution, and presentation lifecycle. Patch owns
-the actions and a model tool-call trigger provider; Protocord owns Discord
-triggers, autocomplete, and command registration. Its AI extension remains a
-scaffold; Patch's provider uses the core extension contract directly.
+Patch owns concrete Discord actions; Protocord owns their shared validation,
+availability, authorization, execution, presentation and triggers. Design the next
+harness tools around reactions, chosen reply targets, threads and self-initiated
+stateful activities. Daily play and active games need durable state. Model and
+slash triggers share actions; Protocord's AI extension remains a scaffold.
 
 Start Remora conversation trials in a single-human place. Wrong-person recall
 and semantic forgetting collateral remain unresolved for shared places.
@@ -55,8 +55,8 @@ assistant text plain and reference metadata beside its reply: XML assistant
 wrappers leak into output, and cumulative metadata footers obscure recent
 dialogue in Gemma's 512-token local attention. llama.cpp qualification does not
 gate this HF trial.
-Mia approved the validated HF profile, and the scoped DM trial is online with
-Discord READY and Remora capabilities verified. Earlier first-person recall let
+Mia approved the validated HF profile; the scoped DM trial is currently held
+offline for Remora passive-memory work until its readiness handback. Earlier recall let
 Patch claim a human's facts as her own;
 the agreed fix preserves source authorship separately from fact subjects.
 Patch supports the optional `speaker: {bank, id}` attribution field and optional
@@ -88,8 +88,8 @@ unchanged. The 27 behavioral checks, one-shot fresh64 gates, public HTTP checks
 and eight actual TypeScript calls pass; the captured music reply stays relevant,
 name and human ownership remain correct, and the assistant denies owning the dog.
 All eight TS calls reuse 7,310 SYSTEM tokens with `writes:null`; bank rows,
-cache files and policies are preserved. Patch is online with the new startup profile and
-Discord READY. Caller, persona, source tuple and history stay unchanged. Names
+cache files and policies are preserved. The release passed startup and Discord
+READY before the offline hold. Caller, persona, source tuple and history stay unchanged. Names
 remain separately gated. Coordinate any GPU window before changing the shared
 model lease. No LoRA.
 Memory inspection and forgetting belong to Protocord slash commands backed by
@@ -98,7 +98,7 @@ shared channel/server banks follow Discord access and management permissions.
 Show actual authorized records and storage receipts. Explicit forgetting must
 invalidate memory caches and affected caller history; a model reply is not proof
 of deletion. Keep Remora's API generic and require separate deletion grants.
-The `/memory` commands are published and the scoped bot is online against reviewed
+The `/memory` commands are published against reviewed
 Remora runtime `4e95553`, contract `f00a364` ([management guide](https://github.com/mia-cx/remora/blob/54f7bd6/docs/api/memory-management.md)).
 All 183 Patch tests and 14 isolated HTTP checks pass; the other five commands were preserved.
 The memory representation uses explicit third-person facts bound to generic stable
