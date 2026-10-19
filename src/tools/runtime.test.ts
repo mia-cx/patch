@@ -690,7 +690,10 @@ describe("complete harness with the actual Discord SDK", () => {
     ).toEqual([older.id]);
   });
   // Proves full SYSTEM/tool coverage, every raw decoder attempt and actual formatted SDK display re-entry with dependent voice-preserving lineage.
-  it("re-enters a formatted web reply through its authenticated generated parent", async () => {
+  it.each([
+    call("web_fetch", { url: "https://fictional-release.example/aurora" }),
+    "<tool_call>web_fetch{url:https://fictional-release.example/aurora}</tool_call>",
+  ])("re-enters a formatted web reply after %s", async (toolOutput) => {
     const app = await runtime(false, true);
     app.complete.mockRestore();
     app.config.llmTemperature = 0;
@@ -726,11 +729,7 @@ describe("complete harness with the actual Discord SDK", () => {
       messages: { role: string; content: string }[];
       remora: { observations: ObservationBatch };
     }> = [];
-    const outputs = [
-      call("web_fetch", { url: "https://example.com/" }),
-      "😀 the page is clear",
-      "yes, that page",
-    ];
+    const outputs = [toolOutput, "😀 the page is clear", "yes, that page"];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
@@ -816,6 +815,21 @@ describe("complete harness with the actual Discord SDK", () => {
     await app.llm.initializeRemora();
     await app.run(history);
     expect(bodies).toHaveLength(2);
+    expect(
+      app.store.generation(
+        observationNamespace(app.config.llmBaseUrl, app.config.llmApiKey),
+        bank,
+        `generation-${"1".repeat(32)}:output`,
+      )?.text,
+    ).toBe(toolOutput);
+    expect(
+      bodies[1]?.remora.observations.inputs
+        .filter((input) => input.origin === "external_observation")
+        .map((input) => input.url),
+    ).toEqual([
+      "https://fictional-release.example/aurora",
+      "https://fictional-release.example/aurora",
+    ]);
     expect(
       bodies[0]?.remora.observations.inputs.some(
         (input) =>
@@ -1695,63 +1709,75 @@ describe("complete harness with the actual Discord SDK", () => {
   });
 
   // Proves a bad second action cannot cause the first action to execute from a partially accepted batch.
-  it("rejects a forged tool batch before its first side effect", async () => {
-    const app = await runtime();
-    app.complete.mockResolvedValue({
-      content:
-        call("react", { message_id: CURRENT, emoji: "😂" }) +
-        call("not_registered", {}),
-    });
-    await app.run();
-    expect(app.rest.put).not.toHaveBeenCalled();
-  });
+  it.each([
+    call("not_registered", {}),
+    "<tool_call>not_registered{url:https://example.com/}</tool_call>",
+    "<tool_call>web_fetch{offset:0}</tool_call>",
+    "<tool_call>web_fetch{url:https://example.com/,offset:0}</tool_call>",
+  ])(
+    "rejects a forged tool batch before its first side effect: %s",
+    async (invalid) => {
+      const app = await runtime();
+      app.complete.mockResolvedValue({
+        content: call("react", { message_id: CURRENT, emoji: "😂" }) + invalid,
+      });
+      await app.run();
+      expect(app.rest.put).not.toHaveBeenCalled();
+    },
+  );
 
   // Proves web/notes round trips preserve exactly one raw human source and every continuation is read-only.
-  it("uses fetched data and persistent notes without re-writing the human source", async () => {
-    const app = await runtime(false, true);
-    app.complete
-      .mockResolvedValueOnce({
-        content: call("web_fetch", { url: "https://example.com/" }),
-      })
-      .mockResolvedValueOnce({
-        content: call("scratch_write", {
-          path: "research.md",
-          text: "A real fixture page.",
-          expected_revision: null,
-        }),
-      })
-      .mockResolvedValueOnce({ content: "found it" });
-    await app.run();
-    expect(app.complete).toHaveBeenCalledTimes(3);
-    const requests = app.complete.mock.calls.map(([request]) => request);
-    expect(requests[0]?.remora?.turn?.text).toBe("look that up");
-    for (const request of requests.slice(1)) {
-      expect(request.remora?.write_bank).toBeUndefined();
-      expect(request.remora?.turn).toBeUndefined();
-      expect(request.remora?.speaker).toEqual({
-        bank: `discord:dm:${CHANNEL}`,
-        id: `discord:user:${HUMAN}`,
-      });
-      expect(request.messages.at(-1)).toEqual({
-        role: "user",
-        content: "look that up",
-      });
+  it.each([
+    call("web_fetch", { url: "https://example.com/" }),
+    "<tool_call>web_fetch{url:https://example.com/}</tool_call>",
+  ])(
+    "uses fetched data and persistent notes without re-writing the human source: %s",
+    async (toolOutput) => {
+      const app = await runtime(false, true);
+      app.complete
+        .mockResolvedValueOnce({
+          content: toolOutput,
+        })
+        .mockResolvedValueOnce({
+          content: call("scratch_write", {
+            path: "research.md",
+            text: "A real fixture page.",
+            expected_revision: null,
+          }),
+        })
+        .mockResolvedValueOnce({ content: "found it" });
+      await app.run();
+      expect(app.complete).toHaveBeenCalledTimes(3);
+      const requests = app.complete.mock.calls.map(([request]) => request);
+      expect(requests[0]?.remora?.turn?.text).toBe("look that up");
+      for (const request of requests.slice(1)) {
+        expect(request.remora?.write_bank).toBeUndefined();
+        expect(request.remora?.turn).toBeUndefined();
+        expect(request.remora?.speaker).toEqual({
+          bank: `discord:dm:${CHANNEL}`,
+          id: `discord:user:${HUMAN}`,
+        });
+        expect(request.messages.at(-1)).toEqual({
+          role: "user",
+          content: "look that up",
+        });
+        expect(
+          request.messages.filter((m) => m.content === "look that up"),
+        ).toHaveLength(1);
+        expect(request.tools).toEqual([]);
+      }
+      expect(app.store.readNote(CHANNEL, "research.md").text).toBe(
+        "A real fixture page.",
+      );
       expect(
-        request.messages.filter((m) => m.content === "look that up"),
-      ).toHaveLength(1);
-      expect(request.tools).toEqual([]);
-    }
-    expect(app.store.readNote(CHANNEL, "research.md").text).toBe(
-      "A real fixture page.",
-    );
-    expect(
-      app.rest.post.mock.calls.find(([route]) =>
-        route.endsWith("/messages"),
-      )?.[1]?.body,
-    ).toMatchObject({
-      content: expect.stringContaining("https://example.com/"),
-    });
-  });
+        app.rest.post.mock.calls.find(([route]) =>
+          route.endsWith("/messages"),
+        )?.[1]?.body,
+      ).toMatchObject({
+        content: expect.stringContaining("https://example.com/"),
+      });
+    },
+  );
 
   // Proves classifier-supplied history still reserves space for the actual tool catalogue and results.
   it("rolls supplied history forward when tool instructions fill its budget", async () => {

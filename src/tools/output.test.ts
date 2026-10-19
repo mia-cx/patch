@@ -31,12 +31,39 @@ describe("model output controls", () => {
     });
   });
 
+  // Proves shorthand preserves one string token exactly, including URL punctuation, without interpreting it as code or a number.
+  it.each([
+    [
+      "web_fetch",
+      "url",
+      "https://fictional-release.example/aurora?a=1&b=x%2Cy#badge",
+    ],
+    ["scratch_read", "path", "notes/2026-10-19.md"],
+    ["delete_message", "message_id", "123"],
+  ])("decodes one literal %s argument", (name, key, value) => {
+    expect(
+      parseModelOutput(`<tool_call>${name}{${key}:${value}}</tool_call>done`),
+    ).toEqual({
+      content: "done",
+      toolCalls: [
+        { type: "function", name, arguments: JSON.stringify({ [key]: value }) },
+      ],
+    });
+  });
+
   // Proves malformed control sections fail before any text or partial action is presented.
   it.each([
     '<reply to="abc" /> hi',
     '<reply to="123">hi',
     '<tool_call>{"name":"react","arguments":{},"extra":true}</tool_call>',
     "<tool_call>{",
+    "<tool_call>web_fetch{url:}</tool_call>",
+    "<tool_call>web_fetch{url:https://example.com/,offset:2}</tool_call>",
+    '<tool_call>web_fetch{url:"https://example.com/"}</tool_call>',
+    "<tool_call>web_search{query:two words}</tool_call>",
+    "<tool_call>web_fetch{url:https://example.com/\\x}</tool_call>",
+    "<tool_call>web_fetch{url:[https://example.com/]}</tool_call>",
+    "<tool_call>web_fetch({url:https://example.com/})</tool_call>",
     '<tool_call>{"name":"react","arguments":{}}</tool_call><reply to="123" />hi',
   ])("rejects malformed leading controls: %s", (content) => {
     expect(() => parseModelOutput(content)).toThrow();

@@ -75,7 +75,10 @@ export async function auditFullCaller() {
     )
       content = "first<split />second";
     else if (toolRounds) {
-      content = `<tool_call>{"name":"web_fetch","arguments":{"url":"${WEB_URL}"}}</tool_call>`;
+      content =
+        toolRounds === 3
+          ? `<tool_call>web_fetch{url:${WEB_URL}}</tool_call>`
+          : `<tool_call>{"name":"web_fetch","arguments":{"url":"${WEB_URL}"}}</tool_call>`;
       toolRounds--;
       continued = true;
     } else if (continued) {
@@ -174,6 +177,7 @@ export async function auditFullCaller() {
         context_tokens: 12288,
         offered_history_pairs: 41,
         tool_rounds: 3,
+        captured_tagged_shorthand: true,
         actual_formatting_fallback: true,
         requests: bodies.map(({ messages, ...body }) => ({
           ...body,
