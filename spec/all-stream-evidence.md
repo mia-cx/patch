@@ -87,6 +87,9 @@ remain separate. The backend's 35-call qualification used a short generic person
 Facts and evidence have separate integer-ID namespaces. `/memory list` defaults
 to both when negotiated, labeling each kind and preserving full source quotation,
 context, origin and source actor. Legacy endpoints retain fact-only listing.
+External tool/URL provenance appears for both main and supporting quotations.
+Every nonempty evidence listing also exports full source IDs, revisions, spans
+and context digests as private JSON, including lists that fit inline.
 `/memory forget kind:evidence` erases explicit evidence records.
 `/memory forget-source id:<evidence ID> [context:<index>]` resolves its source on
 the server from a listed anchor. Clear covers both kinds. Source erasure and
@@ -104,6 +107,8 @@ with invented HTTP responses. They cover source/view binding, immutable contexts
 cutoff persistence, JSON duplicate values, namespace/permission isolation and
 record/source erasure. The rollover regression first failed by dropping a fresh
 human source, then passed after unavailable parents were excluded before selection.
+Independent review reproduced missing tool/URL provenance in short evidence
+listings. The regression now proves inline provenance and a complete private export.
 
 Actual new-profile HF behavior with the assembled Patch persona, shared-channel
 ancestry and these JSON history wrappers remains unqualified. A separately

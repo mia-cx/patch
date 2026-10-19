@@ -97,7 +97,7 @@ Protocord exposes private `/memory` commands backed by Remora's deterministic
 management API:
 
 - `/memory list [scope:personal|channel|server] [kind:all|fact|evidence]` shows readable records and
-  their IDs. Long lists become a complete JSON attachment.
+  their IDs. Evidence includes a complete provenance export; long lists use JSON attachments too.
 - `/memory forget ids:2,5 [scope:...] [kind:fact|evidence]` deletes only the chosen namespace's IDs.
 - `/memory forget-source id:2 [context:0] [scope:...]` erases a listed evidence source and its dependent copies.
 - `/memory clear confirm:true [scope:...]` clears the entire selected bank,
