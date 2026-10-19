@@ -69,7 +69,7 @@ export class CallerHttpGuard {
     this.views = Math.max(this.views, views);
     // Observed audit maxima describe the fixture, not a smaller runtime ceiling.
     // validateObservationBatch enforces the negotiated combined 128/512 limits.
-    // Formatting repair has its own installed SYSTEM. All ordinary calls keep the exact full persona.
+    // Ordinary, continuation and final SYSTEM variants retain the full persona and are byte-bound by the contract.
     if (
       !this.persona.has(body.messages[0]?.content ?? "") &&
       !body.messages[0]?.content.startsWith(

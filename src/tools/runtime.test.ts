@@ -301,6 +301,211 @@ const call = (name: string, args: object) =>
   `<tool_call>${JSON.stringify({ name, arguments: args })}</tool_call>`;
 
 describe("complete harness with the actual Discord SDK", () => {
+  // Proves captured duplicate read requests use one actual result, follow the human causally, and finish without a fourth tool attempt.
+  it("finishes the captured v4 web loop without replaying the human or the read", async () => {
+    const app = await runtime(false, true);
+    if (!app.harness) throw new Error("Missing harness");
+    app.complete.mockRestore();
+    app.config.llmTemperature = 0;
+    app.config.remoraObservationStartId = "1000000000000000000";
+    app.config.llmMaxTokens = 256;
+    app.message.content =
+      "Use web_fetch to read https://fictional-release.example/aurora and tell me what its badge colour means. Keep the reply short.";
+    const raw =
+      "<tool_call>web_fetch{url:https://fictional-release.example/aurora}</tool_call>";
+    const outputs = [
+      raw,
+      raw,
+      `${raw}\nviolet badges for offline devices</split />`,
+    ];
+    const requests: Array<{
+      messages: LlmMessage[];
+      remora: { observations: ObservationBatch };
+    }> = [];
+    const web = vi.spyOn(app.harness.web, "fetch");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/capabilities"))
+          return Response.json(evidenceCapabilities);
+        const body = JSON.parse(String(init?.body));
+        requests.push(body);
+        return Response.json(
+          observationReply(
+            body.remora.observations,
+            outputs[requests.length - 1] ?? raw,
+            requests.length,
+          ),
+        );
+      }),
+    );
+    await app.llm.initializeRemora();
+    await app.run([toConversationMessage(app.message, BOT)]);
+    expect(web).toHaveBeenCalledTimes(1);
+    expect(requests).toHaveLength(3);
+    for (const request of requests.slice(1)) {
+      const human = request.messages.findIndex(
+        (m) => m.content === app.message.content,
+      );
+      expect(
+        request.messages.filter((m) => m.content === app.message.content),
+      ).toHaveLength(1);
+      expect(request.messages[human + 1]).toMatchObject({
+        role: "assistant",
+        content: raw,
+      });
+      expect(request.messages.at(-1)?.content).toContain(
+        "Harness tool results",
+      );
+      expect(request.messages[0]?.content).not.toContain(
+        "The final standard user message is the current human turn",
+      );
+      expect(request.remora).not.toHaveProperty("turn");
+      expect(
+        request.remora.observations.inputs.filter(
+          (s) => s.origin === "human_input",
+        ),
+      ).toEqual(
+        requests[0]?.remora.observations.inputs.filter(
+          (s) => s.origin === "human_input",
+        ),
+      );
+    }
+    expect(requests[2]?.messages[0]?.content).not.toContain("Available tools");
+    const sent = app.rest.post.mock.calls.find(([route]) =>
+      route.endsWith("/messages"),
+    )?.[1]?.body;
+    expect(sent).toMatchObject({
+      content: expect.stringContaining("violet badges for offline devices"),
+    });
+    for (const [index, output] of outputs.entries())
+      expect(
+        app.store.generation(
+          observationNamespace(app.config.llmBaseUrl, app.config.llmApiKey),
+          `discord:dm:${CHANNEL}`,
+          `generation-${String(index + 1).padStart(32, "0")}:output`,
+        )?.text,
+      ).toBe(output);
+  });
+
+  // Proves an uncooperative model gets one final-answer attempt after an identical completed read, without another dispatch.
+  it("bounds duplicate-only reads and keeps mutation duplicates strict", async () => {
+    const app = await runtime();
+    if (!app.harness) throw new Error("Missing harness");
+    const web = vi.spyOn(app.harness.web, "fetch");
+    app.complete.mockResolvedValue({
+      content: call("web_fetch", { url: "https://example.com/", offset: 0 }),
+    });
+    await app.run();
+    expect(app.complete).toHaveBeenCalledTimes(3);
+    expect(web).toHaveBeenCalledTimes(1);
+    expect(app.complete.mock.calls[2]?.[0].messages[0]?.content).not.toContain(
+      "Available tools",
+    );
+    app.complete.mockReset();
+    const write = {
+      path: "draft.md",
+      text: "original",
+      expected_revision: null,
+    };
+    app.complete.mockResolvedValue({ content: call("scratch_write", write) });
+    await app.run();
+    expect(app.complete).toHaveBeenCalledTimes(2);
+    expect(app.store.readNote(CHANNEL, "draft.md")).toMatchObject({
+      text: "original",
+    });
+  });
+
+  // Proves a write invalidates read reuse so a later read sees actual changed state within the same three-call budget.
+  it("reads again after an intervening mutation and disables exhausted tools", async () => {
+    const app = await runtime();
+    const revision = app.store.writeNote(
+      CHANNEL,
+      "draft.md",
+      "old",
+      null,
+    ).revision;
+    app.complete
+      .mockResolvedValueOnce({
+        content: call("scratch_read", { path: "draft.md" }),
+      })
+      .mockResolvedValueOnce({
+        content: call("scratch_write", {
+          path: "draft.md",
+          text: "new",
+          expected_revision: revision,
+        }),
+      })
+      .mockResolvedValueOnce({
+        content: call("scratch_read", { path: "draft.md" }),
+      })
+      .mockResolvedValueOnce({ content: "the note says new" });
+    await app.run();
+    expect(app.complete).toHaveBeenCalledTimes(4);
+    expect(app.complete.mock.calls[3]?.[0].messages[0]?.content).not.toContain(
+      "Available tools",
+    );
+    const data = app.complete.mock.calls[3]?.[0].messages
+      .filter((m) => m.content.startsWith("Harness tool results"))
+      .flatMap((m) => JSON.parse(m.content.slice(m.content.indexOf("\n") + 1)));
+    expect(data?.at(-1)).toMatchObject({
+      name: "scratch_read",
+      completed: true,
+      output: { text: "new" },
+    });
+  });
+
+  // Proves a mixed duplicate/new batch cannot execute its new mutation, even if both individual schemas are valid.
+  it("rejects mixed reuse batches before their first side effect", async () => {
+    const app = await runtime();
+    app.complete
+      .mockResolvedValueOnce({
+        content: call("web_fetch", { url: "https://example.com/" }),
+      })
+      .mockResolvedValueOnce({
+        content:
+          call("react", { message_id: CURRENT, emoji: "x" }) +
+          call("web_fetch", { url: "https://example.com/" }),
+      });
+    await app.run();
+    expect(app.rest.put).not.toHaveBeenCalled();
+    expect(app.complete).toHaveBeenCalledTimes(2);
+  });
+
+  // Proves even cached read proposals cannot enlarge the original three-call budget.
+  it("rejects an oversized cached-read batch without another dispatch or completion", async () => {
+    const app = await runtime();
+    if (!app.harness) throw new Error("Missing harness");
+    const read = vi.spyOn(app.harness.web, "fetch");
+    const batch =
+      call("web_fetch", { url: "https://one.test/" }) +
+      call("web_fetch", { url: "https://two.test/" });
+    app.complete.mockResolvedValue({ content: batch });
+    await app.run();
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(app.complete).toHaveBeenCalledTimes(2);
+  });
+
+  // Proves retrying the same source cannot schedule another side effect when the model omits an earlier read.
+  it("retains mutation identity across reordered generation retries", async () => {
+    const app = await runtime();
+    const args = {
+      at: new Date(Date.now() + 60_000).toISOString(),
+      text: "check in",
+    };
+    app.complete
+      .mockResolvedValueOnce({
+        content: call("web_fetch", { url: "https://example.com/" }),
+      })
+      .mockResolvedValueOnce({ content: call("schedule_followup", args) })
+      .mockResolvedValueOnce({ content: "scheduled" });
+    await app.run();
+    app.complete
+      .mockResolvedValueOnce({ content: call("schedule_followup", args) })
+      .mockResolvedValueOnce({ content: "still scheduled" });
+    await app.run();
+    expect(app.store.followups(CHANNEL)).toHaveLength(1);
+  });
   // Proves a failed thinking call cannot start a fallback request or send failure text after its inputs are fenced.
   it("cancels a thinking transport fallback after source invalidation", async () => {
     const app = await runtime(false, true);
@@ -961,7 +1166,9 @@ describe("complete harness with the actual Discord SDK", () => {
           (message) => !Object.hasOwn(message, "observationSources"),
         ),
       ).toBe(true);
-      expect(request.messages.at(-1)?.content).toBe(app.message.content);
+      expect(
+        request.messages.filter((m) => m.content === app.message.content),
+      ).toHaveLength(1);
       const human = request.remora.observations.inputs.find(
         (input) => input.id === `discord:message:${CURRENT}`,
       );
@@ -1215,6 +1422,45 @@ describe("complete harness with the actual Discord SDK", () => {
     ).toThrow("durable bank boundary");
   });
 
+  // Proves regrouping exchanges preserves the original external source IDs and generated-call dependencies.
+  it("keeps result provenance when exchanges become summaries", () => {
+    const results = [
+      {
+        name: "web_fetch",
+        completed: true,
+        output: { text: "one", url: "https://one.test/" },
+      },
+      {
+        name: "web_fetch",
+        completed: true,
+        output: { text: "two😀", url: "https://two.test/" },
+      },
+    ];
+    const parents = [
+      { id: "generation-one:output", revision: 0, text: "raw call one" },
+      { id: "generation-two:output", revision: 0, text: "raw call two" },
+    ];
+    const summary = toolResultMessage(results, "summary\n", "turn", parents);
+    const second = toolResultMessage(
+      results.slice(1),
+      "second\n",
+      "turn",
+      parents.slice(1),
+      1,
+    );
+    expect(second.observationParents).toEqual([parents[1]]);
+    for (const segment of second.observationSources ?? []) {
+      expect(segment.source.origin).toBe("external_observation");
+      expect(segment.context).toEqual([parents[1]?.id]);
+      expect(summary.observationSources).toContainEqual(
+        expect.objectContaining({
+          source: segment.source,
+          context: segment.context,
+        }),
+      );
+    }
+  });
+
   // Proves duplicate snippets retain their own URL, while recalled facts, replayable scratch data and truncated receipts stay untracked.
   it("binds tool JSON values by path rather than matching their text", () => {
     const results = [
@@ -1422,10 +1668,11 @@ describe("complete harness with the actual Discord SDK", () => {
     );
     expect(second?.remora?.turn).toBeUndefined();
     expect(second?.remora?.write_bank).toBeUndefined();
-    expect(second?.messages.at(-1)).toEqual({
+    expect(second?.messages).toContainEqual({
       role: "user",
       content: "look that up",
     });
+    expect(second?.messages.at(-1)?.content).toContain("Harness tool results");
     const results = second?.messages
       .find((message) => message.content.startsWith("Harness tool results"))
       ?.content.split("\n")
@@ -1545,6 +1792,32 @@ describe("complete harness with the actual Discord SDK", () => {
     expect(app.rest.delete).toHaveBeenCalledWith(
       `/channels/${CHANNEL}/messages/${PREVIOUS}`,
     );
+  });
+
+  // Proves native duplicate reads retain distinct call IDs and both paired results.
+  it("keeps native same-batch read behavior unchanged", async () => {
+    const app = await runtime();
+    if (!app.harness) throw new Error("Missing harness");
+    app.config.llmToolMode = "native";
+    const read = vi.spyOn(app.harness.web, "fetch");
+    app.complete
+      .mockResolvedValueOnce({
+        content: "",
+        toolCalls: ["first", "second"].map((id) => ({
+          id,
+          type: "function" as const,
+          name: "web_fetch",
+          arguments: '{"url":"https://example.com/"}',
+        })),
+      })
+      .mockResolvedValueOnce({ content: "found it" });
+    await app.run();
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(
+      app.complete.mock.calls[1]?.[0].messages
+        .filter((m) => m.role === "tool")
+        .map((m) => m.tool_call_id),
+    ).toEqual(["first", "second"]);
   });
 
   // Proves native tool selection receives properly paired native result messages.
@@ -1757,10 +2030,13 @@ describe("complete harness with the actual Discord SDK", () => {
           bank: `discord:dm:${CHANNEL}`,
           id: `discord:user:${HUMAN}`,
         });
-        expect(request.messages.at(-1)).toEqual({
+        expect(request.messages).toContainEqual({
           role: "user",
           content: "look that up",
         });
+        expect(request.messages.at(-1)?.content).toContain(
+          "Harness tool results",
+        );
         expect(
           request.messages.filter((m) => m.content === "look that up"),
         ).toHaveLength(1);
@@ -1899,13 +2175,21 @@ describe("complete harness with the actual Discord SDK", () => {
                   .filter((message) => message.role === "tool")
                   .map((message) => message.content)
                   .join(",")}]`
-              : request.messages
-                  .find((message) =>
-                    message.content.startsWith("Harness tool results"),
-                  )
-                  ?.content.split("\n")
-                  .slice(1)
-                  .join("\n"),
+              : JSON.stringify(
+                  request.messages
+                    .filter(
+                      (message) =>
+                        message.content.startsWith("Harness tool results") &&
+                        message.content.includes("\n"),
+                    )
+                    .flatMap((message) =>
+                      JSON.parse(
+                        message.content.slice(
+                          message.content.indexOf("\n") + 1,
+                        ),
+                      ),
+                    ),
+                ),
           );
         calls++;
         if (calls === 4) return { content: "read it" };

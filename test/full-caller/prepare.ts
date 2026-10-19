@@ -22,6 +22,10 @@ const write = (name: string, value: string) => {
 };
 const persona = write("persona.txt", audit.persona);
 write("persona-shared.txt", audit.sharedPersona);
+write("persona-continuation.txt", audit.continuationPersona);
+write("persona-shared-continuation.txt", audit.sharedContinuationPersona);
+write("persona-final.txt", audit.finalPersona);
+write("persona-shared-final.txt", audit.sharedFinalPersona);
 write("audit.json", JSON.stringify(audit.report, null, 2));
 const files: Record<string, string> = {};
 function include(directory: string) {
@@ -51,6 +55,10 @@ for (const name of [
   "spec/fixtures/all-stream-evidence.json",
   persona,
   resolve(output, "persona-shared.txt"),
+  resolve(output, "persona-continuation.txt"),
+  resolve(output, "persona-shared-continuation.txt"),
+  resolve(output, "persona-final.txt"),
+  resolve(output, "persona-shared-final.txt"),
   resolve(output, "audit.json"),
 ]) {
   const path = resolve(name);

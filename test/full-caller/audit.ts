@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { Schema } from "effect";
 import { validateObservationBatch } from "../../src/llm/evidence.js";
+import { TAGGED_TOOL_INSTRUCTIONS } from "../../src/tools/output.js";
 import { evidenceCapabilities } from "../fixtures/evidence.js";
 import { BANKS, BASE, FullCallerFixture, WEB_URL } from "./fixture.js";
 
@@ -78,7 +79,7 @@ export async function auditFullCaller() {
       content =
         toolRounds === 3
           ? `<tool_call>web_fetch{url:${WEB_URL}}</tool_call>`
-          : `<tool_call>{"name":"web_fetch","arguments":{"url":"${WEB_URL}"}}</tool_call>`;
+          : `<tool_call>{"name":"web_fetch","arguments":{"url":"${WEB_URL}","offset":${3 - toolRounds}}}</tool_call>`;
       toolRounds--;
       continued = true;
     } else if (continued) {
@@ -143,7 +144,8 @@ export async function auditFullCaller() {
     toolRounds = 3;
     await app.turn(BANKS[0], `Read ${WEB_URL}`);
     await app.turn(BANKS[0], "What did it mean?");
-    await app.turn(BANKS[1], "An invented shared-channel detail.");
+    toolRounds = 3;
+    await app.turn(BANKS[1], `Read ${WEB_URL}`);
     assert(
       app.sent.some((message) => message.text.includes("Sources:")),
       "Actual citation transformation was not exercised",
@@ -154,6 +156,40 @@ export async function auditFullCaller() {
     const sharedPersona = bodies.find((body) => body.bank === BANKS[1])
       ?.messages[0]?.content;
     assert(persona && sharedPersona);
+    const continuationPersona = bodies.find(
+      (body) =>
+        body.bank === BANKS[0] &&
+        body.messages[0]?.content.includes(
+          "Continue the original human request",
+        ) &&
+        body.messages[0].content.includes(TAGGED_TOOL_INSTRUCTIONS),
+    )?.messages[0]?.content;
+    const sharedContinuationPersona = bodies.find(
+      (body) =>
+        body.bank === BANKS[1] &&
+        body.messages[0]?.content.includes(
+          "Continue the original human request",
+        ) &&
+        body.messages[0].content.includes(TAGGED_TOOL_INSTRUCTIONS),
+    )?.messages[0]?.content;
+    const finalPersona = bodies.find(
+      (body) =>
+        body.bank === BANKS[0] &&
+        body.messages[0]?.content.startsWith("# Role") &&
+        !body.messages[0].content.includes(TAGGED_TOOL_INSTRUCTIONS),
+    )?.messages[0]?.content;
+    const sharedFinalPersona = bodies.find(
+      (body) =>
+        body.bank === BANKS[1] &&
+        body.messages[0]?.content.startsWith("# Role") &&
+        !body.messages[0].content.includes(TAGGED_TOOL_INSTRUCTIONS),
+    )?.messages[0]?.content;
+    assert(
+      continuationPersona &&
+        sharedContinuationPersona &&
+        finalPersona &&
+        sharedFinalPersona,
+    );
     assert(
       bodies.some((body) =>
         body.messages[0]?.content.startsWith(
@@ -165,6 +201,10 @@ export async function auditFullCaller() {
     return {
       persona,
       sharedPersona,
+      continuationPersona,
+      sharedContinuationPersona,
+      finalPersona,
+      sharedFinalPersona,
       required_limits: {
         max_observation_sources: Math.max(
           ...bodies.map((body) => body.sources),

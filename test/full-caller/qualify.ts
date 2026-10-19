@@ -81,6 +81,13 @@ const sharedPersonaPath = resolve(
   "persona-shared.txt",
 );
 assert(sharedPersonaPath in contract.files);
+const finalPersonaPaths = [
+  "persona-final.txt",
+  "persona-shared-final.txt",
+  "persona-continuation.txt",
+  "persona-shared-continuation.txt",
+].map((name) => resolve(dirname(contract.persona.path), name));
+for (const path of finalPersonaPaths) assert(path in contract.files);
 const output = resolve(dirname(readyPath), "caller-results");
 mkdirSync(output, { mode: 0o700 });
 const record = (value: unknown) =>
@@ -106,7 +113,11 @@ const guard = new CallerHttpGuard(
     max_observation_id_chars: 256,
   }),
   record,
-  new Set([persona, readFileSync(sharedPersonaPath, "utf8")]),
+  new Set([
+    persona,
+    readFileSync(sharedPersonaPath, "utf8"),
+    ...finalPersonaPaths.map((path) => readFileSync(path, "utf8")),
+  ]),
 );
 globalThis.fetch = guard.fetch;
 const journey: unknown[] = [];
