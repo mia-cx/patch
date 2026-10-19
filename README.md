@@ -127,12 +127,14 @@ commands were preserved. See the [Remora management guide](https://github.com/mi
 
 ## Remora DM integration
 
-Offline active-recall support adds `memory_search(query, limit?, min_score?)`
+Active-recall support adds `memory_search(query, limit?, min_score?)`
 through Protocord. It is hidden unless Remora advertises `memory_search` with all
 four valid search limits and the conversation has an eligible selected bank
 scope. The model cannot add banks. Returned subject identities and source voices
 stay separate; similarity scores are rankings. No source or generation writes
-come from search. This support is not deployed or enabled on the current trial.
+come from search. Client runtime `87760e8` is deployed from `9240e41` in the scoped
+trial. Authenticated startup and Discord READY pass with unchanged environment
+and backend. Search stays hidden until the backend advertises support.
 See [Remora's active-recall guide](https://github.com/mia-cx/remora/blob/28216a6/docs/api/active-recall.md).
 
 `REMORA_DM_ENABLED=true` enables memory for text turns in one-to-one DMs. Point

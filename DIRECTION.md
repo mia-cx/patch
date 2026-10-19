@@ -57,7 +57,7 @@ wrappers leak into output, and cumulative metadata footers obscure recent
 dialogue in Gemma's 512-token local attention. llama.cpp qualification does not
 gate this HF trial.
 Mia approved passive formation/dreaming (`8770d95`, serving `dfc09d9`) on the same HF API.
-The scoped trial runs v2 runtime `0e22f88` from `58831ff`, using tagged tools (three calls per turn).
+The scoped trial runs runtime `87760e8` from `9240e41`, using tagged tools (three calls per turn).
 Startup capabilities and Discord READY pass with unchanged persona/history/source tuple.
 Earlier ownership leaks led to preserving source authorship separately from fact subjects.
 Patch supports the optional `speaker: {bank, id}` attribution field and optional
@@ -101,7 +101,7 @@ invalidate memory caches and affected caller history; a model reply is not proof
 of deletion. Keep Remora's API generic and require separate deletion grants.
 The `/memory` commands are published against reviewed
 Remora runtime `4e95553`, contract `f00a364` ([management guide](https://github.com/mia-cx/remora/blob/54f7bd6/docs/api/memory-management.md)).
-Active recall is prepared offline against `28216a6`: scoped `memory_search` requires its feature and four limits; no rollout.
+Active-recall client `87760e8` is deployed; `memory_search` stays hidden until Remora advertises support and four valid limits.
 The memory representation uses explicit third-person facts bound to generic stable
 entity references, keeping fact subjects separate
 from source authors and preserving raw evidence and receipts. Names are optional
