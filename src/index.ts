@@ -308,7 +308,7 @@ async function handleMessage(message: Message): Promise<void> {
       const decision = await classifyShouldRespond({
         message,
         botUserId,
-        llm,
+        config,
         logger,
         llmTraceLogging: config.llmTraceLogging,
         contextMessages: classifierContextMessages,

@@ -1,18 +1,33 @@
 import { ChannelType, type Message } from "discord.js";
+import { Schema } from "effect";
+import type { Config } from "../config.js";
 import { summarizeContext } from "../conversation/context.js";
-import {
-  buildTranscript,
-  formatTranscript,
-} from "../conversation/transcript.js";
 import type { ConversationMessage } from "../conversation/types.js";
-import type { LlmClient, LlmMessage } from "../llm/client.js";
 import type { Logger } from "../logger.js";
 import {
   type ClassifierPromptContext,
-  buildClassifierMessages,
+  buildClassifierQuestion,
 } from "../prompts/classifier.js";
 
-const CLASSIFIER_MAX_TOKENS = 96;
+const CLASSIFIER_CONTEXT_TOKENS = 8192;
+const CLASSIFIER_QUESTION_TOKENS = 512;
+const SystemOneResponse = Schema.Struct({
+  answers: Schema.Struct({
+    response: Schema.Struct({
+      type: Schema.Literal("choice"),
+      choice: Schema.Literals(["respond", "dont respond"]),
+      answer_confidence: Schema.Number.check(
+        Schema.isGreaterThanOrEqualTo(0),
+        Schema.isLessThanOrEqualTo(1),
+      ),
+      abstention: Schema.optional(
+        Schema.Literals(["passed", "abstained", "unevaluated"]),
+      ),
+    }),
+  }),
+  // A decision over a silently clipped conversation is unusable.
+  usage: Schema.Struct({ truncated: Schema.Literal(false) }),
+});
 
 export type ClassifierDecision = {
   shouldRespond: boolean;
@@ -20,96 +35,99 @@ export type ClassifierDecision = {
   reason: string;
 };
 
+/** Classify reply timing with Laya; failures abstain without calling the response model. */
 export async function classifyShouldRespond(options: {
   message: Message;
   botUserId: string;
-  llm: LlmClient;
+  config: Pick<
+    Config,
+    | "classifierBaseUrl"
+    | "classifierApiKey"
+    | "classifierModel"
+    | "classifierTimeoutMs"
+  >;
   logger: Logger;
   llmTraceLogging: boolean;
   contextMessages: ConversationMessage[];
 }): Promise<ClassifierDecision> {
-  const { message, botUserId, llm, logger, llmTraceLogging, contextMessages } =
-    options;
+  const {
+    message,
+    botUserId,
+    config,
+    logger,
+    llmTraceLogging,
+    contextMessages,
+  } = options;
   const log = logger.child({
     messageId: message.id,
     channelId: message.channelId,
     operation: "response-classifier",
   });
 
-  const transcript = formatTranscript(
-    buildTranscript(contextMessages, botUserId),
-  );
-  const promptContext = buildClassifierPromptContext(message, botUserId);
-  const messages = buildClassifierMessages(transcript, promptContext);
-
-  if (llmTraceLogging) {
-    log.debug(
-      {
-        context: summarizeContext(contextMessages),
-        classifierContext: promptContext,
-        transcript,
-        promptMessages: messages,
+  const started = performance.now();
+  try {
+    const promptContext = buildClassifierPromptContext(message, botUserId);
+    const question = buildClassifierQuestion(contextMessages, promptContext);
+    if (llmTraceLogging) {
+      log.debug(
+        {
+          context: summarizeContext(contextMessages),
+          classifierContext: promptContext,
+          question,
+        },
+        "classifier prompt trace",
+      );
+    }
+    const response = await fetch(`${config.classifierBaseUrl}/systemone`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(config.classifierApiKey
+          ? { Authorization: `Bearer ${config.classifierApiKey}` }
+          : {}),
       },
-      "classifier prompt trace",
+      redirect: "error",
+      signal: AbortSignal.timeout(config.classifierTimeoutMs),
+      body: JSON.stringify({
+        model: config.classifierModel,
+        max_len: CLASSIFIER_CONTEXT_TOKENS,
+        head_max_len: CLASSIFIER_QUESTION_TOKENS,
+        ...question,
+      }),
+    });
+    if (!response.ok)
+      throw new Error(`System 1 classifier returned HTTP ${response.status}`);
+    const { answers } = Schema.decodeUnknownSync(SystemOneResponse)(
+      await response.json(),
     );
-  }
-
-  const response = await llm.complete({
-    messages,
-    temperature: 0,
-    maxTokens: CLASSIFIER_MAX_TOKENS,
-    enableThinking: false,
-  });
-  const parsed = parseClassifierDecision(response.content);
-
-  if (parsed.valid) {
+    const answer = answers.response;
+    const decision = {
+      shouldRespond:
+        answer.abstention !== "abstained" && answer.choice === "respond",
+      // This is the winning option's probability, not Laya's entropy-based confidence. No calibration threshold is assumed.
+      confidence: answer.answer_confidence,
+      reason: answer.abstention === "abstained" ? "abstained" : answer.choice,
+    };
     log.debug(
       {
-        decision: parsed.decision,
-        rawContent: response.content,
-        reasoningContentLength: response.reasoningContent?.length ?? 0,
-        finishReason: response.finishReason,
-        timings: response.timings,
+        decision,
+        model: config.classifierModel,
+        elapsedMs: performance.now() - started,
       },
       "classifier decision",
     );
-
-    return parsed.decision;
+    return decision;
+  } catch (error) {
+    log.warn(
+      { error, elapsedMs: performance.now() - started },
+      "System 1 classifier unavailable; remaining silent",
+    );
+    return {
+      shouldRespond: false,
+      confidence: 0,
+      reason: "classifier unavailable",
+    };
   }
-
-  log.warn(
-    {
-      decision: parsed.decision,
-      rawContent: response.content,
-      reasoningContentLength: response.reasoningContent?.length ?? 0,
-      finishReason: response.finishReason,
-      timings: response.timings,
-    },
-    "classifier returned invalid JSON; retrying JSON repair",
-  );
-
-  const repaired = await repairClassifierDecision({
-    llm,
-    messages,
-    rawContent: response.content,
-  });
-  const repairedParsed = parseClassifierDecision(repaired.content);
-  const decision = repairedParsed.decision;
-
-  log.debug(
-    {
-      decision,
-      rawContent: repaired.content,
-      originalRawContent: response.content,
-      repaired: repairedParsed.valid,
-      reasoningContentLength: repaired.reasoningContent?.length ?? 0,
-      finishReason: repaired.finishReason,
-      timings: repaired.timings,
-    },
-    "classifier decision",
-  );
-
-  return decision;
 }
 
 function buildClassifierPromptContext(
@@ -147,77 +165,4 @@ function classifyLocation(
 ): ClassifierPromptContext["location"] {
   if (!message.inGuild()) return "dm";
   return message.channel.isThread() ? "guild_thread" : "guild_channel";
-}
-
-async function repairClassifierDecision(options: {
-  llm: LlmClient;
-  messages: LlmMessage[];
-  rawContent: string;
-}) {
-  return options.llm.complete({
-    messages: [
-      ...options.messages,
-      { role: "assistant", content: options.rawContent },
-      {
-        role: "user",
-        content:
-          'Convert your previous classifier decision to valid compact JSON only. Use exactly this shape: {"shouldRespond":false,"confidence":0,"reason":"short reason"}',
-      },
-    ],
-    temperature: 0,
-    maxTokens: CLASSIFIER_MAX_TOKENS,
-    enableThinking: false,
-  });
-}
-
-type ParsedClassifierDecision = {
-  decision: ClassifierDecision;
-  valid: boolean;
-};
-
-export function parseClassifierDecision(
-  content: string,
-): ParsedClassifierDecision {
-  const json = extractJsonObject(content);
-  if (!json) {
-    return {
-      decision: { shouldRespond: false, confidence: 0, reason: "no json" },
-      valid: false,
-    };
-  }
-
-  try {
-    const parsed = JSON.parse(json) as Partial<ClassifierDecision>;
-    return {
-      decision: {
-        shouldRespond: parsed.shouldRespond === true,
-        confidence: normalizeConfidence(parsed.confidence),
-        reason: optionalString(parsed.reason) ?? "no reason",
-      },
-      valid: true,
-    };
-  } catch {
-    return {
-      decision: { shouldRespond: false, confidence: 0, reason: "invalid json" },
-      valid: false,
-    };
-  }
-}
-
-function extractJsonObject(content: string): string | undefined {
-  const start = content.indexOf("{");
-  const end = content.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return undefined;
-  return content.slice(start, end + 1);
-}
-
-function normalizeConfidence(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value));
-}
-
-function optionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
 }

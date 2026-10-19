@@ -35,6 +35,10 @@ export type Config = {
   threadContextMessageLimit: number;
   guildRecentMessageLimit: number;
   classifierContextMessageLimit: number;
+  classifierBaseUrl: string;
+  classifierApiKey: string;
+  classifierModel: string;
+  classifierTimeoutMs: number;
 };
 
 const PositiveInteger = Schema.Number.check(
@@ -86,6 +90,10 @@ const ConfigSchema = Schema.Struct({
   threadContextMessageLimit: PositiveInteger,
   guildRecentMessageLimit: PositiveInteger,
   classifierContextMessageLimit: PositiveInteger,
+  classifierBaseUrl: Schema.String.check(Schema.isMinLength(1)),
+  classifierApiKey: Schema.String,
+  classifierModel: Schema.String.check(Schema.isMinLength(1)),
+  classifierTimeoutMs: PositiveInteger,
 });
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -153,6 +161,12 @@ export function loadConfigEffect(env: NodeJS.ProcessEnv = process.env) {
         env.CLASSIFIER_CONTEXT_MESSAGE_LIMIT,
         12,
       ),
+      classifierBaseUrl: trimTrailingSlash(
+        env.CLASSIFIER_BASE_URL ?? "http://127.0.0.1:18792/v1",
+      ),
+      classifierApiKey: env.CLASSIFIER_API_KEY ?? "",
+      classifierModel: env.CLASSIFIER_MODEL ?? "english",
+      classifierTimeoutMs: integer(env.CLASSIFIER_TIMEOUT_MS, 10_000),
     }),
   );
 }
