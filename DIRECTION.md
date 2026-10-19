@@ -40,8 +40,8 @@ targets in readable labels; Patch replies remain plain assistant text. Separate
 metadata retains Patch reply references and identifies the raw final user turn.
 Stable source IDs and edit revisions survive generation retries. Read-bank
 selection never adds write destinations or grants.
-Runtime capabilities bound context/output; write receipts and observed cache reuse
-are validated. Classifier and activity calls have no memory access.
+Runtime capabilities bound context/output; receipts/cache reuse are validated. Classifier/activity calls have no memory access.
+Laya runs beside Gemma on the same GPU. A typed decision prompt reaches 6/8 archived cases; passive gating stays disabled. See [classifier](spec/laya-classifier.md).
 Evidence-aware formatting observes its real dependency with an empty recall allowlist.
 The shared contract and synthetic full-persona request are in `spec/fixtures`.
 Initial HF/native TypeScript smokes establish durable retries and 7,310-token SYSTEM reuse,
