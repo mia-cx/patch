@@ -124,9 +124,11 @@ describe("evidence memory management transport", () => {
         ...evidenceCapabilities,
         source_binding: "final_user_message_exact",
         observation_binding: undefined,
+        source_reference_binding: undefined,
         features: {
           ...evidenceCapabilities.features,
           all_stream_evidence: false,
+          source_references: false,
         },
       }),
     );

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { evidenceCapabilities as evidenceCaps } from "../../test/fixtures/evidence.js";
 import { loadConfig } from "../config.js";
 import { LlmClient, type LlmMessage } from "./client.js";
-import type { ObservationBatch } from "./evidence.js";
+import { type ObservationBatch, validateObservationBatch } from "./evidence.js";
 import { type RemoraRequest, parseRemoraCapabilities } from "./remora.js";
 
 const config = () =>
@@ -102,6 +102,89 @@ function reply(attempt = "1", replayed = false) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("negotiated all-stream observation transport", () => {
+  // Proves exact scalar subviews preserve original generated voice in any native role, while a transformation requires a real parent.
+  it.each([
+    "valid",
+    "context_only",
+    "mismatch",
+    "orphan",
+    "overlap",
+    "source_budget",
+    "view_budget",
+  ] as const)("validates completed generated reference %s", (mode) => {
+    const raw = "raw 😀 reply";
+    const id = "generation-original:output";
+    const observed: LlmMessage[] = [
+      {
+        role: "user",
+        content:
+          mode === "context_only"
+            ? "formatted reply"
+            : JSON.stringify("😀 reply"),
+      },
+    ];
+    const reference = {
+      id,
+      revision: 0,
+      text: raw,
+      views:
+        mode === "context_only" || mode === "orphan"
+          ? []
+          : [
+              {
+                message_index: 0,
+                start: 0,
+                end: Array.from(observed[0]?.content ?? "").length,
+                encoding: "json_string" as const,
+                source_start: mode === "mismatch" ? 0 : 4,
+                source_end: 11,
+              },
+            ],
+    };
+    let references = [reference];
+    if (mode === "overlap")
+      references = [
+        reference,
+        { ...reference, id: "generation-another:output" },
+      ];
+    if (mode === "source_budget")
+      references = Array.from({ length: 129 }, (_, i) => ({
+        ...reference,
+        id: `g-${i}`,
+      }));
+    if (mode === "view_budget")
+      references = [
+        {
+          ...reference,
+          views: Array.from({ length: 513 }, () => reference.views[0]).filter(
+            (view) => view !== undefined,
+          ),
+        },
+      ];
+    const value: ObservationBatch = {
+      bank: "room-a",
+      id: "batch",
+      revision: 0,
+      inputs:
+        mode === "context_only"
+          ? [
+              {
+                id: "discord:message:30",
+                revision: 0,
+                origin: "unattributed_input",
+                views: [{ message_index: 0, start: 0, end: 15 }],
+                context: [id],
+              },
+            ]
+          : [],
+      references,
+    };
+    const check = () =>
+      validateObservationBatch(value, observed, evidenceCaps.limits);
+    if (mode === "valid" || mode === "context_only")
+      expect(check).not.toThrow();
+    else expect(check).toThrow();
+  });
   // Proves raw/JSON/XML views share one immutable source, while parameter retries retain input receipts and accept independent decoder attempts.
   it("binds exact scalar views and separates input replay from generated attempts", async () => {
     const bodies: unknown[] = [];
@@ -116,7 +199,7 @@ describe("negotiated all-stream observation transport", () => {
     );
     const client = new LlmClient(config());
     await client.initializeRemora();
-    expect(client.observationLimits?.max_observation_views).toBe(64);
+    expect(client.observationLimits?.max_observation_views).toBe(512);
     const remora: RemoraRequest = {
       read_banks: ["room-a"],
       observations: batch,

@@ -1,12 +1,21 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { ChannelType, Client, ClientUser } from "discord.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { evidenceCapabilities } from "../../test/fixtures/evidence.js";
+import {
+  evidenceCapabilities,
+  observationReply,
+} from "../../test/fixtures/evidence.js";
 import type { ActionContext } from "../actions/context.js";
 import { registerDefaultActions } from "../actions/defaults.js";
 import { createPatchActionRegistry } from "../actions/registry.js";
 import { loadConfig } from "../config.js";
-import { ConversationObservations } from "../conversation/observations.js";
+import {
+  ConversationObservations,
+  observationNamespace,
+} from "../conversation/observations.js";
 import { buildRemoraRequest } from "../conversation/remora.js";
 import { ConversationContextStore } from "../conversation/store.js";
 import {
@@ -18,7 +27,7 @@ import {
   DiscordJsAdapter,
   toConversationMessage,
 } from "../discord/discord-js-adapter.js";
-import { LlmClient } from "../llm/client.js";
+import { LlmClient, type LlmMessage } from "../llm/client.js";
 import {
   type ObservationBatch,
   decodeObservationView,
@@ -63,7 +72,7 @@ class Bot extends ClientUser {
   }
 }
 
-async function runtime(guild = false, remora = false) {
+async function runtime(guild = false, remora = false, storePath = ":memory:") {
   const client = new Client<true>({ intents: [] });
   client.user = new Bot(client);
   const packet = (id = PREVIOUS, author = BOT, content = "old message") => ({
@@ -227,7 +236,7 @@ async function runtime(guild = false, remora = false) {
   const contextStore = new ConversationContextStore(":memory:");
   const llm = new LlmClient(config);
   if (remora) llm.supportsTools = false;
-  const store = new HarnessStore(":memory:");
+  const store = new HarnessStore(storePath);
   const web = new WebClient({
     resolve: async () => [{ address: "93.184.216.34", family: 4 }],
     request: async () => ({
@@ -275,13 +284,577 @@ async function runtime(guild = false, remora = false) {
       actionContext: context,
       actionRegistry: registry,
     });
-  return { ...context, registry, message, complete, rest, run, store };
+  return {
+    ...context,
+    client,
+    registry,
+    message,
+    complete,
+    rest,
+    run,
+    store,
+    packet,
+  };
 }
 
 const call = (name: string, args: object) =>
   `<tool_call>${JSON.stringify({ name, arguments: args })}</tool_call>`;
 
 describe("complete harness with the actual Discord SDK", () => {
+  // Proves a failed thinking call cannot start a fallback request or send failure text after its inputs are fenced.
+  it("cancels a thinking transport fallback after source invalidation", async () => {
+    const app = await runtime(false, true);
+    app.complete.mockRestore();
+    app.config.llmTemperature = 0;
+    app.config.llmEnableThinking = true;
+    app.config.llmThinkingMaxTokens = 128;
+    app.config.remoraObservationStartId = "1000000000000000000";
+    let posts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/capabilities"))
+          return Response.json({
+            ...evidenceCapabilities,
+            features: { ...evidenceCapabilities.features, thinking: true },
+          });
+        posts++;
+        app.store.invalidateConversationData();
+        return Response.json({ error: "invented failure" }, { status: 503 });
+      }),
+    );
+    await app.llm.initializeRemora();
+    await app.run([toConversationMessage(app.message, BOT)]);
+    expect(posts).toBe(1);
+    expect(
+      app.rest.post.mock.calls.filter(([route]) => route.endsWith("/messages")),
+    ).toEqual([]);
+  });
+  // Proves revision retirement cancels presentation independently of decoder-reference eligibility and between split sends.
+  it.each(["rejected", "untracked_dependencies"] as const)(
+    "cancels revised consumed sources for outcome %s",
+    async (outcome) => {
+      for (const duringInference of [true, false]) {
+        const app = await runtime(false, true);
+        app.complete.mockRestore();
+        app.config.llmTemperature = 0;
+        app.config.remoraObservationStartId = "1000000000000000000";
+        const revise = () =>
+          app.store.advanceObservationRevision(
+            observationNamespace(app.config.llmBaseUrl, app.config.llmApiKey),
+            `discord:dm:${CHANNEL}`,
+            `discord:message:${CURRENT}`,
+            1,
+          );
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (url: string, init?: RequestInit) => {
+            if (url.endsWith("/capabilities"))
+              return Response.json(evidenceCapabilities);
+            const batch: ObservationBatch = JSON.parse(String(init?.body))
+              .remora.observations;
+            if (duringInference) revise();
+            return Response.json(
+              observationReply(batch, "first<split />second", 1, outcome),
+            );
+          }),
+        );
+        const sent: string[] = [];
+        app.rest.post.mockImplementation(async (route, options) => {
+          if (!route.endsWith("/messages")) return;
+          const body = options?.body;
+          const text =
+            body && typeof body === "object" && "content" in body
+              ? String(body.content)
+              : "";
+          sent.push(text);
+          revise();
+          return app.packet("1000000000000000020", BOT, text);
+        });
+        await app.llm.initializeRemora();
+        await app.run([toConversationMessage(app.message, BOT)]);
+        expect(sent).toEqual(duringInference ? [] : ["first"]);
+      }
+    },
+  );
+
+  // Proves an unqualified predecessor leaves repair input unknown while both exact decoder preimages are captured.
+  it("captures an actual repair attempt with an unqualified original parent", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "patch-raw-repair-"));
+    resources.push(() => rmSync(dir, { recursive: true, force: true }));
+    const path = join(dir, "harness.sqlite");
+    const app = await runtime(false, true, path);
+    app.complete.mockRestore();
+    app.config.llmTemperature = 0;
+    app.config.remoraObservationStartId = "1000000000000000000";
+    const bodies: Array<{
+      messages: LlmMessage[];
+      remora?: { observations: ObservationBatch };
+    }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/capabilities"))
+          return Response.json(evidenceCapabilities);
+        const body = JSON.parse(String(init?.body));
+        bodies.push(body);
+        const content =
+          bodies.length === 1 ? "first\nsecond" : "first<split />second";
+        return Response.json(
+          body.remora
+            ? observationReply(
+                body.remora.observations,
+                content,
+                bodies.length,
+                "untracked_dependencies",
+              )
+            : { choices: [{ message: { content } }] },
+        );
+      }),
+    );
+    await app.llm.initializeRemora();
+    await app.run([toConversationMessage(app.message, BOT)]);
+    expect(bodies).toHaveLength(2);
+    expect(
+      bodies[1]?.remora?.observations.inputs.every(
+        (input) => input.origin === "system_input",
+      ),
+    ).toBe(true);
+    const inspect = new DatabaseSync(path, { readOnly: true });
+    resources.push(() => inspect.close());
+    expect(
+      inspect
+        .prepare("SELECT raw,eligible FROM harness_generations ORDER BY id")
+        .all(),
+    ).toEqual([
+      { raw: "first\nsecond", eligible: 0 },
+      { raw: "first<split />second", eligible: 0 },
+    ]);
+  });
+  // Proves a fenced in-flight response cannot execute an action or present either private text or a fallback message.
+  it.each([
+    "private text",
+    "HTTP503",
+    call("react", { message_id: CURRENT, emoji: "x" }),
+  ])("abandons a response invalidated during HTTP: %s", async (content) => {
+    const app = await runtime(false, true);
+    app.complete.mockRestore();
+    app.config.llmTemperature = 0;
+    app.config.remoraObservationStartId = "1000000000000000000";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/capabilities"))
+          return Response.json(evidenceCapabilities);
+        app.store.invalidateConversationData();
+        if (content === "HTTP503")
+          return Response.json({ error: "invented failure" }, { status: 503 });
+        const batch: ObservationBatch = JSON.parse(String(init?.body)).remora
+          .observations;
+        const receipt = {
+          saved: [],
+          superseded: [],
+          status: "not_admitted",
+          replayed: false,
+          admission_identity: "a".repeat(64),
+        };
+        const attempt = `generation-${"a".repeat(32)}`;
+        return Response.json({
+          choices: [{ message: { content } }],
+          remora: {
+            version: 1,
+            backend: "transformers",
+            read_banks: [`discord:dm:${CHANNEL}`],
+            selected: [],
+            writes: null,
+            cache: {
+              requested: true,
+              reused_tokens: 0,
+              evaluated_tokens: 1,
+              invalidated: null,
+            },
+            observations: {
+              inputs: batch.inputs.map((input) => ({
+                source_id: input.id,
+                revision: input.revision,
+                outcome: "rejected",
+                receipt,
+              })),
+              generated: [
+                {
+                  source_id: `${attempt}:output`,
+                  revision: 0,
+                  outcome: "rejected",
+                  receipt,
+                },
+              ],
+              attempt_id: attempt,
+              input_replayed: false,
+            },
+          },
+        });
+      }),
+    );
+    await app.llm.initializeRemora();
+    await app.run([toConversationMessage(app.message, BOT)]);
+    expect(app.rest.put).not.toHaveBeenCalled();
+    expect(
+      app.rest.post.mock.calls.filter(([route]) => route.endsWith("/messages")),
+    ).toEqual([]);
+  });
+
+  // Proves merged chunks retain displayed order even when one is an exact reference and the next is a transformation.
+  it("selects the final mixed assistant chunk as the indirect-answer context", async () => {
+    const app = await runtime(false, true);
+    const remora = buildRemoraRequest(app.config, app.message);
+    if (!remora) throw new Error("Missing scope");
+    const mapper = new ConversationObservations({
+      store: app.store,
+      remora,
+      message: app.message,
+      botUserId: BOT,
+      startId: "1000000000000000000",
+      limits: evidenceCapabilities.limits,
+    });
+    const tea = {
+      id: "generation-tea:output",
+      revision: 0,
+      text: "Do you like tea?",
+    };
+    const coffee = {
+      id: "generation-coffee:output",
+      revision: 0,
+      text: "Do you like 😀 coffee?",
+    };
+    const base = toConversationMessage(app.message, BOT);
+    const old = {
+      ...base,
+      id: "1000000000000000021",
+      authorId: BOT,
+      authorIsBot: true,
+      content: tea.text,
+      source: { text: tea.text, revision: 0 },
+    };
+    const recent = {
+      ...old,
+      id: "1000000000000000022",
+      content: "Do you like coffee?",
+      source: { text: "Do you like coffee?", revision: 0 },
+    };
+    for (const [source, display] of [
+      [tea, old],
+      [coffee, recent],
+    ] as const) {
+      app.store.captureGeneration("", mapper.bank, source, true, mapper.epoch);
+      mapper.associate(display, source);
+    }
+    const rendered = formatTranscriptMessages(
+      buildTranscript([old, recent], BOT),
+      CURRENT,
+      (block) => mapper.humanSource(block),
+      (block) => mapper.assistantBody(block),
+    );
+    const batch = mapper.request([
+      ...rendered,
+      mapper.currentMessage(),
+    ]).observations;
+    expect(
+      batch?.inputs.find((input) => input.id === `discord:message:${CURRENT}`)
+        ?.context,
+    ).toEqual([coffee.id]);
+  });
+
+  // Proves trusted edit versions retire local descendants even when new text is blank or no longer has a qualified raw parent.
+  it.each(["blank human", "changed display"] as const)(
+    "retires omitted source revisions: %s",
+    async (kind) => {
+      const app = await runtime(false, true);
+      const remora = buildRemoraRequest(app.config, app.message);
+      if (!remora) throw new Error("Missing scope");
+      const mapper = new ConversationObservations({
+        store: app.store,
+        remora,
+        message: app.message,
+        botUserId: BOT,
+        startId: "1000000000000000000",
+        limits: evidenceCapabilities.limits,
+      });
+      const id = "1000000000000000021";
+      const source = { id: `discord:message:${id}`, revision: 0 };
+      const parent = {
+        id: "generation-parent:output",
+        revision: 0,
+        text: "raw reply",
+      };
+      const child = {
+        id: "generation-child:output",
+        revision: 0,
+        text: "derived from the old view",
+      };
+      app.store.captureGeneration("", mapper.bank, parent, true, mapper.epoch);
+      app.store.captureGeneration("", mapper.bank, child, true, mapper.epoch, [
+        source,
+      ]);
+      const prior = {
+        ...toConversationMessage(app.message, BOT),
+        id,
+        authorId: kind === "blank human" ? HUMAN : BOT,
+        authorIsBot: kind !== "blank human",
+        content: "old",
+        source: { text: "old", revision: 0 },
+      };
+      if (kind === "changed display") mapper.associate(prior, parent);
+      const edited = {
+        ...prior,
+        content: kind === "blank human" ? "" : "edited",
+        source: { text: kind === "blank human" ? "" : "edited", revision: 1 },
+      };
+      const transcript = buildTranscript([edited], BOT);
+      formatTranscriptMessages(
+        transcript,
+        CURRENT,
+        (block) => mapper.humanSource(block),
+        (block) => mapper.assistantBody(block),
+      );
+      expect(app.store.generation("", mapper.bank, child.id)).toBeUndefined();
+    },
+  );
+  // Proves restored immutable dependencies cannot replace the latest visible assistant question as an indirect answer's context.
+  it("binds an indirect answer to visible dialogue after restoring older dependencies", async () => {
+    const app = await runtime(false, true);
+    const remora = buildRemoraRequest(app.config, app.message);
+    if (!remora) throw new Error("Missing scope");
+    const mapper = new ConversationObservations({
+      store: app.store,
+      remora,
+      message: app.message,
+      botUserId: BOT,
+      startId: "1000000000000000000",
+      limits: evidenceCapabilities.limits,
+    });
+    const older = {
+      id: "generation-older:output",
+      revision: 0,
+      text: "Do you like tea?",
+    };
+    const latest = {
+      id: "generation-latest:output",
+      revision: 0,
+      text: "Do you like coffee?",
+    };
+    for (const source of [older, latest])
+      app.store.captureGeneration("", mapper.bank, source, true, mapper.epoch);
+    const historical: LlmMessage = {
+      role: "user",
+      content: "a transformed old answer",
+      observationSources: [
+        {
+          source: {
+            id: "discord:message:1000000000000000001",
+            revision: 0,
+            origin: "unattributed_input",
+          },
+          start: 0,
+          end: 24,
+          context: [older.id],
+        },
+      ],
+      observationParents: [older],
+    };
+    mapper.request([historical]);
+    const visible: LlmMessage = {
+      role: "assistant",
+      content: latest.text,
+      observationReferences: [
+        {
+          source: latest,
+          start: 0,
+          end: latest.text.length,
+          source_start: 0,
+          source_end: latest.text.length,
+        },
+      ],
+    };
+    app.message.content = "yes, coffee";
+    const batch = mapper.request([
+      { ...historical, observationParents: [] },
+      visible,
+      mapper.currentMessage(),
+    ]).observations;
+    expect(
+      batch?.inputs.find((input) => input.id === `discord:message:${CURRENT}`)
+        ?.context,
+    ).toEqual([latest.id]);
+    expect(
+      batch?.inputs.find((input) => input.id.endsWith("0001"))?.context,
+    ).toEqual([older.id]);
+  });
+  // Proves full SYSTEM/tool coverage, every raw decoder attempt and actual formatted SDK display re-entry with dependent voice-preserving lineage.
+  it("re-enters a formatted web reply through its authenticated generated parent", async () => {
+    const app = await runtime(false, true);
+    app.complete.mockRestore();
+    app.config.llmTemperature = 0;
+    app.config.remoraObservationStartId = "1000000000000000000";
+    app.config.llmMaxTokens = 256;
+    const bank = `discord:dm:${CHANNEL}`;
+    const history = [toConversationMessage(app.message, BOT)];
+    const sent: ReturnType<typeof app.packet>[] = [];
+    const originalGet = app.rest.get.getMockImplementation();
+    app.rest.get.mockImplementation(async (route, options) => {
+      const item = sent.find(
+        (item) => route === `/channels/${CHANNEL}/messages/${item.id}`,
+      );
+      return item ?? originalGet?.(route, options);
+    });
+    app.rest.post.mockImplementation(async (route, options) => {
+      if (!route.endsWith("/messages")) return undefined;
+      const item = app.packet(
+        `10000000000000000${20 + sent.length}`,
+        BOT,
+        String(
+          options?.body &&
+            typeof options.body === "object" &&
+            "content" in options.body
+            ? options.body.content
+            : "",
+        ),
+      );
+      sent.push(item);
+      return item;
+    });
+    const bodies: Array<{
+      messages: { role: string; content: string }[];
+      remora: { observations: ObservationBatch };
+    }> = [];
+    const outputs = [
+      call("web_fetch", { url: "https://example.com/" }),
+      "😀 the page is clear",
+      "yes, that page",
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/capabilities"))
+          return Response.json(evidenceCapabilities);
+        const body = JSON.parse(String(init?.body));
+        bodies.push(body);
+        const observations: ObservationBatch = body.remora.observations;
+        expect(body.remora.turn).toBeUndefined();
+        for (const [index, message] of body.messages.entries()) {
+          const occupied = [
+            ...observations.inputs.flatMap((input) => input.views),
+            ...(observations.references ?? []).flatMap(
+              (reference) => reference.views,
+            ),
+          ].filter((view) => view.message_index === index);
+          expect(
+            Array.from(message.content as string).every(
+              (char, offset) =>
+                !char.trim() ||
+                occupied.some(
+                  (view) => offset >= view.start && offset < view.end,
+                ),
+            ),
+          ).toBe(true);
+          expect(message.observationSources).toBeUndefined();
+          expect(message.observationReferences).toBeUndefined();
+          expect(message.observationUnknown).toBeUndefined();
+          expect(message.observationParents).toBeUndefined();
+        }
+        const receipt = {
+          saved: [],
+          superseded: [],
+          status: "not_admitted",
+          replayed: false,
+          admission_identity: "a".repeat(64),
+        };
+        const attempt = `generation-${String(bodies.length).repeat(32)}`;
+        return Response.json({
+          choices: [{ message: { content: outputs[bodies.length - 1] } }],
+          remora: {
+            version: 1,
+            backend: "transformers",
+            read_banks: [bank],
+            selected: [],
+            writes: null,
+            cache: {
+              requested: true,
+              reused_tokens: 0,
+              evaluated_tokens: 100,
+              invalidated: null,
+            },
+            observations: {
+              inputs: [
+                ...observations.inputs.map((input) => ({
+                  source_id: input.id,
+                  revision: input.revision,
+                  outcome: "rejected",
+                  receipt,
+                })),
+                ...(observations.references ?? []).map((input) => ({
+                  source_id: input.id,
+                  revision: input.revision,
+                  outcome: "referenced",
+                  receipt: { ...receipt, replayed: true },
+                })),
+              ],
+              generated: [
+                {
+                  source_id: `${attempt}:output`,
+                  revision: 0,
+                  outcome: "rejected",
+                  receipt,
+                },
+              ],
+              attempt_id: attempt,
+              input_replayed: false,
+            },
+          },
+        });
+      }),
+    );
+    await app.llm.initializeRemora();
+    await app.run(history);
+    expect(bodies).toHaveLength(2);
+    expect(
+      bodies[0]?.remora.observations.inputs.some(
+        (input) =>
+          input.origin === "system_input" &&
+          input.views.some((view) => view.message_index === 0),
+      ),
+    ).toBe(true);
+    expect(sent[0]?.content).toContain("Sources:");
+    expect(sent[0]?.content).not.toContain("😀");
+    const adapter = new DiscordJsAdapter(app.client, BOT);
+    const displayed = await adapter.fetchMessage({
+      channelId: CHANNEL,
+      messageId: sent[0]?.id ?? "",
+    });
+    app.message.id = "1000000000000000030";
+    app.message.content = "what did that page say?";
+    await app.run([
+      ...history,
+      displayed,
+      toConversationMessage(app.message, BOT),
+    ]);
+    expect(bodies).toHaveLength(3);
+    const third = bodies[2]?.remora.observations;
+    const derived = third?.inputs.find(
+      (input) => input.id === `discord:message:${displayed.id}`,
+    );
+    expect(derived).toMatchObject({
+      origin: "unattributed_input",
+      context: [`generation-${"2".repeat(32)}:output`],
+    });
+    expect(derived?.actor).toBeUndefined();
+    expect(third?.references).toContainEqual({
+      id: `generation-${"2".repeat(32)}:output`,
+      revision: 0,
+      text: outputs[1],
+      views: [],
+    });
+  });
+
   // Proves the real responder negotiates evidence, binds raw SDK text and web excerpts, and never sends caller metadata or legacy writes over HTTP.
   it("observes raw human and web sources through the real tool continuation", async () => {
     const app = await runtime(false, true);
@@ -452,8 +1025,14 @@ describe("complete harness with the actual Discord SDK", () => {
       mapper.humanSource(block),
     );
     const first = mapper.request([...history, mapper.currentMessage()]);
-    expect(first.observations?.inputs).toHaveLength(2);
-    const olderInput = first.observations?.inputs[0];
+    expect(
+      first.observations?.inputs.filter(
+        (input) => input.origin === "human_input",
+      ),
+    ).toHaveLength(2);
+    const olderInput = first.observations?.inputs.find(
+      (input) => input.id === `discord:message:${older.id}`,
+    );
     const view = olderInput?.views[0];
     if (!view) throw new Error("Missing source view");
     expect(
@@ -464,32 +1043,60 @@ describe("complete harness with the actual Discord SDK", () => {
         view.encoding,
       ),
     ).toBe(raw);
-    expect(first.observations?.inputs[1]?.context).toEqual([
-      `discord:message:${older.id}`,
-    ]);
+    expect(
+      first.observations?.inputs.find(
+        (input) => input.id === `discord:message:${CURRENT}`,
+      )?.context,
+    ).toEqual([`discord:message:${older.id}`]);
     const rerendered = formatTranscriptMessages(
       buildTranscript([{ ...older, authorName: "renamed 😀" }, current], BOT),
       CURRENT,
       (block) => mapper.humanSource(block),
     );
+    const renamed = mapper.request([...rerendered, mapper.currentMessage()]);
     expect(
-      mapper.request([...rerendered, mapper.currentMessage()]).observations?.id,
+      renamed.observations?.inputs
+        .filter((input) => input.origin === "human_input")
+        .map(({ views: _, ...input }) => input),
+    ).toEqual(
+      first.observations?.inputs
+        .filter((input) => input.origin === "human_input")
+        .map(({ views: _, ...input }) => input),
+    );
+    expect(
+      mapper.request([
+        { role: "user", content: "\n" },
+        ...history,
+        mapper.currentMessage(),
+      ]).observations?.id,
     ).toBe(first.observations?.id);
     expect(
       mapper.request([mapper.currentMessage()]).observations?.inputs,
     ).toEqual([]);
+    const revised = new ConversationObservations({
+      store: app.store,
+      remora,
+      message: app.message,
+      botUserId: BOT,
+      startId: "1000000000000000000",
+      limits: evidenceCapabilities.limits,
+    });
     const edited = formatTranscriptMessages(
       buildTranscript(
         [{ ...older, source: { text: "changed", revision: 11 } }, current],
         BOT,
       ),
       CURRENT,
-      (block) => mapper.humanSource(block),
+      (block) => revised.humanSource(block),
+    );
+    expect(() => mapper.request([...edited, mapper.currentMessage()])).toThrow(
+      "source revision",
     );
     expect(
-      mapper
-        .request([...edited, mapper.currentMessage()])
-        .observations?.inputs.map((input) => input.id),
+      revised
+        .request([...edited, revised.currentMessage()])
+        .observations?.inputs.filter((input) => input.origin === "human_input")
+        .map((input) => input.id),
     ).toEqual([`discord:message:${older.id}`]);
   });
 
@@ -522,8 +1129,11 @@ describe("complete harness with the actual Discord SDK", () => {
       (block) => second.humanSource(block),
     );
     expect(
-      second.request([...secondHistory, second.currentMessage()]).observations
-        ?.inputs[1]?.context,
+      second
+        .request([...secondHistory, second.currentMessage()])
+        .observations?.inputs.find(
+          (input) => input.id === `discord:message:${app.message.id}`,
+        )?.context,
     ).toEqual([first.observations?.inputs[0]?.id]);
     const middle = toConversationMessage(app.message, BOT);
     // A rollover removes the first turn, so the second cannot replay its exact original context.
@@ -540,10 +1150,12 @@ describe("complete harness with the actual Discord SDK", () => {
     );
     const result = third.request([...recentHistory, third.currentMessage()]);
     expect(
-      result.observations?.inputs.map((input) => ({
-        id: input.id,
-        context: input.context,
-      })),
+      result.observations?.inputs
+        .filter((input) => input.origin === "human_input")
+        .map((input) => ({
+          id: input.id,
+          context: input.context,
+        })),
     ).toEqual([{ id: `discord:message:${app.message.id}`, context: [] }]);
   });
 
@@ -622,11 +1234,13 @@ describe("complete harness with the actual Discord SDK", () => {
     const rendered = toolResultMessage(results, "prefix😀\n", "turn-1");
     expect(rendered.content).toBe(`prefix😀\n${JSON.stringify(results)}`);
     const segments = rendered.observationSources ?? [];
-    expect(segments).toHaveLength(4);
-    expect(new Set(segments.map(({ source }) => source.id)).size).toBe(4);
+    expect(segments).toHaveLength(6);
+    expect(new Set(segments.map(({ source }) => source.id)).size).toBe(6);
     expect(segments.map(({ source }) => source.url)).toEqual([
       "https://one.test/",
       "https://one.test/",
+      "https://one.test/",
+      "https://two.test/",
       "https://two.test/",
       "https://two.test/",
     ]);
@@ -637,7 +1251,14 @@ describe("complete harness with the actual Discord SDK", () => {
           segment.encoding,
         ),
       ),
-    ).toEqual(["same", "same😀", "same", "same😀"]);
+    ).toEqual([
+      "same",
+      "same😀",
+      "https://one.test/",
+      "same",
+      "same😀",
+      "https://two.test/",
+    ]);
   });
 
   // Proves an opted-in shared conversation uses channel/server recall, never private extras, with source-bound roles and tools intact.

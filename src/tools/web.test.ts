@@ -5,6 +5,34 @@ const publicDNS = async () => [{ address: "93.184.216.34", family: 4 }];
 afterEach(() => vi.useRealTimers());
 
 describe("public web reading", () => {
+  // Proves an in-flight page cannot refill forgotten cached text after a privacy fence.
+  it("discards a page completed after cache invalidation", async () => {
+    let release = () => {};
+    let started = () => {};
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const loading = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const request = vi.fn(async () => {
+      started();
+      await waiting;
+      return {
+        status: 200,
+        headers: { "content-type": "text/plain" },
+        body: "private page",
+      };
+    });
+    const web = new WebClient({ resolve: publicDNS, request });
+    const pending = web.fetch("https://example.com/page");
+    await loading;
+    web.invalidate();
+    release();
+    await expect(pending).rejects.toThrow("memory fence");
+    await web.fetch("https://example.com/page");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
   // Proves a cooldown established during another request's DNS lookup is checked before its HTTP send.
   it("rechecks cooldowns after asynchronous DNS", async () => {
     let release = () => {};

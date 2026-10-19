@@ -1,11 +1,13 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HarnessStore } from "./store.js";
 
 const resources: Array<() => void> = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const close of resources.splice(0).reverse()) close();
 });
 function store(path = ":memory:") {
@@ -15,6 +17,155 @@ function store(path = ":memory:") {
 }
 
 describe("text workspace and durable actions", () => {
+  // Proves a second process cannot commit forgetting between a fence check and a plaintext write.
+  it.each(["generation", "display", "action"] as const)(
+    "serializes %s plaintext against a concurrent privacy fence",
+    async (kind) => {
+      const dir = mkdtempSync(join(tmpdir(), "patch-epoch-"));
+      resources.push(() => rmSync(dir, { recursive: true, force: true }));
+      const path = join(dir, "harness.sqlite");
+      const first = store(path);
+      const second = store(path);
+      const raw = {
+        id: "generation-original:output",
+        revision: 0,
+        text: "private decoder output",
+      };
+      first.captureGeneration("principal", "bank", raw, true, 0);
+      const match =
+        kind === "generation"
+          ? "INSERT OR IGNORE INTO harness_generations"
+          : kind === "display"
+            ? "INSERT OR IGNORE INTO harness_displays"
+            : "UPDATE harness_calls SET status = 'complete'";
+      const prepare = DatabaseSync.prototype.prepare;
+      let attempted = false;
+      let deferred = false;
+      vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
+        if (!attempted && sql.includes(match)) {
+          attempted = true;
+          try {
+            second.invalidateConversationData();
+          } catch (error) {
+            if (!(error instanceof Error) || !error.message.includes("locked"))
+              throw error;
+            deferred = true;
+          }
+        }
+        return prepare.call(this, sql);
+      });
+      if (kind === "generation")
+        first.captureGeneration(
+          "principal",
+          "bank",
+          { ...raw, id: "generation-next:output" },
+          true,
+          0,
+        );
+      if (kind === "display")
+        first.associateDisplay(
+          "principal",
+          "bank",
+          "message",
+          0,
+          "private formatted output",
+          raw,
+          0,
+        );
+      if (kind === "action")
+        await first.mutate("bank", "message:0:0:action", "args", async () => ({
+          text: "private tool result",
+        }));
+      expect(attempted).toBe(true);
+      if (deferred) second.invalidateConversationData();
+      const inspect = new DatabaseSync(path, { readOnly: true });
+      resources.push(() => inspect.close());
+      expect(
+        inspect
+          .prepare("SELECT raw FROM harness_generations WHERE raw IS NOT NULL")
+          .all(),
+      ).toEqual([]);
+      expect(
+        inspect
+          .prepare("SELECT body FROM harness_displays WHERE body IS NOT NULL")
+          .all(),
+      ).toEqual([]);
+      expect(
+        inspect
+          .prepare("SELECT result FROM harness_calls WHERE result IS NOT NULL")
+          .all(),
+      ).toEqual([]);
+    },
+  );
+
+  // Proves edits and forgetting retire raw generations, transformed displays and late attempts without retry resurrection.
+  it("persists redaction, revision floors and immutable generation ancestry", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "patch-lineage-"));
+    resources.push(() => rmSync(dir, { recursive: true, force: true }));
+    const path = join(dir, "harness.sqlite");
+    const first = new HarnessStore(path);
+    const original = {
+      id: "generation-first:output",
+      revision: 0,
+      text: "raw 😀",
+    };
+    const child = {
+      id: "generation-second:output",
+      revision: 0,
+      text: "a later reply",
+    };
+    first.advanceObservationRevision("p", "bank", "human", 0);
+    first.captureGeneration("p", "bank", original, true, 0, [
+      { id: "human", revision: 0 },
+    ]);
+    first.captureGeneration("p", "bank", child, true, 0, [
+      { id: original.id, revision: 0, reference: true },
+    ]);
+    first.associateDisplay("p", "bank", "discord", 0, "formatted", child, 0);
+    first.close();
+    const next = store(path);
+    expect(next.displayParent("p", "bank", "discord", 0, "formatted")).toEqual(
+      child,
+    );
+    expect(
+      next.displayParent("other", "bank", "discord", 0, "formatted"),
+    ).toBeUndefined();
+    next.advanceObservationRevision("p", "bank", "human", 1);
+    expect(next.generation("p", "bank", original.id)).toBeUndefined();
+    expect(
+      next.displayParent("p", "bank", "discord", 0, "formatted"),
+    ).toBeUndefined();
+    expect(
+      next.captureGeneration("p", "bank", original, true, 0, [
+        { id: "human", revision: 0 },
+      ]),
+    ).toBeUndefined();
+    const late = next.mutate("bank", "source:1:0:test", "{}", async () => {
+      next.invalidateConversationData();
+      return { text: "late secret" };
+    });
+    await expect(late).rejects.toThrow("memory fence");
+    expect(
+      next.captureGeneration("p", "bank", child, true, 0, [
+        { id: original.id, revision: 0, reference: true },
+      ]),
+    ).toBeUndefined();
+    const inspect = new DatabaseSync(path, { readOnly: true });
+    resources.push(() => inspect.close());
+    expect(
+      inspect
+        .prepare("SELECT raw FROM harness_generations WHERE raw IS NOT NULL")
+        .all(),
+    ).toEqual([]);
+    expect(
+      inspect
+        .prepare("SELECT body FROM harness_displays WHERE body IS NOT NULL")
+        .all(),
+    ).toEqual([]);
+  });
   // Proves restarts retain cutover and exact context identities, while source conflicts and boundary rewinds fail locally.
   it("persists immutable observation boundaries and context manifests", () => {
     const dir = mkdtempSync(join(tmpdir(), "patch-observations-"));
