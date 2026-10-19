@@ -50,6 +50,7 @@ import {
   type ResponseTranscriptMode,
   buildResponseContextBudget,
   buildResponseMessages,
+  buildResponseSystemPrompt,
 } from "../prompts/response.js";
 import {
   OUTPUT_INSTRUCTIONS,
@@ -286,14 +287,30 @@ export async function respond(options: RespondOptions): Promise<void> {
           ? { assertCurrent: () => observations.assertCurrent() }
           : {}),
         generate: async (messages, continuation, remainingCalls) => {
+          // Keep the full persona. At exhaustion remove only the tool advertisement.
+          const requestMessages: LlmMessage[] = continuation
+            ? [
+                {
+                  role: "system",
+                  content: buildResponseSystemPrompt(
+                    getResponseTranscriptMode(message),
+                    remainingCalls
+                      ? availableActionsPrompt
+                      : OUTPUT_INSTRUCTIONS,
+                    "before-tools",
+                  ),
+                },
+                ...messages.slice(1),
+              ]
+            : messages;
           const requestRemora = observations
-            ? observations.request(messages)
+            ? observations.request(requestMessages)
             : continuation && remora
               ? readOnlyRemora(remora)
               : remora;
           const result = await generateResponse({
             llm,
-            promptMessages: messages,
+            promptMessages: requestMessages,
             signal: controller.signal,
             enableThinking: config.llmEnableThinking,
             thinkingMaxTokens: config.llmThinkingMaxTokens,

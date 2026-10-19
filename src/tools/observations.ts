@@ -23,6 +23,7 @@ export function toolResultMessage(
   prefix: string,
   sourcePrefix: string,
   generations: readonly (CompletedGeneration | undefined)[] = [],
+  resultOffset = 0,
 ): LlmMessage {
   const bindings = new Map<string, Binding>();
   const unknownPaths = new Set<string>();
@@ -41,6 +42,8 @@ export function toolResultMessage(
       continue;
     }
     const output = result.output;
+    const parent = generations[index];
+    if (parent) parents.push(parent);
     const add = (path: (string | number)[], text: unknown, url: unknown) => {
       if (
         typeof text !== "string" ||
@@ -49,7 +52,13 @@ export function toolResultMessage(
         !url.trim()
       )
         return;
-      const id = hash([sourcePrefix, index, result.name, url, text]);
+      const id = hash([
+        sourcePrefix,
+        resultOffset + index,
+        result.name,
+        url,
+        text,
+      ]);
       bindings.set(JSON.stringify(path), {
         source: {
           id: `patch:tool:${id}`,
@@ -58,6 +67,7 @@ export function toolResultMessage(
           tool: result.name,
           url,
         },
+        ...(parent ? { context: [parent.id] } : {}),
       });
     };
     if (result.name === "web_fetch")
