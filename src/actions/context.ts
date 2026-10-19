@@ -46,6 +46,8 @@ export type ActionContext = {
   settings: SettingsStore;
   contextStore: ConversationContextStore;
   harness?: { store: HarnessStore; web: WebClient };
+  /** Caller-selected recall scope for this turn; model arguments cannot widen it. */
+  readBanks?: readonly string[];
   toolScope?: {
     messageIds: ReadonlySet<string>;
     signal: AbortSignal;

@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Remora active memory recall",
+  "$defs": {
+    "bank": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "[^\\s\uFEFF]"
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["read_banks", "query"],
+      "properties": {
+        "read_banks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/bank" }
+        },
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "[^\\s\uFEFF]",
+          "description": "Standalone semantic query, exact UTF-8. Also limited to 256 tokenizer tokens including special tokens. Names/IDs do not establish identity."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 10
+        },
+        "min_score": {
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1,
+          "default": -1
+        }
+      }
+    },
+    "hit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bank",
+        "id",
+        "text",
+        "kind",
+        "source",
+        "subjects",
+        "source_actor",
+        "score"
+      ],
+      "properties": {
+        "bank": { "$ref": "#/$defs/bank" },
+        "id": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "text": {
+          "type": "string",
+          "description": "Full stored statement, verbatim. First-person text retains its original voice."
+        },
+        "kind": { "const": "fact" },
+        "source": { "enum": ["user", "confirmed", "self"] },
+        "subjects": {
+          "$ref": "remora-contract-v1.json#/definitions/management_memory/properties/subjects"
+        },
+        "source_actor": {
+          "description": "Original source voice, not a subject assertion or a shared-identity link. Missing/conflicting/legacy assistant attribution is null, never the current caller.",
+          "anyOf": [
+            { "type": "null" },
+            {
+              "$ref": "remora-contract-v1.json#/definitions/management_entity_ref"
+            }
+          ]
+        },
+        "score": { "type": "number", "minimum": -1, "maximum": 1 }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "object",
+        "version",
+        "query",
+        "read_banks",
+        "data",
+        "revisions"
+      ],
+      "properties": {
+        "object": { "const": "remora.memory.search" },
+        "version": { "const": 1 },
+        "query": { "$ref": "#/$defs/request/properties/query" },
+        "read_banks": { "$ref": "#/$defs/request/properties/read_banks" },
+        "data": {
+          "type": "array",
+          "maxItems": 50,
+          "items": { "$ref": "#/$defs/hit" }
+        },
+        "revisions": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 8,
+          "propertyNames": { "$ref": "#/$defs/bank" },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    }
+  },
+  "examples": {
+    "request": {
+      "read_banks": ["place:example"],
+      "query": "dog names and ownership",
+      "limit": 5
+    },
+    "response": {
+      "object": "remora.memory.search",
+      "version": 1,
+      "query": "dog names and ownership",
+      "read_banks": ["place:example"],
+      "data": [
+        {
+          "bank": "place:example",
+          "id": 2,
+          "text": "My dog's name is Aster.",
+          "kind": "fact",
+          "source": "user",
+          "subjects": {},
+          "source_actor": {
+            "principal": "example",
+            "actor": {
+              "bank": "place:example",
+              "role": "human",
+              "id": "person:7"
+            }
+          },
+          "score": 0.82
+        }
+      ],
+      "revisions": {
+        "place:example": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    }
+  },
+  "errors": {
+    "400": [
+      "unsupported_feature",
+      "invalid_parameter",
+      "invalid_json",
+      "search_query_too_long"
+    ],
+    "401": ["invalid_api_key"],
+    "403": ["bank_forbidden"],
+    "409": [
+      "policy_changed",
+      "request_cancelled",
+      "memory_search_changed",
+      "memory_search_unencodable",
+      "memory_id_out_of_range"
+    ],
+    "413": ["request_too_large"],
+    "500": ["memory_search_error"]
+  }
+}

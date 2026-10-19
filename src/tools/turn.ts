@@ -13,6 +13,7 @@ import type { WebSource } from "./web.js";
 const READ_ONLY = new Set([
   "web_search",
   "web_fetch",
+  "memory_search",
   "scratch_list",
   "scratch_read",
   "channel_assets",

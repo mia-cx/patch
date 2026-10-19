@@ -130,6 +130,7 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     entity_identity: Schema.optional(Schema.Boolean),
     harness_names: Schema.optional(Schema.Boolean),
     memory_management: Schema.optional(Schema.Boolean),
+    memory_search: Schema.optional(Schema.Boolean),
     streaming: Schema.Boolean,
     tools: Schema.Boolean,
     thinking: Schema.Boolean,
@@ -165,6 +166,18 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     max_memory_request_id_chars: Schema.optional(
       PositiveInteger.check(Schema.isLessThanOrEqualTo(256)),
     ),
+    max_search_results: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(50)),
+    ),
+    max_search_banks: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(8)),
+    ),
+    max_search_query_chars: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(2048)),
+    ),
+    max_search_query_tokens: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(256)),
+    ),
   }),
 });
 
@@ -180,5 +193,13 @@ export function parseRemoraCapabilities(value: unknown) {
       capabilities.limits.max_memory_request_id_chars === undefined)
   )
     throw new Error("Remora memory management requires all three limits");
+  if (
+    capabilities.features.memory_search &&
+    (capabilities.limits.max_search_results === undefined ||
+      capabilities.limits.max_search_banks === undefined ||
+      capabilities.limits.max_search_query_chars === undefined ||
+      capabilities.limits.max_search_query_tokens === undefined)
+  )
+    throw new Error("Remora memory search requires all four limits");
   return capabilities;
 }

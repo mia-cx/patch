@@ -103,9 +103,12 @@ export async function respond(options: RespondOptions): Promise<void> {
       "response generation started",
     );
     const remora = buildRemoraRequest(config, message);
+    const scopedActionContext = actionContext
+      ? { ...actionContext, readBanks: remora?.read_banks ?? [] }
+      : undefined;
     const availableActions = await buildAvailableActions({
       message,
-      actionContext,
+      actionContext: scopedActionContext,
       actionRegistry,
     });
     const mode = config.llmToolMode ?? "auto";
@@ -207,7 +210,7 @@ export async function respond(options: RespondOptions): Promise<void> {
       const generated = await runToolTurn({
         messages: promptMessages,
         message,
-        ...(actionContext ? { context: actionContext } : {}),
+        ...(scopedActionContext ? { context: scopedActionContext } : {}),
         ...(actionRegistry ? { registry: actionRegistry } : {}),
         visibleMessageIds: new Set([
           message.id,

@@ -24,6 +24,7 @@ const NO_MENTIONS = { parse: [] as never[], repliedUser: false };
 const CONTINUATION_TOOLS = new Set([
   "web_search",
   "web_fetch",
+  "memory_search",
   "scratch_list",
   "scratch_read",
   "scratch_write",
@@ -48,7 +49,10 @@ export function registerHarnessActions(registry: ActionRegistry) {
       },
       channelId: string,
     ) => Promise<unknown>,
-    guildOnly = false,
+    options: {
+      guildOnly?: boolean;
+      available?: (context: ActionContext) => boolean | Promise<boolean>;
+    } = {},
   ) {
     const input = actionInput(schema);
     registry.registerAction({
@@ -64,11 +68,16 @@ export function registerHarnessActions(registry: ActionRegistry) {
           continueAfter: CONTINUATION_TOOLS.has(name),
         }),
       ],
-      availability: (context) => {
+      availability: async (context) => {
         if (!context.harness)
           return { available: false, reason: "harness tools unavailable" };
+        if (options.available && !(await options.available(context)))
+          return {
+            available: false,
+            reason: "memory search unavailable in this conversation",
+          };
         if (
-          guildOnly &&
+          options.guildOnly &&
           context.channel &&
           "isDMBased" in context.channel &&
           typeof context.channel.isDMBased === "function" &&
@@ -86,7 +95,7 @@ export function registerHarnessActions(registry: ActionRegistry) {
           invocation.channelId !== context.config.discordTrialDmChannelId
         )
           throw new Error("Outside the scoped trial conversation");
-        if (guildOnly && !invocation.guildId)
+        if (options.guildOnly && !invocation.guildId)
           throw new Error("This action requires a server channel");
         context.toolScope.signal.throwIfAborted();
         return execute(
@@ -169,7 +178,7 @@ export function registerHarnessActions(registry: ActionRegistry) {
       }
       return { thread_id: thread.id, url: thread.url };
     },
-    true,
+    { guildOnly: true },
   );
   register(
     "join_thread",
@@ -191,7 +200,7 @@ export function registerHarnessActions(registry: ActionRegistry) {
       await thread.join();
       return { thread_id: thread.id, joined: true };
     },
-    true,
+    { guildOnly: true },
   );
   register(
     "create_poll",
@@ -341,6 +350,53 @@ export function registerHarnessActions(registry: ActionRegistry) {
     Schema.Struct({ id: Schema.String }),
     async (input, context, channelId) =>
       context.harness?.store.cancel(channelId, input.id),
+  );
+  register(
+    "memory_search",
+    "Search selected memory banks. Subjects differ from source_actor; null means unknown. Scores rank, not confidence.",
+    Schema.Struct({
+      query: Schema.String,
+      limit: Schema.optional(
+        Schema.Int.check(
+          Schema.isGreaterThan(0),
+          Schema.isLessThanOrEqualTo(50),
+        ),
+      ),
+      min_score: Schema.optional(
+        Schema.Number.check(
+          Schema.isGreaterThanOrEqualTo(-1),
+          Schema.isLessThanOrEqualTo(1),
+        ),
+      ),
+    }),
+    async (input, context) => {
+      if (!context.readBanks?.length)
+        throw new Error("No memory banks selected for this conversation");
+      const limits = await context.memory.getSearchLimits();
+      const { data, ...snapshot } = await context.memory.search(
+        {
+          ...input,
+          read_banks: context.readBanks,
+          limit: input.limit ?? Math.min(5, limits.results),
+        },
+        context.toolScope.signal,
+      );
+      // Attribution precedes text, so bounded excerpts retain the source's perspective.
+      return {
+        ...snapshot,
+        data: data.map(({ text, ...metadata }) => ({ ...metadata, text })),
+      };
+    },
+    {
+      available: async (context) => {
+        if (!context.memory?.supportsSearch || !context.readBanks?.length)
+          return false;
+        return (
+          context.readBanks.length <=
+          (await context.memory.getSearchLimits()).banks
+        );
+      },
+    },
   );
   register(
     "web_search",

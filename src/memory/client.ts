@@ -57,6 +57,41 @@ const MemoryPage = Schema.Struct({
   data: Schema.Array(Memory).check(Schema.isMaxLength(100)),
   next_cursor: Schema.NullOr(Cursor),
 });
+const SearchScore = Schema.Number.check(
+  Schema.isGreaterThanOrEqualTo(-1),
+  Schema.isLessThanOrEqualTo(1),
+);
+const SearchRequest = Schema.Struct({
+  read_banks: Schema.Array(Bank).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(8),
+    Schema.isUnique(),
+  ),
+  query: Schema.String.check(
+    Schema.isPattern(/\S/u),
+    Schema.makeFilter((value) => Array.from(value).length <= 2048),
+  ),
+  limit: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(50)),
+  ),
+  min_score: Schema.optional(SearchScore),
+});
+const SearchResponse = Schema.Struct({
+  object: Schema.Literal("remora.memory.search"),
+  version: Schema.Literal(1),
+  query: SearchRequest.fields.query,
+  read_banks: SearchRequest.fields.read_banks,
+  data: Schema.Array(
+    Schema.Struct({
+      ...Memory.fields,
+      bank: Bank,
+      kind: Schema.Literal("fact"),
+      source_actor: Schema.NullOr(EntityRef),
+      score: SearchScore,
+    }),
+  ).check(Schema.isMaxLength(50)),
+  revisions: Schema.Record(Bank, Revision),
+});
 const MutationReceipt = Schema.Struct({
   object: Schema.Literal("remora.memory.mutation"),
   version: Schema.Literal(1),
@@ -89,10 +124,21 @@ const decodePage = Schema.decodeUnknownSync(MemoryPage, {
 const decodeReceipt = Schema.decodeUnknownSync(MutationReceipt, {
   onExcessProperty: "error",
 });
+const decodeSearch = Schema.decodeUnknownSync(SearchResponse, {
+  onExcessProperty: "error",
+});
 
 export type MemoryRecord = typeof Memory.Type;
 export type MemorySnapshot = typeof MemoryPage.Type;
 export type MemoryMutation = typeof MutationReceipt.Type;
+export type MemorySearch = typeof SearchResponse.Type;
+export type MemorySearchRequest = typeof SearchRequest.Type;
+export type MemorySearchLimits = {
+  results: number;
+  banks: number;
+  queryChars: number;
+  queryTokens: number;
+};
 export type MemoryLimits = {
   pageSize: number;
   forgetIds: number;
@@ -116,10 +162,11 @@ export class MemoryManagementError extends Error {
   }
 }
 
-/** Deterministic bank administration. This client never calls chat completion or infers a grant. */
+/** Bank administration and explicit recall. Never calls chat completion or infers a grant. */
 export class RemoraMemoryClient {
   private initialized = false;
   private limits: MemoryLimits | undefined;
+  private searchLimits: MemorySearchLimits | undefined;
 
   constructor(private readonly config: ClientConfig) {}
 
@@ -127,6 +174,7 @@ export class RemoraMemoryClient {
   async initialize(capabilities?: ReturnType<typeof parseRemoraCapabilities>) {
     this.initialized = false;
     this.limits = undefined;
+    this.searchLimits = undefined;
     const caps =
       capabilities ??
       parseRemoraCapabilities(await this.request("/remora/capabilities"));
@@ -148,6 +196,27 @@ export class RemoraMemoryClient {
         requestIdChars: max_memory_request_id_chars,
       };
     }
+    if (caps.features.memory_search) {
+      const {
+        max_search_results,
+        max_search_banks,
+        max_search_query_chars,
+        max_search_query_tokens,
+      } = caps.limits;
+      if (
+        max_search_results === undefined ||
+        max_search_banks === undefined ||
+        max_search_query_chars === undefined ||
+        max_search_query_tokens === undefined
+      )
+        throw new Error("Remora memory search requires all four limits");
+      this.searchLimits = {
+        results: max_search_results,
+        banks: max_search_banks,
+        queryChars: max_search_query_chars,
+        queryTokens: max_search_query_tokens,
+      };
+    }
     this.initialized = true;
     return caps;
   }
@@ -157,6 +226,79 @@ export class RemoraMemoryClient {
     if (!this.initialized) await this.initialize();
     if (!this.limits) throw new MemoryManagementError("unsupported_feature");
     return this.limits;
+  }
+
+  /** Availability without an HTTP request while assembling the model's tool catalogue. */
+  get supportsSearch() {
+    return this.searchLimits !== undefined;
+  }
+
+  /** Search has its own feature gate and does not require management/deletion support. */
+  async getSearchLimits(): Promise<MemorySearchLimits> {
+    if (!this.initialized) await this.initialize();
+    if (!this.searchLimits)
+      throw new MemoryManagementError("unsupported_feature");
+    return this.searchLimits;
+  }
+
+  /** Read ranked, bank-qualified facts. Token limits and grants remain enforced by the server. */
+  async search(
+    request: MemorySearchRequest,
+    signal?: AbortSignal,
+  ): Promise<MemorySearch> {
+    const input = Schema.decodeUnknownSync(SearchRequest, {
+      onExcessProperty: "error",
+    })(request);
+    const limits = await this.getSearchLimits();
+    const limit = input.limit ?? Math.min(10, limits.results);
+    if (
+      input.read_banks.length > limits.banks ||
+      Array.from(input.query).length > limits.queryChars ||
+      limit > limits.results
+    )
+      throw new MemoryManagementError("invalid_parameter");
+    let result: MemorySearch;
+    try {
+      result = decodeSearch(
+        await this.request(
+          "/remora/memories/search",
+          { method: "POST", body: JSON.stringify({ ...input, limit }) },
+          signal,
+        ),
+      );
+    } catch (error) {
+      if (error instanceof MemoryManagementError) throw error;
+      // Decoder diagnostics can contain untrusted fact text; only expose a safe code.
+      throw new MemoryManagementError("invalid_response", 0, { cause: error });
+    }
+    const banks = [...input.read_banks].sort(compareBanks);
+    if (
+      result.query !== input.query ||
+      JSON.stringify(result.read_banks) !== JSON.stringify(banks) ||
+      JSON.stringify(Object.keys(result.revisions).sort(compareBanks)) !==
+        JSON.stringify(banks) ||
+      result.data.length > limit
+    )
+      throw new MemoryManagementError("invalid_response");
+    const seen = new Set<string>();
+    let previous: MemorySearch["data"][number] | undefined;
+    for (const hit of result.data) {
+      const key = JSON.stringify([hit.bank, hit.id]);
+      if (
+        !banks.includes(hit.bank) ||
+        seen.has(key) ||
+        hit.score < (input.min_score ?? -1) ||
+        (previous &&
+          (hit.score > previous.score ||
+            (hit.score === previous.score &&
+              (compareBanks(hit.bank, previous.bank) < 0 ||
+                (hit.bank === previous.bank && hit.id <= previous.id)))))
+      )
+        throw new MemoryManagementError("invalid_response");
+      seen.add(key);
+      previous = hit;
+    }
+    return result;
   }
 
   /** Read one authorized snapshot page; the revision can also guard a mutation. */
@@ -286,6 +428,7 @@ export class RemoraMemoryClient {
         ...(init.body ? { "Content-Type": "application/json" } : {}),
       },
       signal,
+      redirect: "error",
     });
     if (!response.ok) {
       // Non-JSON gateway errors still get a safe code; their HTML/body is never shown or logged.
@@ -298,4 +441,8 @@ export class RemoraMemoryClient {
     }
     return response.json();
   }
+}
+
+function compareBanks(left: string, right: string) {
+  return Buffer.compare(Buffer.from(left), Buffer.from(right));
 }

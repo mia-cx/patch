@@ -701,6 +701,9 @@
           },
           "memory_management": {
             "type": "boolean"
+          },
+          "memory_search": {
+            "type": "boolean"
           }
         }
       },
@@ -764,6 +767,26 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 256
+          },
+          "max_search_results": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "max_search_banks": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8
+          },
+          "max_search_query_chars": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2048
+          },
+          "max_search_query_tokens": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 256
           }
         }
       }
@@ -795,6 +818,30 @@
       }
     },
     "allOf": [
+      {
+        "if": {
+          "required": ["features"],
+          "properties": {
+            "features": {
+              "required": ["memory_search"],
+              "properties": { "memory_search": { "const": true } }
+            }
+          }
+        },
+        "then": {
+          "required": ["limits"],
+          "properties": {
+            "limits": {
+              "required": [
+                "max_search_results",
+                "max_search_banks",
+                "max_search_query_chars",
+                "max_search_query_tokens"
+              ]
+            }
+          }
+        }
+      },
       {
         "if": {
           "required": ["features"],
@@ -1400,6 +1447,25 @@
       }
     }
   ],
+  "memory_search": {
+    "status": "Canonical additive active-recall contract; opt-in, not a deployed capability claim.",
+    "method": "POST",
+    "path": "/v1/remora/memories/search",
+    "flag": "--memory-search",
+    "feature": "memory_search",
+    "request_schema": { "$ref": "memory-search.json#/$defs/request" },
+    "response_schema": { "$ref": "memory-search.json#/$defs/response" },
+    "contract": "memory-search.json",
+    "rules": [
+      "Require features.memory_search=true and all four positive bounded search limits. Omitted/false remains compatible with old endpoints.",
+      "Read grants and existing eligibility/ancestry/flow rules apply before encoding; one unauthorized bank rejects the entire request.",
+      "Search returns top candidates in descending cosine score under the frozen turn-retriever key projection. It bypasses automatic conversational null/top-k and turn-relevance gates. Scores are not confidence probabilities.",
+      "Only trusted active facts are returned. No tombstones, unconfirmed model rows, source text logs or unrequested-bank results. Text/subjects are verbatim persisted values. source_actor identifies original voice when unambiguous, not the subject; null never means current caller.",
+      "No chat generation, extraction, source receipts, migrations, persistent cache writes, or dreaming. Searches do use the shared encoder and model lock. Permissions and read snapshots are rechecked before results leave the service.",
+      "Ties sort by exact bank then numeric ID. Query is exact UTF-8, bounded by characters and tokenizer tokens, never truncated. min_score is an inclusive cosine floor, default -1. No-match is an empty data array.",
+      "Returned per-bank revisions match management listing and may be used for an explicit management mutation. They are snapshots, not grants; changes require another search/list. The optional stdio MCP bridge exposes read-only search/list only within operator-configured banks."
+    ]
+  },
   "memory_management": {
     "status": "Canonical additive management contract. Optional feature negotiation is required; this fixture makes no running-backend capability claim.",
     "cli": {
