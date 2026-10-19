@@ -371,6 +371,101 @@ describe("Patch's Protocord integration", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  // Proves short external quotations expose both main/context provenance and a complete source export.
+  it("preserves external provenance even when the evidence fits inline", async () => {
+    const app = await runtime(false);
+    const bank = `discord:guild:${GUILD}`;
+    await app.context.memory.initialize(
+      parseRemoraCapabilities(evidenceCapabilities),
+    );
+    const seed = makeEvidenceRecord(bank);
+    const record = {
+      ...seed,
+      source: {
+        ...seed.source,
+        origin: "external_observation",
+        actor: null,
+        tool: "web_fetch",
+        url: "https://page.test/release",
+      },
+      context: [
+        {
+          text: "context",
+          span: { start: 0, end: 7 },
+          source_digest: "b".repeat(64),
+          source: {
+            ...seed.source,
+            id: "search:1",
+            origin: "external_observation",
+            actor: null,
+            tool: "web_search",
+            url: "https://search.test/source",
+          },
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          object: "remora.evidence.list",
+          version: 1,
+          bank,
+          revision: REVISION,
+          data: [record],
+          next_cursor: null,
+        }),
+      ),
+    );
+    await app.dispatch(
+      app.command(
+        "memory",
+        [
+          {
+            type: ApplicationCommandOptionType.Subcommand,
+            name: "list",
+            options: [
+              {
+                type: ApplicationCommandOptionType.String,
+                name: "scope",
+                value: "server",
+              },
+              {
+                type: ApplicationCommandOptionType.String,
+                name: "kind",
+                value: "evidence",
+              },
+            ],
+          },
+        ],
+        MEMBER,
+        READ_ACCESS,
+      ),
+    );
+    const response = app.rest.patch.mock.calls.at(-1)?.[1];
+    expect(response?.body).toMatchObject({
+      content: expect.stringContaining("https://page.test/release"),
+      allowed_mentions: { parse: [], replied_user: false },
+    });
+    for (const field of [
+      "web\\_fetch",
+      "web\\_search",
+      "https://search.test/source",
+    ])
+      expect(response?.body).toMatchObject({
+        content: expect.stringContaining(field),
+      });
+    expect(response?.files).toHaveLength(1);
+    const file = response?.files?.[0];
+    expect(file?.name).toBe("memories.json");
+    if (!file || !Buffer.isBuffer(file.data))
+      throw new Error("Missing complete evidence export");
+    expect(JSON.parse(file.data.toString("utf8"))).toEqual({
+      statements: [],
+      evidence: [record],
+    });
+  });
+
   // Proves evidence deletion and source deletion retain Discord management gates and the principal-wide generation fence.
   it.each(["record", "source", "unauthorized_source"] as const)(
     "handles evidence %s with scoped erasure",

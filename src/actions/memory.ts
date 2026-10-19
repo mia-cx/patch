@@ -390,15 +390,24 @@ async function presentMemories(
     .join("\n\n");
   const quotations = evidence
     ?.map((record) => {
-      const voice = (source: EvidenceRecord["source"]) =>
-        source.actor?.actor
+      const provenance = (source: EvidenceRecord["source"]) => {
+        const voice = source.actor?.actor
           ? `${source.actor.actor.role} ${source.actor.actor.id}`
           : (source.actor?.entity ?? "unknown");
-      return `evidence #${record.id} (${escapeMarkdown(record.source.origin)}, source ${escapeMarkdown(voice(record.source))}; subjects unresolved)\n${escapeMarkdown(record.text)}${record.context.map((item, index) => `\ncontext ${index} (${escapeMarkdown(item.source.origin)}, source ${escapeMarkdown(voice(item.source))}): ${escapeMarkdown(item.text)}`).join("")}`;
+        return [
+          source.origin,
+          `actor ${voice}`,
+          ...(source.tool ? [`tool ${source.tool}`] : []),
+          ...(source.url ? [source.url] : []),
+        ]
+          .map((value) => escapeMarkdown(value))
+          .join("; ");
+      };
+      return `evidence #${record.id} (${provenance(record.source)}; subjects unresolved)\n${escapeMarkdown(record.text)}${record.context.map((item, index) => `\ncontext ${index} (${provenance(item.source)}): ${escapeMarkdown(item.text)}`).join("")}`;
     })
     .join("\n\n");
   const content = `${label}\n\n${[listing, quotations].filter(Boolean).join("\n\n")}`;
-  if (content.length <= MAX_INLINE_LENGTH) {
+  if (content.length <= MAX_INLINE_LENGTH && !evidence?.length) {
     await interaction.editReply({ content, allowedMentions: NO_MENTIONS });
     return;
   }
@@ -412,7 +421,11 @@ async function presentMemories(
   if (file.byteLength > interaction.attachmentSizeLimit)
     throw new MemoryManagementError("export_too_large");
   await interaction.editReply({
-    content: `${memories.length + (evidence?.length ?? 0)} saved memories. the file contains the full list and IDs.`,
+    // Evidence includes source identities, spans and supporting contexts beyond its inline summary.
+    content:
+      content.length <= MAX_INLINE_LENGTH
+        ? content
+        : `${memories.length + (evidence?.length ?? 0)} saved memories. the file contains the full list and IDs.`,
     files: [new AttachmentBuilder(file, { name: "memories.json" })],
     allowedMentions: NO_MENTIONS,
   });
