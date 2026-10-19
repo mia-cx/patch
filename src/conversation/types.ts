@@ -46,6 +46,7 @@ export type TranscriptBlock = {
   threadId?: string;
   content: string;
   source?: { text: string; revision: number };
+  displayMessages?: { id: string; text: string; revision: number }[];
   attachments: Attachment[];
 };
 

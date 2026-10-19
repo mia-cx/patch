@@ -133,7 +133,7 @@
         "views": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 64,
+          "maxItems": 512,
           "items": { "$ref": "#/$defs/view" }
         },
         "actor": { "$ref": "#/$defs/local_actor" },
@@ -194,6 +194,45 @@
       ],
       "description": "No separate text field: decode the declared views. Human/system/assistant origins must match the actual user/system/assistant message role; reasoning needs host-known channel provenance. A user role alone proves no human authorship. Context IDs must name declared sources in this batch, with exact same-bank source provenance. Recalled fact/evidence results cannot register as independent external observations."
     },
+    "reference_view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "message_index",
+        "start",
+        "end",
+        "source_start",
+        "source_end"
+      ],
+      "properties": {
+        "message_index": { "$ref": "#/$defs/index" },
+        "start": { "$ref": "#/$defs/index" },
+        "end": { "$ref": "#/$defs/index" },
+        "encoding": {
+          "enum": ["literal", "json_string", "xml_text"],
+          "default": "literal"
+        },
+        "source_start": { "$ref": "#/$defs/index", "maximum": 65535 },
+        "source_end": { "$ref": "#/$defs/id", "maximum": 65536 }
+      },
+      "description": "An exact displayed range of an existing generated source. The rendered view must decode to text[source_start:source_end], with a nonempty original span. Multiple views may expose different retained spans, including deletion transformations and splits. Current message role does not replace the original source voice. References and input views share the non-overlap and 512-view bounds. Added text needs separate provenance; a paraphrase is not an exact reference."
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "revision", "text", "views"],
+      "properties": {
+        "id": { "$ref": "#/$defs/exact_id" },
+        "revision": { "$ref": "#/$defs/index" },
+        "text": { "type": "string", "maxLength": 65536 },
+        "views": {
+          "type": "array",
+          "maxItems": 512,
+          "items": { "$ref": "#/$defs/reference_view" }
+        }
+      },
+      "description": "Requires features.source_references:true and source_reference_binding:completed_generated_scalar_views_v1. Refers only to a completed backend-generated assistant_output in observations.bank. text is the complete exact original decoder preimage, including removed directives/emoji; it is validated against the server-derived origin/actor/principal and immutable canonical digest. It is never extracted or admitted again. No caller principal/actor/origin or invented source digest is required. views:[] is context-only and must be named in a declared input's context. A transformed display may be a distinct unattributed_input with that parent; its new text is not authenticated as original assistant output, human assertion or external evidence. Added substantive content needs its actual provenance. Unknown, legacy, incomplete, revised, erased or denied ancestry rejects before decoding and again at commit. A usefulness-rejected source with complete lineage can be referenced. The entire parent source and its lineage remain dependencies even when only one span is displayed."
+    },
     "request": {
       "type": "object",
       "additionalProperties": false,
@@ -204,8 +243,14 @@
         "revision": { "$ref": "#/$defs/index" },
         "inputs": {
           "type": "array",
-          "maxItems": 62,
+          "maxItems": 128,
           "items": { "$ref": "#/$defs/input" }
+        },
+        "references": {
+          "type": "array",
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/reference" },
+          "default": []
         },
         "generated": {
           "type": "object",
@@ -220,7 +265,7 @@
           "description": "Authorize actual backend channels, with no caller-supplied source or attempt ID. The current engine disables thinking and emits no generated reasoning."
         }
       },
-      "description": "POST /v1/chat/completions at remora.observations. Requires full destination read and explicit write grants. Every actor bank must equal bank. Source IDs are unique, total views <= 64, each decoded source <= 65536 scalars, total decoded input <= 262144 scalars. Identity is authenticated principal + destination + source ID + revision; content/origin/actor/context are immutable at that revision. Bind before inference; input decisions and successful generated observations commit atomically. Failed decoding stores nothing. Source revisions retire obsolete evidence and transitive copies. Legacy completed turn sources require migration and cannot be re-extracted here."
+      "description": "POST /v1/chat/completions at remora.observations. Requires full destination read and explicit write grants. Every actor bank must equal bank. Combined inputs and references <= 128, IDs unique, total views <= 512, each complete raw source <= 65536 scalars, total complete raw preimages <= 262144 scalars. Prompt-binding capacity is independent of quotations retained per source. Identity is authenticated principal + destination + source ID + revision; content/origin/actor/context are immutable at that revision. Context IDs can name declared inputs or qualified references. Each context names the complete exact original source, subject to the existing 4096-scalar readable-excerpt bound, independent of later display transformations. Bind before inference; input decisions and successful generated observations commit atomically. Failed decoding stores nothing. Source revisions retire obsolete evidence and transitive copies, including dependencies through rejected intermediate sources. Legacy completed turn sources require migration and cannot be re-extracted here."
     },
     "recall_ref": {
       "type": "object",
@@ -330,6 +375,7 @@
             "incomplete_evidence",
             "rejected",
             "replayed",
+            "referenced",
             "recalled_dependencies",
             "untracked_dependencies",
             "generated_context_limit",
@@ -339,7 +385,9 @@
       },
       "allOf": [
         {
-          "if": { "properties": { "outcome": { "const": "replayed" } } },
+          "if": {
+            "properties": { "outcome": { "enum": ["replayed", "referenced"] } }
+          },
           "then": {
             "properties": {
               "receipt": { "properties": { "replayed": { "const": true } } }
@@ -357,7 +405,9 @@
         {
           "if": {
             "properties": {
-              "outcome": { "not": { "enum": ["admitted", "replayed"] } }
+              "outcome": {
+                "not": { "enum": ["admitted", "replayed", "referenced"] }
+              }
             }
           },
           "then": {
@@ -377,7 +427,7 @@
       "properties": {
         "inputs": {
           "type": "array",
-          "maxItems": 62,
+          "maxItems": 128,
           "items": { "$ref": "#/$defs/source_result" }
         },
         "generated": {
@@ -442,7 +492,7 @@
           }
         }
       ],
-      "description": "Chat remora.observations (null when no observation request); remora.writes stays null in this profile. Inputs remain in declaration order. Exact input retries replay original outcomes/receipts; replayed:true need not change outcome to replayed. Every actual decoder attempt gets a distinct backend identity, independent of input replay or sampling fallback; generated source IDs use that attempt plus a unique output/reasoning suffix, with output required. Server-derived exact same-bank recalled parent lineage can support generated admission; unsupported foreign refs/ancestry retain the recalled_dependencies outcome. Callers supply no recalled dependency manifests. Generated retention abstains when dependencies lack represented support, are untracked/erased, there are more than 16 input contexts, or any input context is empty/>4096 scalars. Receipts contain no source text."
+      "description": "Chat remora.observations (null when no observation request); remora.writes stays null in this profile. Inputs are ordinary declarations followed by references in their respective request order. References return the original immutable decision with replayed:true and outcome:referenced; no new admission occurs. Exact input retries replay original outcomes/receipts; replayed:true need not change outcome to replayed. Every actual decoder attempt gets a distinct backend identity, independent of input replay or sampling fallback; generated source IDs use that attempt plus a unique output/reasoning suffix, with output required. Server-derived exact same-bank recalled parent lineage can support generated admission; unsupported foreign ancestry retains recalled_dependencies. Generated retention requires complete tracked current source and memory ancestry. Full source links are digest-only and independent of optional readable context limits; a long persona, empty source or more than16 sources does not by itself block a short output. Receipts contain no source text."
     },
     "source_metadata": {
       "type": "object",
@@ -730,10 +780,14 @@
           ]
         },
         "observation_binding": { "const": "original_message_scalar_views_v1" },
+        "source_reference_binding": {
+          "const": "completed_generated_scalar_views_v1"
+        },
         "features": {
           "type": "object",
           "properties": {
-            "all_stream_evidence": { "type": "boolean", "default": false }
+            "all_stream_evidence": { "type": "boolean", "default": false },
+            "source_references": { "type": "boolean", "default": false }
           }
         },
         "limits": { "type": "object" }
@@ -781,8 +835,8 @@
                   "max_memory_page_size": { "const": 100 },
                   "max_memory_forget_ids": { "const": 100 },
                   "max_memory_request_id_chars": { "const": 256 },
-                  "max_observation_sources": { "const": 62 },
-                  "max_observation_views": { "const": 64 },
+                  "max_observation_sources": { "const": 128 },
+                  "max_observation_views": { "const": 512 },
                   "max_observation_source_chars": { "const": 65536 },
                   "max_observation_contexts": { "const": 16 },
                   "max_observation_total_chars": { "const": 262144 },
@@ -797,6 +851,26 @@
             },
             "not": { "required": ["observation_binding"] }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "features": {
+                "required": ["source_references"],
+                "properties": { "source_references": { "const": true } }
+              }
+            }
+          },
+          "then": {
+            "required": ["source_reference_binding"],
+            "properties": {
+              "features": {
+                "required": ["all_stream_evidence"],
+                "properties": { "all_stream_evidence": { "const": true } }
+              }
+            }
+          },
+          "else": { "not": { "required": ["source_reference_binding"] } }
         }
       ],
       "description": "Additive capabilities fragment, not a replacement for the legacy capabilities schema. Enabling evidence requires every advertised observation and management limit plus both binding fields. Evidence search is not advertised by this feature; memory_search, if separately enabled, remains fact-only."

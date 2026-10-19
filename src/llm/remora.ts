@@ -169,6 +169,9 @@ const RemoraCapabilitiesSchema = Schema.Struct({
   observation_binding: Schema.optional(
     Schema.Literal("original_message_scalar_views_v1"),
   ),
+  source_reference_binding: Schema.optional(
+    Schema.Literal("completed_generated_scalar_views_v1"),
+  ),
   features: Schema.Struct({
     memory: Schema.Boolean,
     automatic_writes: Schema.Boolean,
@@ -182,6 +185,7 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     memory_management: Schema.optional(Schema.Boolean),
     memory_search: Schema.optional(Schema.Boolean),
     all_stream_evidence: Schema.optional(Schema.Boolean),
+    source_references: Schema.optional(Schema.Boolean),
     streaming: Schema.Boolean,
     tools: Schema.Boolean,
     thinking: Schema.Boolean,
@@ -275,6 +279,19 @@ export function parseRemoraCapabilities(value: unknown) {
   ) {
     throw new Error("Remora source-view binding requires evidence support");
   }
+  if (capabilities.features.source_references) {
+    if (
+      !capabilities.features.all_stream_evidence ||
+      capabilities.source_reference_binding !==
+        "completed_generated_scalar_views_v1"
+    )
+      throw new Error(
+        "Remora generated references require evidence support and their binding",
+      );
+  } else if (capabilities.source_reference_binding !== undefined)
+    throw new Error(
+      "Remora reference binding requires source reference support",
+    );
   if (
     capabilities.features.memory_management &&
     (capabilities.limits.max_memory_page_size === undefined ||

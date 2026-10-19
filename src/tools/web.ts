@@ -31,6 +31,7 @@ export type WebSource = { title: string; url: string; kind: "search" | "page" };
 
 /** Public HTTPS only, with DNS pinned to the validated peer and no browser/script execution. */
 export class WebClient {
+  private epoch = 0;
   private readonly retryDeadlines = new Map<string, number>();
   private readonly cache = new Map<
     string,
@@ -45,6 +46,12 @@ export class WebClient {
       request: requestPage,
     },
   ) {}
+
+  /** Forgetting invalidates cached page text and prevents an in-flight read refilling it. */
+  invalidate() {
+    this.epoch++;
+    this.cache.clear();
+  }
 
   async search(
     query: string,
@@ -117,12 +124,15 @@ export class WebClient {
   }
 
   async fetch(urlString: string, offset = 0, signal?: AbortSignal) {
+    const epoch = this.epoch;
     const url = this.validateURL(urlString);
     if (!Number.isSafeInteger(offset) || offset < 0)
       throw new Error("Invalid page offset");
     let page = this.cache.get(url.href);
     if (!page || Date.now() - page.time > 300_000) {
       const response = await this.load(url, signal);
+      if (epoch !== this.epoch)
+        throw new Error("Web result invalidated by a memory fence");
       const type = String(response.headers["content-type"] ?? "")
         .split(";")[0]
         ?.trim();

@@ -68,6 +68,10 @@ if (config.remoraDmEnabled || config.discordTrialGuild) {
     throw new Error(
       "Evidence formation requires an explicit coordinated REMORA_OBSERVATION_START_ID before Discord connects",
     );
+  if (llm.observationLimits && !llm.supportsSourceReferences)
+    throw new Error(
+      "Patch evidence mapping requires completed generated source references",
+    );
   await memory.initialize(capabilities);
   if (config.discordTrialDmChannelId)
     contextStore.recordMemoryContext(config.discordTrialDmChannelId);

@@ -51,7 +51,7 @@ const Input = Schema.Struct({
   origin: Origin,
   views: Schema.Array(View).check(
     Schema.isMinLength(1),
-    Schema.isMaxLength(64),
+    Schema.isMaxLength(512),
   ),
   actor: Schema.optional(Actor),
   tool: Schema.optional(Schema.NullOr(EvidenceIdText)),
@@ -70,14 +70,34 @@ const Batch = Schema.Struct({
   bank: EvidenceIdText,
   id: EvidenceIdText,
   revision: EvidenceIndex,
-  inputs: Schema.Array(Input).check(Schema.isMaxLength(62)),
+  inputs: Schema.Array(Input).check(Schema.isMaxLength(128)),
+  references: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        id: EvidenceIdText,
+        revision: EvidenceIndex,
+        text: ScalarString.check(
+          Schema.makeFilter((value) => Array.from(value).length <= 65536),
+        ),
+        views: Schema.Array(
+          Schema.Struct({
+            ...View.fields,
+            source_start: EvidenceIndex.check(
+              Schema.isLessThanOrEqualTo(65535),
+            ),
+            source_end: EvidenceId.check(Schema.isLessThanOrEqualTo(65536)),
+          }),
+        ).check(Schema.isMaxLength(512)),
+      }),
+    ).check(Schema.isMaxLength(128)),
+  ),
   generated: Schema.optional(Schema.Struct({ actor: Actor })),
 });
 
 /** Exact advertised values from the independent frozen companion, not legacy defaults. */
 export const ObservationLimitsSchema = Schema.Struct({
-  max_observation_sources: Schema.Literal(62),
-  max_observation_views: Schema.Literal(64),
+  max_observation_sources: Schema.Literal(128),
+  max_observation_views: Schema.Literal(512),
   max_observation_source_chars: Schema.Literal(65536),
   max_observation_contexts: Schema.Literal(16),
   max_observation_total_chars: Schema.Literal(262144),
@@ -87,6 +107,18 @@ export type ObservationLimits = typeof ObservationLimitsSchema.Type;
 export type ObservationBatch = typeof Batch.Type;
 export type ObservationInput = typeof Input.Type;
 export type ObservationView = typeof View.Type;
+export type ObservationReference = NonNullable<
+  ObservationBatch["references"]
+>[number];
+export type CompletedGeneration = Omit<ObservationReference, "views">;
+export type ReferenceSegment = {
+  source: CompletedGeneration;
+  start: number;
+  end: number;
+  source_start: number;
+  source_end: number;
+  encoding?: ObservationView["encoding"];
+};
 
 /** Caller-only provenance for an exact rendered segment. Offsets use JavaScript string indices. */
 export type ObservationSegment = {
@@ -94,6 +126,7 @@ export type ObservationSegment = {
   start: number;
   end: number;
   encoding?: ObservationView["encoding"];
+  context?: readonly string[];
 };
 
 const Receipt = Schema.Struct({
@@ -128,18 +161,20 @@ const SourceResult = Schema.Struct({
     "untracked_dependencies",
     "generated_context_limit",
     "erased_dependencies",
+    "referenced",
   ]),
 }).check(
   Schema.makeFilter(
     (value) =>
-      (value.outcome !== "replayed" || value.receipt.replayed) &&
-      (value.outcome === "replayed" ||
+      (!["replayed", "referenced"].includes(value.outcome) ||
+        value.receipt.replayed) &&
+      (["replayed", "referenced"].includes(value.outcome) ||
         (value.outcome === "admitted") ===
           (value.receipt.status === "admitted")),
   ),
 );
 export const ObservationResponseSchema = Schema.Struct({
-  inputs: Schema.Array(SourceResult).check(Schema.isMaxLength(62)),
+  inputs: Schema.Array(SourceResult).check(Schema.isMaxLength(128)),
   generated: Schema.Array(SourceResult).check(Schema.isMaxLength(2)),
   attempt_id: Schema.NullOr(
     Schema.String.check(Schema.isPattern(/^generation-[0-9a-f]{32}$/u)),
@@ -153,12 +188,15 @@ export function validateObservationResponse(
   response: ObservationResponse,
   request: ObservationBatch,
 ) {
+  const expected = [...request.inputs, ...(request.references ?? [])];
   if (
-    response.inputs.length !== request.inputs.length ||
+    response.inputs.length !== expected.length ||
     response.inputs.some(
       (result, index) =>
-        result.source_id !== request.inputs[index]?.id ||
-        result.revision !== request.inputs[index]?.revision ||
+        result.source_id !== expected[index]?.id ||
+        result.revision !== expected[index]?.revision ||
+        (index >= request.inputs.length &&
+          (result.outcome !== "referenced" || !result.receipt.replayed)) ||
         (response.input_replayed && !result.receipt.replayed),
     )
   )
@@ -256,7 +294,7 @@ export function decodeObservationView(
 
 /** Validate source identity, exact scalar ranges and origin before any HTTP request. */
 export function validateObservationBatch(
-  value: ObservationBatch,
+  value: unknown,
   messages: readonly { role: string; content: string }[],
   limits: ObservationLimits,
 ): ObservationBatch {
@@ -270,10 +308,11 @@ export function validateObservationBatch(
     )
   )
     throw new Error("Observation messages contain invalid Unicode");
-  const ids = new Set(batch.inputs.map((input) => input.id));
+  const declarations = [...batch.inputs, ...(batch.references ?? [])];
+  const ids = new Set(declarations.map((input) => input.id));
   if (
-    ids.size !== batch.inputs.length ||
-    batch.inputs.length > limits.max_observation_sources
+    ids.size !== declarations.length ||
+    declarations.length > limits.max_observation_sources
   )
     throw new Error("Duplicate or excessive observation sources");
   if (
@@ -285,6 +324,37 @@ export function validateObservationBatch(
   const occupied = new Map<number, Array<{ start: number; end: number }>>();
   let views = 0;
   let total = 0;
+  const readView = (view: ObservationView) => {
+    views++;
+    const message = messages[view.message_index];
+    if (
+      !message ||
+      !["system", "user", "assistant", "tool"].includes(message.role)
+    )
+      throw new Error("Observation view has no supported message");
+    const scalars = Array.from(message.content);
+    if (
+      view.start > view.end ||
+      view.end > scalars.length ||
+      view.end - view.start > 786434
+    )
+      throw new Error("Observation range is outside the message");
+    const ranges = occupied.get(view.message_index) ?? [];
+    if (
+      ranges.some(
+        (range) =>
+          (view.start < range.end && range.start < view.end) ||
+          (range.start === view.start && range.end === view.end),
+      )
+    )
+      throw new Error("Observation views overlap");
+    ranges.push(view);
+    occupied.set(view.message_index, ranges);
+    return decodeObservationView(
+      scalars.slice(view.start, view.end).join(""),
+      view.encoding,
+    );
+  };
   for (const input of batch.inputs) {
     if (input.actor?.bank !== undefined && input.actor.bank !== batch.bank)
       throw new Error("Observation actor is outside the destination bank");
@@ -310,7 +380,6 @@ export function validateObservationBatch(
       throw new Error("Observation context is undeclared");
     let content: string | undefined;
     for (const view of input.views) {
-      views++;
       const message = messages[view.message_index];
       if (!message || !["system", "user", "assistant"].includes(message.role))
         throw new Error("Observation view has no supported message");
@@ -324,28 +393,7 @@ export function validateObservationBatch(
               : undefined;
       if (requiredRole && message.role !== requiredRole)
         throw new Error("Observation origin disagrees with the native role");
-      const scalars = Array.from(message.content);
-      if (
-        view.start > view.end ||
-        view.end > scalars.length ||
-        view.end - view.start > 786434
-      )
-        throw new Error("Observation range is outside the message");
-      const ranges = occupied.get(view.message_index) ?? [];
-      if (
-        ranges.some(
-          (range) =>
-            (view.start < range.end && range.start < view.end) ||
-            (range.start === view.start && range.end === view.end),
-        )
-      )
-        throw new Error("Observation views overlap");
-      ranges.push(view);
-      occupied.set(view.message_index, ranges);
-      const decoded = decodeObservationView(
-        scalars.slice(view.start, view.end).join(""),
-        view.encoding,
-      );
+      const decoded = readView(view);
       if (
         Buffer.from(decoded).toString("utf8") !== decoded ||
         Array.from(decoded).length > limits.max_observation_source_chars ||
@@ -357,6 +405,26 @@ export function validateObservationBatch(
       content = decoded;
     }
     total += Array.from(content ?? "").length;
+  }
+  for (const reference of batch.references ?? []) {
+    const original = Array.from(reference.text);
+    total += original.length;
+    if (
+      !reference.views.length &&
+      !batch.inputs.some((input) => input.context?.includes(reference.id))
+    )
+      throw new Error("Context-only reference is unused");
+    for (const view of reference.views) {
+      if (
+        view.source_start >= view.source_end ||
+        view.source_end > original.length ||
+        readView(view) !==
+          original.slice(view.source_start, view.source_end).join("")
+      )
+        throw new Error(
+          "Generated reference preimage does not match its displayed span",
+        );
+    }
   }
   if (
     views > limits.max_observation_views ||

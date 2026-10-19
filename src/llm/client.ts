@@ -2,9 +2,11 @@ import { Schema } from "effect";
 import type { Config } from "../config.js";
 import type { ModelSettingProvider } from "../settings/store.js";
 import {
+  type CompletedGeneration,
   type ObservationLimits,
   ObservationLimitsSchema,
   type ObservationSegment,
+  type ReferenceSegment,
   validateObservationBatch,
 } from "./evidence.js";
 import {
@@ -19,6 +21,10 @@ export type LlmMessage = {
   content: string;
   /** Exact source segments for the caller's observation compiler; never sent as message fields. */
   observationSources?: readonly ObservationSegment[];
+  observationReferences?: readonly ReferenceSegment[];
+  observationParents?: readonly CompletedGeneration[];
+  /** Unknown historical or derived content must never become independent framing. */
+  observationUnknown?: readonly { start: number; end: number }[];
   tool_call_id?: string;
   tool_calls?: Array<{
     id: string;
@@ -60,6 +66,9 @@ export type LlmRequest = {
   toolChoice?: LlmToolChoice;
   remora?: RemoraRequest;
   signal?: AbortSignal;
+  onResponse?: (response: LlmResponse) => void;
+  /** Recheck causal inputs immediately before every real HTTP attempt, including fallbacks. */
+  beforeRequest?: () => void;
 };
 
 export type LlmResponse = {
@@ -84,6 +93,7 @@ type HarnessNameLimits = { names: number; nameChars: number };
 export class LlmClient {
   /** Native tools are disabled when a negotiated backend rejects them. */
   supportsTools = true;
+  supportsSourceReferences = false;
   private maxOutputTokens = Number.POSITIVE_INFINITY;
   private identityLimits: IdentityLimits | undefined;
   private harnessNameLimits: HarnessNameLimits | undefined;
@@ -104,6 +114,7 @@ export class LlmClient {
     this.identityLimits = undefined;
     this.harnessNameLimits = undefined;
     this.evidenceLimits = undefined;
+    this.supportsSourceReferences = false;
     const response = await fetch(
       `${this.config.llmBaseUrl}/remora/capabilities`,
       {
@@ -198,6 +209,7 @@ export class LlmClient {
       this.evidenceLimits = Schema.decodeUnknownSync(ObservationLimitsSchema)(
         limits,
       );
+    this.supportsSourceReferences = features.source_references === true;
     return capabilities;
   }
 
@@ -230,6 +242,11 @@ export class LlmClient {
         "Remora evidence profile rejects legacy writes and identity declarations",
       );
     if (request.remora?.observations) {
+      if (
+        request.remora.observations.references !== undefined &&
+        !this.supportsSourceReferences
+      )
+        throw new Error("Remora source references have not been negotiated");
       if (!this.evidenceLimits)
         throw new Error("Remora all-stream evidence has not been negotiated");
       if (
@@ -259,7 +276,13 @@ export class LlmClient {
     const body: LlamaChatCompletionRequest = {
       model: this.settings?.getLlmModel() ?? this.config.llmModel,
       messages: request.messages.map(
-        ({ observationSources: _, ...message }) => message,
+        ({
+          observationSources: _,
+          observationReferences: __,
+          observationUnknown: ___,
+          observationParents: ____,
+          ...message
+        }) => message,
       ),
       chat_template_kwargs: {
         enable_thinking:
@@ -287,6 +310,7 @@ export class LlmClient {
     };
     if (request.signal) requestInit.signal = request.signal;
 
+    request.beforeRequest?.();
     const response = await fetch(
       `${this.config.llmBaseUrl}/chat/completions`,
       requestInit,
@@ -317,6 +341,7 @@ export class LlmClient {
     if (toolCalls.length > 0) result.toolCalls = toolCalls;
     if (json.timings) result.timings = json.timings;
     result.raw = json;
+    request.onResponse?.(result);
     return result;
   }
 

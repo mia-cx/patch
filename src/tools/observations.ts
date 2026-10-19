@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import type { LlmMessage } from "../llm/client.js";
-import type { ObservationSegment } from "../llm/evidence.js";
+import type {
+  CompletedGeneration,
+  ObservationSegment,
+} from "../llm/evidence.js";
 
 type Result = {
   name: string;
@@ -9,59 +12,103 @@ type Result = {
   truncated?: boolean;
 };
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
+type Binding = {
+  source: ObservationSegment["source"];
+  context?: readonly string[];
+};
 
-/** Bind actual web text by JSON path, so identical strings from different URLs cannot alias. */
+/** Bind actual web values and query echoes by path; copied citations reuse their original source. */
 export function toolResultMessage(
   results: readonly Result[],
   prefix: string,
   sourcePrefix: string,
+  generations: readonly (CompletedGeneration | undefined)[] = [],
 ): LlmMessage {
-  const bindings = new Map<string, { tool: string; url: string }>();
+  const bindings = new Map<string, Binding>();
+  const unknownPaths = new Set<string>();
+  const parents: CompletedGeneration[] = [];
   const value = JSON.parse(JSON.stringify(results)) as Json;
   for (const [index, result] of results.entries()) {
-    if (!result.completed || result.truncated || !record(result.output))
+    if (result.truncated)
+      unknownPaths.add(JSON.stringify([index, "output_excerpt"]));
+    if (
+      !result.completed ||
+      result.truncated ||
+      !record(result.output) ||
+      !["web_fetch", "web_search"].includes(result.name)
+    ) {
+      unknownPaths.add(JSON.stringify([index, "output"]));
       continue;
+    }
     const output = result.output;
     const add = (path: (string | number)[], text: unknown, url: unknown) => {
       if (
-        typeof text === "string" &&
-        text.trim() &&
-        typeof url === "string" &&
-        url.trim()
+        typeof text !== "string" ||
+        !text.trim() ||
+        typeof url !== "string" ||
+        !url.trim()
       )
-        bindings.set(JSON.stringify(path), { tool: result.name, url });
-    };
-    if (result.name === "web_fetch") {
-      for (const key of ["title", "text"])
-        add([index, "output", key], output[key], output.url);
-    }
-    if (result.name === "web_search" && Array.isArray(output.results)) {
-      for (const [rowIndex, row] of output.results.entries()) {
-        if (!record(row)) continue;
-        for (const key of ["title", "snippet"])
-          add([index, "output", "results", rowIndex, key], row[key], row.url);
-      }
-    }
-    // Fact recall and replayable notebook/action receipts require a parent-reference wire.
-    // Treating those as new independent observations could restore erased evidence.
-  }
-  const observationSources: ObservationSegment[] = [];
-  let content = prefix;
-  const append = (item: Json, path: (string | number)[]) => {
-    const binding = bindings.get(JSON.stringify(path));
-    if (typeof item === "string" && binding) {
-      const start = content.length;
-      content += JSON.stringify(item);
-      const digest = createHash("sha256")
-        .update(JSON.stringify([sourcePrefix, path, binding, item]))
-        .digest("hex");
-      observationSources.push({
+        return;
+      const id = hash([sourcePrefix, index, result.name, url, text]);
+      bindings.set(JSON.stringify(path), {
         source: {
-          id: `patch:tool:${digest}`,
+          id: `patch:tool:${id}`,
           revision: 0,
           origin: "external_observation",
-          ...binding,
+          tool: result.name,
+          url,
         },
+      });
+    };
+    if (result.name === "web_fetch")
+      for (const key of ["title", "text", "url"])
+        add([index, "output", key], output[key], output.url);
+    if (result.name === "web_search") {
+      if (typeof output.query === "string") {
+        const parent = generations[index];
+        if (parent) {
+          parents.push(parent);
+          bindings.set(JSON.stringify([index, "output", "query"]), {
+            source: {
+              id: `patch:query:${hash([parent.id, output.query])}`,
+              revision: 0,
+              origin: "unattributed_input",
+            },
+            context: [parent.id],
+          });
+        } else unknownPaths.add(JSON.stringify([index, "output", "query"]));
+      }
+      if (Array.isArray(output.results))
+        for (const [rowIndex, row] of output.results.entries())
+          if (record(row))
+            for (const key of ["title", "snippet", "url"])
+              add(
+                [index, "output", "results", rowIndex, key],
+                row[key],
+                row.url,
+              );
+    }
+    if (Array.isArray(output.sources))
+      for (const [rowIndex, row] of output.sources.entries())
+        if (record(row))
+          for (const key of ["title", "url"])
+            add([index, "output", "sources", rowIndex, key], row[key], row.url);
+  }
+  const observationSources: ObservationSegment[] = [];
+  const observationUnknown: { start: number; end: number }[] = [];
+  let content = prefix;
+  const append = (item: Json, path: (string | number)[]) => {
+    const key = JSON.stringify(path);
+    const binding = bindings.get(key);
+    if (unknownPaths.has(key)) {
+      const start = content.length;
+      content += JSON.stringify(item);
+      observationUnknown.push({ start, end: content.length });
+    } else if (typeof item === "string" && binding) {
+      const start = content.length;
+      content += JSON.stringify(item);
+      observationSources.push({
+        ...binding,
         start,
         end: content.length,
         encoding: "json_string",
@@ -87,10 +134,15 @@ export function toolResultMessage(
   return {
     role: "user",
     content,
-    ...(observationSources.length ? { observationSources } : {}),
+    observationSources,
+    observationParents: parents,
+    observationUnknown,
   };
 }
 
+function hash(value: unknown) {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }

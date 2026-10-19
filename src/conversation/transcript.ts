@@ -31,6 +31,9 @@ export function buildTranscript(
       channelId: message.channelId,
       content: message.content,
       ...(message.source ? { source: message.source } : {}),
+      ...(isPatch && message.source
+        ? { displayMessages: [{ id: message.id, ...message.source }] }
+        : {}),
       attachments: message.attachments,
     };
 
@@ -73,6 +76,7 @@ export function formatTranscriptMessages(
   humanSource?: (
     block: TranscriptBlock,
   ) => Omit<ObservationInput, "views" | "context"> | undefined,
+  assistantBody?: (block: TranscriptBlock) => LlmMessage | undefined,
 ): LlmMessage[] {
   const messages: LlmMessage[] = [
     {
@@ -93,6 +97,8 @@ export function formatTranscriptMessages(
       });
     }
     const source = block.role === "human" ? humanSource?.(block) : undefined;
+    const observedBody =
+      block.role === "self" ? assistantBody?.(block) : undefined;
     const prefix =
       block.kind === "response"
         ? ""
@@ -105,14 +111,42 @@ export function formatTranscriptMessages(
             .replaceAll(">", "\\u003e")
             .replaceAll("&", "\\u0026")
         : undefined;
+    const body = observedBody?.content ?? encoded ?? formatBlockBody(block);
+    const content =
+      observedBody || encoded !== undefined
+        ? [prefix + body, ...block.attachments.map(formatAttachment)].join("\n")
+        : prefix + body;
     messages.push({
       role: block.kind === "response" ? "assistant" : "user",
-      content:
-        encoded === undefined
-          ? `${prefix}${formatBlockBody(block)}`
-          : [prefix + encoded, ...block.attachments.map(formatAttachment)].join(
-              "\n",
-            ),
+      content,
+      ...(observedBody
+        ? {
+            observationSources:
+              observedBody.observationSources?.map((segment) => ({
+                ...segment,
+                start: segment.start + prefix.length,
+                end: segment.end + prefix.length,
+              })) ?? [],
+            observationReferences: observedBody.observationReferences ?? [],
+            observationParents: observedBody.observationParents ?? [],
+          }
+        : {}),
+      ...(humanSource || assistantBody
+        ? {
+            observationUnknown: [
+              ...(observedBody?.observationUnknown ?? []).map((range) => ({
+                start: range.start + prefix.length,
+                end: range.end + prefix.length,
+              })),
+              ...(!source && !observedBody
+                ? [{ start: prefix.length, end: content.length }]
+                : []),
+              ...((source || observedBody) && block.attachments.length
+                ? [{ start: prefix.length + body.length, end: content.length }]
+                : []),
+            ],
+          }
+        : {}),
       ...(source && encoded !== undefined
         ? {
             observationSources: [
@@ -215,6 +249,10 @@ function mergeAdjacentPatchResponses(
       previous.id = undefined;
       previous.content = `${previous.content}${RESPONSE_SPLIT_MARKER}${block.content}`;
       previous.attachments = [...previous.attachments, ...block.attachments];
+      previous.displayMessages = [
+        ...(previous.displayMessages ?? []),
+        ...(block.displayMessages ?? []),
+      ];
       continue;
     }
 

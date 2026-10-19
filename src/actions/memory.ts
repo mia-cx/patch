@@ -291,9 +291,11 @@ export const memoryAction: Action<typeof MemoryArgs.Type> = {
             : [interaction.channelId];
           if (context.config.discordTrialDmChannelId)
             fallback.push(context.config.discordTrialDmChannelId);
+          // Purge first: a crash after the durable history reset must never expose older plaintext.
+          context.harness?.store.invalidateConversationData();
+          context.harness?.web.invalidate();
           context.contextStore.resetMemoryContexts(fallback, interaction.id);
           fenced = true;
-          context.harness?.store.invalidateConversationData();
           const request = {
             bank: bank.bank,
             request_id: requestId,
