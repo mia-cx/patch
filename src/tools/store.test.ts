@@ -1,0 +1,99 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { HarnessStore } from "./store.js";
+
+const resources: Array<() => void> = [];
+afterEach(() => {
+  for (const close of resources.splice(0).reverse()) close();
+});
+function store(path = ":memory:") {
+  const result = new HarnessStore(path);
+  resources.push(() => result.close());
+  return result;
+}
+
+describe("text workspace and durable actions", () => {
+  // Proves scoped notes survive restart as literal text, with optimistic edits and no host paths.
+  it("persists scoped text and rejects stale edits and host paths", () => {
+    const dir = mkdtempSync(join(tmpdir(), "patch-notes-"));
+    resources.push(() => rmSync(dir, { recursive: true, force: true }));
+    const path = join(dir, "notes.sqlite");
+    const first = new HarnessStore(path);
+    const receipt = first.writeNote(
+      "dm:A",
+      "research/ideas.md",
+      "literal $(touch nope) and <script>code</script>",
+      null,
+    );
+    first.close();
+    const next = store(path);
+    expect(next.readNote("dm:A", "research/ideas.md")).toEqual({
+      path: "research/ideas.md",
+      revision: receipt.revision,
+      text: "literal $(touch nope) and <script>code</script>",
+    });
+    expect(() => next.readNote("dm:B", "research/ideas.md")).toThrow(
+      "not found",
+    );
+    expect(() =>
+      next.writeNote("dm:A", "research/ideas.md", "stale", null),
+    ).toThrow("revision conflict");
+    for (const name of [
+      "../secret",
+      "/etc/passwd",
+      "a/../../b",
+      "https://example.com",
+      "a.js",
+    ])
+      expect(() => next.writeNote("dm:A", name, "no", null)).toThrow(
+        "document name",
+      );
+    next.deleteNote("dm:A", "research/ideas.md", receipt.revision);
+    expect(next.listNotes("dm:A")).toEqual([]);
+  });
+
+  // Proves completed mutations replay receipts and lost responses cannot repeat a side effect.
+  it("replays completed actions and holds uncertain repeats across call positions", async () => {
+    const db = store();
+    const execute = vi.fn(async () => ({ message_id: "42" }));
+    expect(
+      await db.mutate("A", "1:0:0:react", "react:{}", execute),
+    ).toMatchObject({ replayed: false });
+    expect(
+      await db.mutate("A", "1:0:1:react", "react:{}", execute),
+    ).toMatchObject({ replayed: true, result: { message_id: "42" } });
+    expect(execute).toHaveBeenCalledTimes(1);
+    const lost = vi.fn(async () => {
+      throw new Error("response lost after Discord accepted");
+    });
+    await expect(db.mutate("A", "2:0:0:edit", "edit:{}", lost)).rejects.toThrow(
+      "response lost",
+    );
+    await expect(db.mutate("A", "2:0:1:edit", "edit:{}", lost)).rejects.toThrow(
+      "uncertain",
+    );
+    expect(lost).toHaveBeenCalledTimes(1);
+  });
+
+  // Proves delivery claims survive restart without resend and privacy fences remove working copies.
+  it("holds uncertain follow-ups and clears retained conversation material", () => {
+    const dir = mkdtempSync(join(tmpdir(), "patch-followups-"));
+    resources.push(() => rmSync(dir, { recursive: true, force: true }));
+    const path = join(dir, "jobs.sqlite");
+    const first = new HarnessStore(path);
+    const job = first.schedule("A", 2000, "check in", 1000);
+    expect(first.claim(job.id)).toBe(true);
+    first.close();
+    const next = store(path);
+    expect(next.due(3000)).toEqual([]);
+    expect(next.followups("A")[0]?.status).toBe("uncertain");
+    next.cancel("A", job.id);
+    next.writeNote("A", "memory.md", "private working material", null);
+    next.schedule("A", 4000, "private queued material", 1000);
+    next.invalidateConversationData();
+    expect(next.listNotes("A")).toEqual([]);
+    expect(next.followups("A")).toEqual([]);
+  });
+});
