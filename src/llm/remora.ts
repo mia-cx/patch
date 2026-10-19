@@ -1,4 +1,10 @@
 import { Schema } from "effect";
+import {
+  type ObservationBatch,
+  ObservationLimitsSchema,
+  ObservationResponseSchema,
+  validateObservationResponse,
+} from "./evidence.js";
 
 type IdentityActor = {
   bank: string;
@@ -25,6 +31,8 @@ export type RemoraRequest = {
   /** Current human attribution; inferred from write_bank + turn when writable. Never grants access. */
   speaker?: { bank: string; id: string };
   identity?: RemoraIdentity;
+  /** Separate source-view persistence, negotiated independently from legacy turn writes. */
+  observations?: ObservationBatch;
   turn?: {
     id: string;
     revision: number;
@@ -40,13 +48,20 @@ export type RemoraRequest = {
 const NonNegativeInteger = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 const PositiveInteger = Schema.Int.check(Schema.isGreaterThan(0));
 const Backend = Schema.Literals(["transformers", "llama.cpp"]);
-const FactRef = Schema.Struct({ bank: Schema.String, id: PositiveInteger });
+const FactRef = Schema.Struct({
+  bank: Schema.String,
+  id: PositiveInteger.check(
+    Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
+  ),
+  kind: Schema.optional(Schema.Literals(["statement", "evidence"])),
+});
 
 const RemoraResponseSchema = Schema.Struct({
   version: Schema.Literal(1),
   backend: Backend,
   read_banks: Schema.Array(Schema.String),
   selected: Schema.Array(FactRef),
+  observations: Schema.optional(Schema.NullOr(ObservationResponseSchema)),
   writes: Schema.NullOr(
     Schema.Struct({
       bank: Schema.String,
@@ -92,8 +107,37 @@ export type RemoraResponse = typeof RemoraResponseSchema.Type;
 export function parseRemoraResponse(
   value: unknown,
   request: RemoraRequest,
+  evidenceEnabled = false,
 ): RemoraResponse {
   const response = Schema.decodeUnknownSync(RemoraResponseSchema)(value);
+  if (
+    (!evidenceEnabled &&
+      response.selected.some((ref) => ref.kind !== undefined)) ||
+    response.selected.some((ref) => ref.kind === "statement") ||
+    (evidenceEnabled &&
+      (response.read_banks.length !== request.read_banks.length ||
+        new Set(response.read_banks).size !== response.read_banks.length ||
+        response.read_banks.some(
+          (bank) => !request.read_banks.includes(bank),
+        ) ||
+        response.selected.some(
+          (ref) => !request.read_banks.includes(ref.bank),
+        )))
+  )
+    throw new Error("Remora selected an unsupported memory reference");
+  if (request.observations) {
+    if (
+      !evidenceEnabled ||
+      request.turn ||
+      request.write_bank ||
+      request.identity ||
+      !response.observations
+    )
+      throw new Error("Remora response has no negotiated observation receipt");
+    validateObservationResponse(response.observations, request.observations);
+  } else if (response.observations != null) {
+    throw new Error("Remora returned unsolicited observation receipts");
+  }
   if (
     request.turn &&
     (!response.writes ||
@@ -118,7 +162,13 @@ const RemoraCapabilitiesSchema = Schema.Struct({
   memory_delivery: Schema.optional(
     Schema.Literals(["detached", "native-cache"]),
   ),
-  source_binding: Schema.Literal("final_user_message_exact"),
+  source_binding: Schema.Literals([
+    "final_user_message_exact",
+    "original_message_scalar_views_v1",
+  ]),
+  observation_binding: Schema.optional(
+    Schema.Literal("original_message_scalar_views_v1"),
+  ),
   features: Schema.Struct({
     memory: Schema.Boolean,
     automatic_writes: Schema.Boolean,
@@ -131,6 +181,7 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     harness_names: Schema.optional(Schema.Boolean),
     memory_management: Schema.optional(Schema.Boolean),
     memory_search: Schema.optional(Schema.Boolean),
+    all_stream_evidence: Schema.optional(Schema.Boolean),
     streaming: Schema.Boolean,
     tools: Schema.Boolean,
     thinking: Schema.Boolean,
@@ -178,6 +229,24 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     max_search_query_tokens: Schema.optional(
       PositiveInteger.check(Schema.isLessThanOrEqualTo(256)),
     ),
+    max_observation_sources: Schema.optional(
+      ObservationLimitsSchema.fields.max_observation_sources,
+    ),
+    max_observation_views: Schema.optional(
+      ObservationLimitsSchema.fields.max_observation_views,
+    ),
+    max_observation_source_chars: Schema.optional(
+      ObservationLimitsSchema.fields.max_observation_source_chars,
+    ),
+    max_observation_contexts: Schema.optional(
+      ObservationLimitsSchema.fields.max_observation_contexts,
+    ),
+    max_observation_total_chars: Schema.optional(
+      ObservationLimitsSchema.fields.max_observation_total_chars,
+    ),
+    max_observation_id_chars: Schema.optional(
+      ObservationLimitsSchema.fields.max_observation_id_chars,
+    ),
   }),
 });
 
@@ -186,6 +255,26 @@ export function parseRemoraCapabilities(value: unknown) {
   const capabilities = Schema.decodeUnknownSync(RemoraCapabilitiesSchema)(
     value,
   );
+  if (capabilities.features.all_stream_evidence) {
+    if (
+      capabilities.source_binding !== "original_message_scalar_views_v1" ||
+      capabilities.observation_binding !== "original_message_scalar_views_v1" ||
+      capabilities.features.entity_identity !== false ||
+      !capabilities.features.memory_management ||
+      capabilities.limits.max_memory_page_size !== 100 ||
+      capabilities.limits.max_memory_forget_ids !== 100 ||
+      capabilities.limits.max_memory_request_id_chars !== 256
+    )
+      throw new Error(
+        "Remora evidence requires source-view bindings and compatible management",
+      );
+    Schema.decodeUnknownSync(ObservationLimitsSchema)(capabilities.limits);
+  } else if (
+    capabilities.source_binding !== "final_user_message_exact" ||
+    capabilities.observation_binding !== undefined
+  ) {
+    throw new Error("Remora source-view binding requires evidence support");
+  }
   if (
     capabilities.features.memory_management &&
     (capabilities.limits.max_memory_page_size === undefined ||

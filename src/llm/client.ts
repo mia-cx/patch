@@ -1,5 +1,11 @@
+import { Schema } from "effect";
 import type { Config } from "../config.js";
 import type { ModelSettingProvider } from "../settings/store.js";
+import {
+  type ObservationLimits,
+  ObservationLimitsSchema,
+  validateObservationBatch,
+} from "./evidence.js";
 import {
   type RemoraRequest,
   type RemoraResponse,
@@ -78,6 +84,12 @@ export class LlmClient {
   private maxOutputTokens = Number.POSITIVE_INFINITY;
   private identityLimits: IdentityLimits | undefined;
   private harnessNameLimits: HarnessNameLimits | undefined;
+  private evidenceLimits: ObservationLimits | undefined;
+
+  /** Negotiated observation limits; absent on legacy or uninitialized endpoints. */
+  get observationLimits() {
+    return this.evidenceLimits;
+  }
 
   constructor(
     private readonly config: Config,
@@ -88,6 +100,7 @@ export class LlmClient {
   async initializeRemora() {
     this.identityLimits = undefined;
     this.harnessNameLimits = undefined;
+    this.evidenceLimits = undefined;
     const response = await fetch(
       `${this.config.llmBaseUrl}/remora/capabilities`,
       {
@@ -178,6 +191,10 @@ export class LlmClient {
     );
     this.identityLimits = identityLimits;
     this.harnessNameLimits = harnessNameLimits;
+    if (features.all_stream_evidence)
+      this.evidenceLimits = Schema.decodeUnknownSync(ObservationLimitsSchema)(
+        limits,
+      );
     return capabilities;
   }
 
@@ -200,6 +217,40 @@ export class LlmClient {
   }
 
   async complete(request: LlmRequest): Promise<LlmResponse> {
+    if (
+      this.evidenceLimits &&
+      (request.remora?.turn ||
+        request.remora?.write_bank ||
+        request.remora?.identity)
+    )
+      throw new Error(
+        "Remora evidence profile rejects legacy writes and identity declarations",
+      );
+    if (request.remora?.observations) {
+      if (!this.evidenceLimits)
+        throw new Error("Remora all-stream evidence has not been negotiated");
+      if (
+        request.remora.turn ||
+        request.remora.write_bank ||
+        request.remora.identity
+      )
+        throw new Error(
+          "Remora observations cannot accompany legacy writes or identity declarations",
+        );
+      validateObservationBatch(
+        request.remora.observations,
+        request.messages,
+        this.evidenceLimits,
+      );
+    }
+    if (
+      !this.evidenceLimits &&
+      [
+        ...(request.remora?.recall?.allow ?? []),
+        ...(request.remora?.recall?.deny ?? []),
+      ].some((ref) => ref.kind !== undefined)
+    )
+      throw new Error("Remora evidence recall has not been negotiated");
     if (request.remora?.identity !== undefined)
       this.validateIdentityLimits(request.remora.identity);
     const body: LlamaChatCompletionRequest = {
@@ -249,7 +300,11 @@ export class LlmClient {
 
     const result: LlmResponse = { content };
     if (request.remora)
-      result.remora = parseRemoraResponse(json.remora, request.remora);
+      result.remora = parseRemoraResponse(
+        json.remora,
+        request.remora,
+        this.evidenceLimits !== undefined,
+      );
     if (choice?.message?.reasoning_content)
       result.reasoningContent = choice.message.reasoning_content;
     if (choice?.finish_reason) result.finishReason = choice.finish_reason;

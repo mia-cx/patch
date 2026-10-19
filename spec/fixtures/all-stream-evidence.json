@@ -1,0 +1,814 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Remora all-stream evidence companion",
+  "description": "Additive, default-off API companion. Validate enabled_capabilities before using remora.observations, kind-qualified recall or the evidence management routes. A false or absent features.all_stream_evidence does not negotiate support. This describes implemented wire behavior, not admission quality, release qualification or a live rollout. contract-v1.json and fact-only memory_search keep their existing meaning; evidence search and namespace discovery are unsupported.",
+  "$defs": {
+    "exact_text": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]",
+      "description": "Opaque, nonblank exact UTF-8 string; no trimming or normalization. The service also rejects unpaired surrogates. Source IDs use Python whitespace semantics."
+    },
+    "exact_id": { "$ref": "#/$defs/exact_text", "maxLength": 256 },
+    "management_string": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "[^\\u0009-\\u000d\\u0020\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]",
+      "description": "Exact UTF-8 management bank/request ID, nonblank under the existing identity whitespace rules; never trimmed."
+    },
+    "id": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "JS-safe positive ID/count. The parser requires an exact integer, rejecting booleans and floats; JSON Schema cannot distinguish 1 from 1.0."
+    },
+    "index": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "JS-safe nonnegative exact integer; the parser also rejects booleans and floats."
+    },
+    "digest": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "local_actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bank", "role", "id"],
+      "properties": {
+        "bank": {
+          "allOf": [
+            { "$ref": "#/$defs/exact_id" },
+            { "$ref": "#/$defs/management_string" }
+          ]
+        },
+        "role": { "enum": ["human", "assistant"] },
+        "id": {
+          "allOf": [
+            { "$ref": "#/$defs/exact_id" },
+            { "$ref": "#/$defs/management_string" }
+          ]
+        }
+      },
+      "description": "Request-local source voice in the destination bank. The server supplies the authenticated principal. No principal, entity, labels or shared identity links may be supplied; the profile rejects remora.identity even when empty. Authorship never resolves subjects."
+    },
+    "stored_actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bank", "role", "id"],
+      "properties": {
+        "bank": { "$ref": "#/$defs/exact_id" },
+        "role": { "enum": ["human", "assistant"] },
+        "id": { "$ref": "#/$defs/exact_id" }
+      }
+    },
+    "entity_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal", "actor", "entity", "unknown", "description"],
+      "properties": {
+        "principal": { "$ref": "#/$defs/exact_id" },
+        "actor": {
+          "anyOf": [{ "$ref": "#/$defs/stored_actor" }, { "type": "null" }]
+        },
+        "entity": {
+          "anyOf": [{ "$ref": "#/$defs/exact_id" }, { "type": "null" }]
+        },
+        "unknown": { "type": "null" },
+        "description": { "type": "null" }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "actor": { "type": "object" },
+            "entity": { "type": "null" }
+          }
+        },
+        {
+          "properties": {
+            "actor": { "type": "null" },
+            "entity": { "type": "string" }
+          }
+        }
+      ],
+      "description": "Server-emitted dataclass shape, including every nullable field, unlike compact EntityRef.data(). New observation actors are local; existing stored evidence can carry a scoped entity. Listing that metadata does not enable shared-link resolution or accept this shape in requests."
+    },
+    "origin": {
+      "enum": [
+        "human_input",
+        "external_observation",
+        "assistant_reasoning",
+        "assistant_output",
+        "system_input",
+        "unattributed_input"
+      ]
+    },
+    "view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message_index", "start", "end"],
+      "properties": {
+        "message_index": { "$ref": "#/$defs/index" },
+        "start": { "$ref": "#/$defs/index" },
+        "end": { "$ref": "#/$defs/index" },
+        "encoding": {
+          "enum": ["literal", "json_string", "xml_text"],
+          "default": "literal"
+        }
+      },
+      "description": "Half-open Unicode scalar indices in original caller messages, before merging or recall insertion; TypeScript callers must convert UTF-16 offsets. Require 0 <= start <= end <= message scalar length and at most 786434 rendered scalars. literal preserves exact text; json_string decodes one complete quoted JSON string without surrounding whitespace; xml_text decodes character data/references without elements or newline normalization. All views of a source must decode identically; views cannot overlap, even across sources. Structural wrapper bytes are not source content and cannot be presented as a human source."
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "revision", "origin", "views"],
+      "properties": {
+        "id": { "$ref": "#/$defs/exact_id" },
+        "revision": { "$ref": "#/$defs/index" },
+        "origin": { "$ref": "#/$defs/origin" },
+        "views": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/view" }
+        },
+        "actor": { "$ref": "#/$defs/local_actor" },
+        "tool": {
+          "anyOf": [{ "$ref": "#/$defs/exact_id" }, { "type": "null" }]
+        },
+        "url": {
+          "anyOf": [
+            { "$ref": "#/$defs/exact_text", "maxLength": 2048 },
+            { "type": "null" }
+          ]
+        },
+        "context": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/exact_id" },
+          "default": []
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "origin": { "const": "human_input" } } },
+          "then": {
+            "properties": {
+              "actor": { "properties": { "role": { "const": "human" } } }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "origin": { "enum": ["assistant_reasoning", "assistant_output"] }
+            }
+          },
+          "then": {
+            "properties": {
+              "actor": { "properties": { "role": { "const": "assistant" } } }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "origin": { "const": "unattributed_input" } }
+          },
+          "then": { "not": { "required": ["actor"] } }
+        },
+        {
+          "if": {
+            "properties": { "origin": { "const": "external_observation" } }
+          },
+          "else": {
+            "properties": {
+              "tool": { "type": "null" },
+              "url": { "type": "null" }
+            }
+          }
+        }
+      ],
+      "description": "No separate text field: decode the declared views. Human/system/assistant origins must match the actual user/system/assistant message role; reasoning needs host-known channel provenance. A user role alone proves no human authorship. Context IDs must name declared sources in this batch, with exact same-bank source provenance. Recalled fact/evidence results cannot register as independent external observations."
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bank", "id", "revision", "inputs"],
+      "properties": {
+        "bank": { "$ref": "#/$defs/exact_id" },
+        "id": { "$ref": "#/$defs/exact_id" },
+        "revision": { "$ref": "#/$defs/index" },
+        "inputs": {
+          "type": "array",
+          "maxItems": 62,
+          "items": { "$ref": "#/$defs/input" }
+        },
+        "generated": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["actor"],
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/local_actor",
+              "properties": { "role": { "const": "assistant" } }
+            }
+          },
+          "description": "Authorize actual backend channels, with no caller-supplied source or attempt ID. The current engine disables thinking and emits no generated reasoning."
+        }
+      },
+      "description": "POST /v1/chat/completions at remora.observations. Requires full destination read and explicit write grants. Every actor bank must equal bank. Source IDs are unique, total views <= 64, each decoded source <= 65536 scalars, total decoded input <= 262144 scalars. Identity is authenticated principal + destination + source ID + revision; content/origin/actor/context are immutable at that revision. Bind before inference; input decisions and successful generated observations commit atomically. Failed decoding stores nothing. Source revisions retire obsolete evidence and transitive copies. Legacy completed turn sources require migration and cannot be re-extracted here."
+    },
+    "recall_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bank", "id"],
+      "properties": {
+        "bank": { "$ref": "#/$defs/exact_text" },
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["statement", "evidence"], "default": "statement" }
+      },
+      "description": "remora.recall.allow/deny reference; bank must be selected in read_banks. Omitted kind means canonical statement. Evidence IDs have a separate namespace even when numbers coincide; fact-ID grants do not grant evidence. No kind named fact or unknown namespace is accepted."
+    },
+    "selected_ref": {
+      "$ref": "#/$defs/recall_ref",
+      "properties": { "kind": { "const": "evidence" } },
+      "description": "Chat remora.selected: evidence includes kind:evidence; canonical statement references omit kind."
+    },
+    "remora_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["read_banks"],
+      "properties": {
+        "read_banks": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/exact_text" }
+        },
+        "observations": { "$ref": "#/$defs/request" },
+        "speaker": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bank", "id"],
+          "properties": {
+            "bank": { "$ref": "#/$defs/exact_text" },
+            "id": { "$ref": "#/$defs/exact_text" }
+          }
+        },
+        "recall": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allow": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/recall_ref" }
+            },
+            "deny": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/recall_ref" }
+            }
+          }
+        }
+      },
+      "description": "Enabled evidence profile request extension; observations may be omitted for read-only recall. Legacy write_bank/turn and observations are mutually exclusive; this profile rejects legacy turn writes. remora.identity and shared links are unsupported; speaker remains separate. The usual text chat limits and message rules still apply."
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "saved",
+        "superseded",
+        "status",
+        "replayed",
+        "admission_identity"
+      ],
+      "properties": {
+        "saved": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "superseded": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "status": { "enum": ["admitted", "not_admitted"] },
+        "replayed": { "type": "boolean" },
+        "admission_identity": {
+          "anyOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "admitted" } } },
+          "then": { "properties": { "saved": { "minItems": 1 } } },
+          "else": { "properties": { "saved": { "maxItems": 0 } } }
+        }
+      ],
+      "description": "Immutable source decision; IDs are evidence IDs, not facts. New batch admissions retain one whole source or none. Completed retries preserve original IDs/artifact identity after erasure without recreating plaintext; nullable admission_identity permits older stored receipts."
+    },
+    "source_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "revision", "receipt", "outcome"],
+      "properties": {
+        "source_id": { "$ref": "#/$defs/exact_id" },
+        "revision": { "$ref": "#/$defs/index" },
+        "receipt": { "$ref": "#/$defs/receipt" },
+        "outcome": {
+          "enum": [
+            "admitted",
+            "empty",
+            "source_limit",
+            "incomplete_evidence",
+            "rejected",
+            "replayed",
+            "recalled_dependencies",
+            "untracked_dependencies",
+            "generated_context_limit",
+            "erased_dependencies"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "outcome": { "const": "replayed" } } },
+          "then": {
+            "properties": {
+              "receipt": { "properties": { "replayed": { "const": true } } }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "outcome": { "const": "admitted" } } },
+          "then": {
+            "properties": {
+              "receipt": { "properties": { "status": { "const": "admitted" } } }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": { "not": { "enum": ["admitted", "replayed"] } }
+            }
+          },
+          "then": {
+            "properties": {
+              "receipt": {
+                "properties": { "status": { "const": "not_admitted" } }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "response": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["inputs", "generated", "attempt_id", "input_replayed"],
+      "properties": {
+        "inputs": {
+          "type": "array",
+          "maxItems": 62,
+          "items": { "$ref": "#/$defs/source_result" }
+        },
+        "generated": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/source_result",
+            "properties": {
+              "source_id": {
+                "pattern": "^generation-[0-9a-f]{32}:(output|reasoning)$(?![\\s\\S])"
+              },
+              "revision": { "const": 0 }
+            }
+          }
+        },
+        "attempt_id": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "string",
+              "minLength": 43,
+              "maxLength": 43,
+              "pattern": "^generation-[0-9a-f]{32}$"
+            }
+          ]
+        },
+        "input_replayed": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "attempt_id": { "type": "null" } } },
+          "then": { "properties": { "generated": { "maxItems": 0 } } },
+          "else": {
+            "properties": {
+              "generated": {
+                "minItems": 1,
+                "contains": {
+                  "properties": {
+                    "source_id": { "pattern": ":output$(?![\\s\\S])" }
+                  }
+                },
+                "minContains": 1,
+                "maxContains": 1
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "input_replayed": { "const": true } } },
+          "then": {
+            "properties": {
+              "inputs": {
+                "items": {
+                  "properties": {
+                    "receipt": {
+                      "properties": { "replayed": { "const": true } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "description": "Chat remora.observations (null when no observation request); remora.writes stays null in this profile. Inputs remain in declaration order. Exact input retries replay original outcomes/receipts; replayed:true need not change outcome to replayed. Every actual decoder attempt gets a distinct backend identity, independent of input replay or sampling fallback; generated source IDs use that attempt plus a unique output/reasoning suffix, with output required. Server-derived exact same-bank recalled parent lineage can support generated admission; unsupported foreign refs/ancestry retain the recalled_dependencies outcome. Callers supply no recalled dependency manifests. Generated retention abstains when dependencies lack represented support, are untracked/erased, there are more than 16 input contexts, or any input context is empty/>4096 scalars. Receipts contain no source text."
+    },
+    "source_metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "revision", "origin", "actor", "tool", "url"],
+      "properties": {
+        "id": { "$ref": "#/$defs/exact_id" },
+        "revision": { "$ref": "#/$defs/index" },
+        "origin": { "$ref": "#/$defs/origin" },
+        "actor": {
+          "anyOf": [{ "$ref": "#/$defs/entity_ref" }, { "type": "null" }]
+        },
+        "tool": {
+          "anyOf": [{ "$ref": "#/$defs/exact_id" }, { "type": "null" }]
+        },
+        "url": {
+          "anyOf": [
+            { "$ref": "#/$defs/exact_text", "maxLength": 2048 },
+            { "type": "null" }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "origin": { "const": "human_input" } } },
+          "then": {
+            "properties": {
+              "actor": {
+                "properties": {
+                  "actor": { "properties": { "role": { "const": "human" } } }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "origin": { "enum": ["assistant_reasoning", "assistant_output"] }
+            }
+          },
+          "then": {
+            "properties": {
+              "actor": {
+                "properties": {
+                  "actor": {
+                    "properties": { "role": { "const": "assistant" } }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "origin": { "const": "unattributed_input" } }
+          },
+          "then": { "properties": { "actor": { "type": "null" } } }
+        },
+        {
+          "if": {
+            "properties": { "origin": { "const": "external_observation" } }
+          },
+          "else": {
+            "properties": {
+              "tool": { "type": "null" },
+              "url": { "type": "null" }
+            }
+          }
+        }
+      ],
+      "description": "Source voice/provenance, never a resolved subject or truth assertion. Stored source scope is server-owned; clients select source erasure through a listed evidence anchor, not an invented principal."
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "$ref": "#/$defs/index", "maximum": 65535 },
+        "end": { "$ref": "#/$defs/id", "maximum": 65536 }
+      },
+      "description": "Exact source Unicode scalar indices: 0 <= start < end <= source length; end-start <= 4096 and equals the scalar length of the returned quotation. No trimming."
+    },
+    "context_excerpt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "span", "source_digest", "text"],
+      "properties": {
+        "source": { "$ref": "#/$defs/source_metadata" },
+        "span": { "$ref": "#/$defs/span" },
+        "source_digest": { "$ref": "#/$defs/digest" },
+        "text": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "bank",
+        "kind",
+        "subjects",
+        "source",
+        "span",
+        "text",
+        "context"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "bank": { "$ref": "#/$defs/exact_id" },
+        "kind": { "const": "evidence" },
+        "subjects": { "type": "null" },
+        "source": { "$ref": "#/$defs/source_metadata" },
+        "span": { "$ref": "#/$defs/span" },
+        "text": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "context": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/context_excerpt" }
+        }
+      },
+      "description": "Exact unverified quotation with unresolved subjects. Main source_digest, admission_identity and record principal are not emitted by this listing. Each context excerpt retains its own source voice and digest, including a source with no standalone admitted record."
+    },
+    "cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[A-Za-z0-9_-]+$(?![\\s\\S])"
+    },
+    "list_query": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bank"],
+      "properties": {
+        "bank": { "$ref": "#/$defs/management_string" },
+        "limit": {
+          "type": "string",
+          "pattern": "^0*([1-9]|[1-9][0-9]|100)$(?![\\s\\S])",
+          "default": "50"
+        },
+        "cursor": { "$ref": "#/$defs/cursor" }
+      },
+      "description": "GET /v1/remora/evidence URL query fields, all strings; no body or repeated/unknown query keys. Full-bank read required. Cursor is opaque and bound to the current catalog revision and grants; stale cursors fail. This is deterministic listing, not evidence search."
+    },
+    "list_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "object",
+        "version",
+        "bank",
+        "revision",
+        "data",
+        "next_cursor"
+      ],
+      "properties": {
+        "object": { "const": "remora.evidence.list" },
+        "version": { "const": 1 },
+        "bank": { "$ref": "#/$defs/management_string" },
+        "revision": { "$ref": "#/$defs/digest" },
+        "data": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/record" }
+        },
+        "next_cursor": {
+          "anyOf": [{ "$ref": "#/$defs/cursor" }, { "type": "null" }]
+        }
+      },
+      "description": "Active evidence in ascending ID order, all in the requested bank. next_cursor is null when exhausted. Revision changes on relevant source/history/grant edits. Listing is read-only."
+    },
+    "forget_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bank", "ids", "request_id", "expected_revision"],
+      "properties": {
+        "bank": { "$ref": "#/$defs/management_string" },
+        "request_id": { "$ref": "#/$defs/management_string" },
+        "expected_revision": { "$ref": "#/$defs/digest" },
+        "ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        }
+      },
+      "description": "POST /v1/remora/evidence/forget, no query. Exact active evidence roots plus overlapping source copies/dependents; does not forget every supporting context source. Requires independent full destination read and forget grants. Every requested ID must be active or the operation fails atomically."
+    },
+    "forget_source_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bank", "id", "request_id", "expected_revision"],
+      "properties": {
+        "bank": { "$ref": "#/$defs/management_string" },
+        "request_id": { "$ref": "#/$defs/management_string" },
+        "expected_revision": { "$ref": "#/$defs/digest" },
+        "id": { "$ref": "#/$defs/id" },
+        "context_index": { "type": "integer", "minimum": 0, "maximum": 15 }
+      },
+      "description": "POST /v1/remora/evidence/forget-source, no query. Listed active anchor id selects its main source span, or context_index selects a zero-based supporting span. Server resolves the exact principal/bank/source/revision. Full read and forget required. Overlapping main/context copies and their dependents retire; the selected span gets an erasure marker even without standalone admission. Missing anchors/context fail atomically. Unrelated canonical statements, disjoint spans and other principals remain."
+    },
+    "mutation_response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "object",
+        "version",
+        "bank",
+        "operation",
+        "request_id",
+        "deleted_ids",
+        "deleted_count",
+        "dependent_suppression",
+        "revision",
+        "replayed",
+        "cache_invalidated",
+        "reset_required"
+      ],
+      "properties": {
+        "object": { "const": "remora.evidence.mutation" },
+        "version": { "const": 1 },
+        "bank": { "$ref": "#/$defs/management_string" },
+        "operation": { "enum": ["forget", "forget_source"] },
+        "request_id": { "$ref": "#/$defs/management_string" },
+        "deleted_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "deleted_count": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "dependent_suppression": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bank", "visible_active_count"],
+          "properties": {
+            "bank": { "$ref": "#/$defs/management_string" },
+            "visible_active_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4096
+            },
+            "ids": {
+              "type": "array",
+              "maxItems": 4096,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/id" }
+            }
+          }
+        },
+        "revision": { "$ref": "#/$defs/digest" },
+        "replayed": { "type": "boolean" },
+        "cache_invalidated": { "const": true },
+        "reset_required": { "const": true }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "operation": { "const": "forget_source" } } },
+          "then": {
+            "properties": { "dependent_suppression": { "required": ["ids"] } }
+          },
+          "else": {
+            "properties": {
+              "deleted_ids": { "maxItems": 100 },
+              "deleted_count": { "maximum": 100 },
+              "dependent_suppression": { "not": { "required": ["ids"] } }
+            }
+          }
+        }
+      ],
+      "description": "deleted_count equals deleted_ids length; dependent count excludes roots, and forget_source alone emits sorted qualified same-bank dependent IDs with matching count. Total affected <= 4096; IDs are distinct and banks agree. Exact retries with unchanged request_id/selector/expected_revision replay the immutable receipt before re-resolving an erased anchor, with current grants rechecked. Receipts retain no source plaintext. Reset local history/recall after mutation, including replay. Existing canonical clear erases both record kinds; canonical exact-ID forget remains a fact-ID operation, suppressing source-overlapping evidence and exact dependent generated quotations through server-derived parent refs, never treating the fact ID as an evidence-ID alias."
+    },
+    "capabilities": {
+      "type": "object",
+      "required": ["object", "version", "features", "limits", "source_binding"],
+      "properties": {
+        "object": { "const": "remora.capabilities" },
+        "version": { "const": 1 },
+        "source_binding": {
+          "enum": [
+            "final_user_message_exact",
+            "original_message_scalar_views_v1"
+          ]
+        },
+        "observation_binding": { "const": "original_message_scalar_views_v1" },
+        "features": {
+          "type": "object",
+          "properties": {
+            "all_stream_evidence": { "type": "boolean", "default": false }
+          }
+        },
+        "limits": { "type": "object" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "features": {
+                "required": ["all_stream_evidence"],
+                "properties": { "all_stream_evidence": { "const": true } }
+              }
+            }
+          },
+          "then": {
+            "required": ["observation_binding"],
+            "properties": {
+              "source_binding": { "const": "original_message_scalar_views_v1" },
+              "features": {
+                "required": ["entity_identity", "memory_management"],
+                "properties": {
+                  "entity_identity": { "const": false },
+                  "memory_management": { "const": true }
+                }
+              },
+              "limits": {
+                "required": [
+                  "context_tokens",
+                  "max_output_tokens",
+                  "max_read_banks",
+                  "max_memory_page_size",
+                  "max_memory_forget_ids",
+                  "max_memory_request_id_chars",
+                  "max_observation_sources",
+                  "max_observation_views",
+                  "max_observation_source_chars",
+                  "max_observation_contexts",
+                  "max_observation_total_chars",
+                  "max_observation_id_chars"
+                ],
+                "properties": {
+                  "context_tokens": { "$ref": "#/$defs/id" },
+                  "max_output_tokens": { "$ref": "#/$defs/id" },
+                  "max_read_banks": { "const": 8 },
+                  "max_memory_page_size": { "const": 100 },
+                  "max_memory_forget_ids": { "const": 100 },
+                  "max_memory_request_id_chars": { "const": 256 },
+                  "max_observation_sources": { "const": 62 },
+                  "max_observation_views": { "const": 64 },
+                  "max_observation_source_chars": { "const": 65536 },
+                  "max_observation_contexts": { "const": 16 },
+                  "max_observation_total_chars": { "const": 262144 },
+                  "max_observation_id_chars": { "const": 256 }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "source_binding": { "const": "final_user_message_exact" }
+            },
+            "not": { "required": ["observation_binding"] }
+          }
+        }
+      ],
+      "description": "Additive capabilities fragment, not a replacement for the legacy capabilities schema. Enabling evidence requires every advertised observation and management limit plus both binding fields. Evidence search is not advertised by this feature; memory_search, if separately enabled, remains fact-only."
+    },
+    "enabled_capabilities": {
+      "$ref": "#/$defs/capabilities",
+      "properties": {
+        "features": {
+          "required": ["all_stream_evidence"],
+          "properties": { "all_stream_evidence": { "const": true } }
+        }
+      }
+    }
+  }
+}

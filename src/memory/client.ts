@@ -1,6 +1,12 @@
 import { Schema } from "effect";
 import type { Config } from "../config.js";
 import { parseRemoraCapabilities } from "../llm/remora.js";
+import {
+  type EvidenceMutation,
+  EvidenceMutationSchema,
+  type EvidenceSnapshot,
+  EvidenceSnapshotSchema,
+} from "./evidence.js";
 
 const SafeCount = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(0),
@@ -167,6 +173,12 @@ export class RemoraMemoryClient {
   private initialized = false;
   private limits: MemoryLimits | undefined;
   private searchLimits: MemorySearchLimits | undefined;
+  private evidence = false;
+
+  /** Separate evidence namespace; fact-only endpoints never imply evidence access. */
+  get supportsEvidence() {
+    return this.evidence;
+  }
 
   constructor(private readonly config: ClientConfig) {}
 
@@ -175,6 +187,7 @@ export class RemoraMemoryClient {
     this.initialized = false;
     this.limits = undefined;
     this.searchLimits = undefined;
+    this.evidence = false;
     const caps =
       capabilities ??
       parseRemoraCapabilities(await this.request("/remora/capabilities"));
@@ -218,6 +231,7 @@ export class RemoraMemoryClient {
       };
     }
     this.initialized = true;
+    this.evidence = caps.features.all_stream_evidence === true;
     return caps;
   }
 
@@ -376,6 +390,156 @@ export class RemoraMemoryClient {
   /** Clear the explicitly selected bank; server read-all and forget-all grants remain mandatory. */
   async clear(request: MutationRequest): Promise<MemoryMutation> {
     return this.mutate("clear", request, null);
+  }
+
+  /** List exact attributed quotations, separately from canonical statements. */
+  async listEvidence(
+    bank: string,
+    cursor?: string,
+    signal?: AbortSignal,
+  ): Promise<EvidenceSnapshot> {
+    await this.getLimits();
+    if (!this.evidence) throw new MemoryManagementError("unsupported_feature");
+    Schema.decodeUnknownSync(Bank)(bank);
+    if (cursor !== undefined) Schema.decodeUnknownSync(Cursor)(cursor);
+    const query = new URLSearchParams({ bank, limit: "100" });
+    if (cursor !== undefined) query.set("cursor", cursor);
+    const page = await this.evidenceRequest(
+      EvidenceSnapshotSchema,
+      `/remora/evidence?${query}`,
+      {},
+      signal,
+    );
+    if (
+      page.bank !== bank ||
+      (page.next_cursor !== null && page.data.length === 0) ||
+      page.data.some(
+        (record, index) =>
+          record.bank !== bank ||
+          (index > 0 && record.id <= (page.data[index - 1]?.id ?? 0)),
+      )
+    )
+      throw new MemoryManagementError("invalid_response");
+    return page;
+  }
+
+  /** Collect one bounded evidence snapshot without returning partial pages after a revision change. */
+  async listAllEvidence(
+    bank: string,
+    maxBytes: number,
+  ): Promise<EvidenceSnapshot> {
+    const signal = AbortSignal.timeout(this.config.llmTimeoutMs);
+    const first = await this.listEvidence(bank, undefined, signal);
+    const data = [...first.data];
+    const cursors = new Set<string>();
+    let page = first;
+    let bytes = Buffer.byteLength(JSON.stringify(page.data));
+    while (true) {
+      if (bytes > maxBytes) throw new MemoryManagementError("export_too_large");
+      if (page.next_cursor === null)
+        return { ...first, data, next_cursor: null };
+      if (cursors.has(page.next_cursor))
+        throw new MemoryManagementError("invalid_response");
+      cursors.add(page.next_cursor);
+      page = await this.listEvidence(bank, page.next_cursor, signal);
+      if (page.revision !== first.revision)
+        throw new MemoryManagementError("cursor_stale", 409);
+      const lastId = data.at(-1)?.id ?? 0;
+      if (page.data.some((record) => record.id <= lastId))
+        throw new MemoryManagementError("invalid_response");
+      bytes += Buffer.byteLength(JSON.stringify(page.data));
+      data.push(...page.data);
+    }
+  }
+
+  /** Forget exact evidence roots. Numeric equality never selects a canonical fact. */
+  async forgetEvidence(
+    request: MutationRequest & { ids: readonly number[] },
+  ): Promise<EvidenceMutation> {
+    const { forgetIds } = await this.getLimits();
+    Schema.decodeUnknownSync(
+      Schema.Array(MemoryId).check(
+        Schema.isMinLength(1),
+        Schema.isMaxLength(forgetIds),
+        Schema.isUnique(),
+      ),
+    )(request.ids);
+    return this.mutateEvidence("forget", {
+      ...request,
+      ids: [...request.ids].sort((a, b) => a - b),
+    });
+  }
+
+  /** Resolve source erasure from a listed main/context anchor, never caller-supplied principal scope. */
+  async forgetEvidenceSource(
+    request: MutationRequest & { id: number; context_index?: number },
+  ): Promise<EvidenceMutation> {
+    Schema.decodeUnknownSync(MemoryId)(request.id);
+    if (request.context_index !== undefined)
+      Schema.decodeUnknownSync(SafeCount.check(Schema.isLessThanOrEqualTo(15)))(
+        request.context_index,
+      );
+    return this.mutateEvidence("forget_source", request);
+  }
+
+  private async mutateEvidence(
+    operation: "forget" | "forget_source",
+    request: MutationRequest & {
+      ids?: readonly number[];
+      id?: number;
+      context_index?: number;
+    },
+  ): Promise<EvidenceMutation> {
+    await this.getLimits();
+    if (!this.evidence) throw new MemoryManagementError("unsupported_feature");
+    Schema.decodeUnknownSync(Bank)(request.bank);
+    Schema.decodeUnknownSync(Bank)(request.request_id);
+    Schema.decodeUnknownSync(Revision)(request.expected_revision);
+    const body = {
+      bank: request.bank,
+      request_id: request.request_id,
+      expected_revision: request.expected_revision,
+      ...(operation === "forget"
+        ? { ids: request.ids }
+        : {
+            id: request.id,
+            ...(request.context_index !== undefined
+              ? { context_index: request.context_index }
+              : {}),
+          }),
+    };
+    const result = await this.evidenceRequest(
+      EvidenceMutationSchema,
+      `/remora/evidence/${operation === "forget" ? "forget" : "forget-source"}`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+    if (
+      result.bank !== request.bank ||
+      result.operation !== operation ||
+      result.request_id !== request.request_id ||
+      (operation === "forget" &&
+        JSON.stringify(result.deleted_ids) !== JSON.stringify(request.ids)) ||
+      (operation === "forget_source" &&
+        !result.deleted_ids.includes(request.id ?? 0))
+    )
+      throw new MemoryManagementError("invalid_response");
+    return result;
+  }
+
+  private async evidenceRequest<S extends Schema.Decoder<unknown>>(
+    schema: S,
+    path: string,
+    init: RequestInit,
+    signal?: AbortSignal,
+  ): Promise<S["Type"]> {
+    try {
+      return Schema.decodeUnknownSync(schema, { onExcessProperty: "error" })(
+        await this.request(path, init, signal),
+      );
+    } catch (error) {
+      if (error instanceof MemoryManagementError) throw error;
+      throw new MemoryManagementError("invalid_response", 0, { cause: error });
+    }
   }
 
   private async mutate(

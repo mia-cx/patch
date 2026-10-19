@@ -8,17 +8,39 @@ import {
 import { Schema } from "effect";
 import { slashCommand } from "protocord";
 import { MemoryManagementError, type MemoryRecord } from "../memory/client.js";
+import type { EvidenceRecord } from "../memory/evidence.js";
 import { memoryScopes, resolveMemoryBank } from "../memory/scope.js";
 import { type Action, actionInput } from "./context.js";
 import { isSlashInteraction } from "./permissions.js";
 
 const Scope = Schema.Literals(memoryScopes);
+const RecordKind = Schema.Literals(["fact", "evidence"]);
+const ListKind = Schema.Literals(["all", "fact", "evidence"]);
 const MemoryArgs = Schema.Union([
-  Schema.Struct({ operation: Schema.Literal("list"), scope: Scope }),
+  Schema.Struct({
+    operation: Schema.Literal("list"),
+    scope: Scope,
+    kind: Schema.optional(ListKind),
+  }),
   Schema.Struct({
     operation: Schema.Literal("forget"),
     scope: Scope,
     ids: Schema.String,
+    kind: Schema.optional(RecordKind),
+  }),
+  Schema.Struct({
+    operation: Schema.Literal("forget_source"),
+    scope: Scope,
+    id: Schema.Int.check(
+      Schema.isGreaterThan(0),
+      Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
+    ),
+    context_index: Schema.optional(
+      Schema.Int.check(
+        Schema.isGreaterThanOrEqualTo(0),
+        Schema.isLessThanOrEqualTo(15),
+      ),
+    ),
   }),
   Schema.Struct({
     operation: Schema.Literal("clear"),
@@ -51,7 +73,18 @@ export const memoryAction: Action<typeof MemoryArgs.Type> = {
           type: ApplicationCommandOptionType.Subcommand,
           name: "list",
           description: "Show all memories you can read",
-          options: [scopeOption],
+          options: [
+            scopeOption,
+            {
+              type: ApplicationCommandOptionType.String,
+              name: "kind",
+              description: "Facts, quoted evidence, or both",
+              choices: ["all", "fact", "evidence"].map((value) => ({
+                name: value,
+                value,
+              })),
+            },
+          ],
         },
         {
           type: ApplicationCommandOptionType.Subcommand,
@@ -66,6 +99,39 @@ export const memoryAction: Action<typeof MemoryArgs.Type> = {
                 "Memory IDs from /memory list, separated by spaces or commas",
               required: true,
               maxLength: 2000,
+            },
+            scopeOption,
+            {
+              type: ApplicationCommandOptionType.String,
+              name: "kind",
+              description: "Canonical fact or attributed quotation",
+              choices: ["fact", "evidence"].map((value) => ({
+                name: value,
+                value,
+              })),
+            },
+          ],
+        },
+        {
+          type: ApplicationCommandOptionType.Subcommand,
+          name: "forget-source",
+          description:
+            "Forget a listed quotation's source and its dependent copies",
+          options: [
+            {
+              type: ApplicationCommandOptionType.Integer,
+              name: "id",
+              description: "Evidence ID from /memory list",
+              required: true,
+              minValue: 1,
+              maxValue: Number.MAX_SAFE_INTEGER,
+            },
+            {
+              type: ApplicationCommandOptionType.Integer,
+              name: "context",
+              description: "Supporting context index; omit for the main source",
+              minValue: 0,
+              maxValue: 15,
             },
             scopeOption,
           ],
@@ -99,14 +165,33 @@ export const memoryAction: Action<typeof MemoryArgs.Type> = {
             operation,
             scope,
             ids: interaction.options.getString("ids", true),
+            kind: Schema.decodeUnknownSync(RecordKind)(
+              interaction.options.getString("kind") ?? "fact",
+            ),
           };
+        if (operation === "forget-source") {
+          const context = interaction.options.getInteger("context");
+          return {
+            operation: "forget_source",
+            scope,
+            id: interaction.options.getInteger("id", true),
+            ...(context !== null ? { context_index: context } : {}),
+          };
+        }
         if (operation === "clear")
           return {
             operation,
             scope,
             confirm: interaction.options.getBoolean("confirm", true),
           };
-        if (operation === "list") return { operation, scope };
+        if (operation === "list")
+          return {
+            operation,
+            scope,
+            kind: Schema.decodeUnknownSync(ListKind)(
+              interaction.options.getString("kind") ?? "all",
+            ),
+          };
         throw new Error("Unknown memory operation");
       },
       async present(outcome, interaction) {
@@ -154,17 +239,39 @@ export const memoryAction: Action<typeof MemoryArgs.Type> = {
       return;
     }
     const limits = await context.memory.getLimits();
+    const evidence =
+      input.operation === "forget_source" ||
+      (input.operation === "forget" && input.kind === "evidence");
+    if (evidence && !context.memory.supportsEvidence)
+      throw new MemoryManagementError("unsupported_feature");
     const ids =
       input.operation === "forget"
         ? parseIds(input.ids, limits.forgetIds)
         : undefined;
     const bank = await resolveMemoryBank(input.scope, interaction);
     if (input.operation === "list") {
-      const snapshot = await context.memory.listAll(
-        bank.bank,
-        interaction.attachmentSizeLimit,
+      if (input.kind === "evidence" && !context.memory.supportsEvidence)
+        throw new MemoryManagementError("unsupported_feature");
+      const snapshot =
+        input.kind !== "evidence"
+          ? await context.memory.listAll(
+              bank.bank,
+              interaction.attachmentSizeLimit,
+            )
+          : undefined;
+      const quotations =
+        input.kind !== "fact" && context.memory.supportsEvidence
+          ? await context.memory.listAllEvidence(
+              bank.bank,
+              interaction.attachmentSizeLimit,
+            )
+          : undefined;
+      await presentMemories(
+        interaction,
+        bank.label,
+        snapshot?.data ?? [],
+        quotations?.data,
       );
-      await presentMemories(interaction, bank.label, snapshot.data);
       return;
     }
     const requestId = interaction.id;
@@ -176,7 +283,9 @@ export const memoryAction: Action<typeof MemoryArgs.Type> = {
       async () => {
         let fenced = false;
         try {
-          const snapshot = await context.memory.list(bank.bank);
+          const snapshot = evidence
+            ? await context.memory.listEvidence(bank.bank)
+            : await context.memory.list(bank.bank);
           const fallback = bank.channelId
             ? [bank.channelId]
             : [interaction.channelId];
@@ -190,14 +299,28 @@ export const memoryAction: Action<typeof MemoryArgs.Type> = {
             request_id: requestId,
             expected_revision: snapshot.revision,
           };
-          const result = ids
-            ? await context.memory.forget({ ...request, ids })
-            : await context.memory.clear(request);
+          const result =
+            input.operation === "forget_source"
+              ? await context.memory.forgetEvidenceSource({
+                  ...request,
+                  id: input.id,
+                  ...(input.context_index !== undefined
+                    ? { context_index: input.context_index }
+                    : {}),
+                })
+              : ids
+                ? evidence
+                  ? await context.memory.forgetEvidence({ ...request, ids })
+                  : await context.memory.forget({ ...request, ids })
+                : await context.memory.clear(request);
           const count = result.deleted_count;
           const place =
             input.scope === "personal" ? "your DM" : `this ${input.scope}`;
           const suppression = result.dependent_suppression.visible_active_count;
-          const content = `${result.replayed ? "already completed: " : ""}forgot ${count} ${count === 1 ? "memory" : "memories"} from ${place}.${suppression ? ` ${suppression} dependent ${suppression === 1 ? "memory is" : "memories are"} no longer available.` : ""} memory-backed conversations restarted.`;
+          const content =
+            input.operation === "clear" && context.memory.supportsEvidence
+              ? `${result.replayed ? "already completed: " : ""}cleared facts and evidence from ${place}. memory-backed conversations restarted.`
+              : `${result.replayed ? "already completed: " : ""}forgot ${count} ${count === 1 ? "memory" : "memories"} from ${place}.${suppression ? ` ${suppression} dependent ${suppression === 1 ? "memory is" : "memories are"} no longer available.` : ""} memory-backed conversations restarted.`;
           context.logger.info(
             {
               bank: bank.bank,
@@ -250,8 +373,9 @@ async function presentMemories(
   interaction: ChatInputCommandInteraction,
   label: string,
   memories: readonly MemoryRecord[],
+  evidence?: readonly EvidenceRecord[],
 ) {
-  if (memories.length === 0) {
+  if (memories.length === 0 && !evidence?.length) {
     await interaction.editReply({
       content: `${label}: none saved.`,
       allowedMentions: NO_MENTIONS,
@@ -259,18 +383,36 @@ async function presentMemories(
     return;
   }
   const listing = memories
-    .map((memory) => `#${memory.id} ${escapeMarkdown(memory.text)}`)
+    .map(
+      (memory) =>
+        `${evidence === undefined ? "" : "fact "}#${memory.id} ${escapeMarkdown(memory.text)}`,
+    )
     .join("\n\n");
-  const content = `${label}\n\n${listing}`;
+  const quotations = evidence
+    ?.map((record) => {
+      const voice = (source: EvidenceRecord["source"]) =>
+        source.actor?.actor
+          ? `${source.actor.actor.role} ${source.actor.actor.id}`
+          : (source.actor?.entity ?? "unknown");
+      return `evidence #${record.id} (${escapeMarkdown(record.source.origin)}, source ${escapeMarkdown(voice(record.source))}; subjects unresolved)\n${escapeMarkdown(record.text)}${record.context.map((item, index) => `\ncontext ${index} (${escapeMarkdown(item.source.origin)}, source ${escapeMarkdown(voice(item.source))}): ${escapeMarkdown(item.text)}`).join("")}`;
+    })
+    .join("\n\n");
+  const content = `${label}\n\n${[listing, quotations].filter(Boolean).join("\n\n")}`;
   if (content.length <= MAX_INLINE_LENGTH) {
     await interaction.editReply({ content, allowedMentions: NO_MENTIONS });
     return;
   }
-  const file = Buffer.from(JSON.stringify(memories, null, 2));
+  const file = Buffer.from(
+    JSON.stringify(
+      evidence === undefined ? memories : { statements: memories, evidence },
+      null,
+      2,
+    ),
+  );
   if (file.byteLength > interaction.attachmentSizeLimit)
     throw new MemoryManagementError("export_too_large");
   await interaction.editReply({
-    content: `${memories.length} saved memories. the file contains the full list and IDs.`,
+    content: `${memories.length + (evidence?.length ?? 0)} saved memories. the file contains the full list and IDs.`,
     files: [new AttachmentBuilder(file, { name: "memories.json" })],
     allowedMentions: NO_MENTIONS,
   });
@@ -282,6 +424,7 @@ function memoryFailure(error: unknown): string {
     case "unsupported_feature":
       return "memory controls aren't enabled on this Remora server.";
     case "memory_forbidden":
+    case "bank_forbidden":
       return "you don't have access to this memory bank or operation.";
     case "memory_not_found":
       return "one or more memory IDs aren't available. run /memory list again.";
