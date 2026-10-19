@@ -39,6 +39,11 @@ titles, bodies, snippets and URLs retain tool/URL provenance. Duplicate citation
 fields reuse those source declarations. Search-query echoes depend on their real
 generated tool-call parent. Scratch results, recalled facts and truncated result
 copies stay unknown. They are not independent external observations.
+Tool continuations follow the original human with each actual raw assistant call
+and its results. The original human declaration stays immutable and appears once.
+External result context names the actual generated call. Source ordinals stay
+stable when complete exchanges are summarized to fit the context budget.
+Completed-read reuse keeps the original result and source IDs; it creates no copy.
 
 ## Decoder output and displayed replies
 
@@ -135,10 +140,13 @@ observed source/view counts in `full-caller-contract-v1`. The audit includes 41
 offered history pairs, three tagged tool rounds and actual formatting repair.
 The first tool round replays v3's captured `web_fetch{url:...}` shorthand through
 the real parser and schema-validated action path, retaining its exact raw parent.
+The audit freezes normal, continuation and tools-disabled SYSTEM variants for DM
+and shared chat. Their role/style persona is complete; only tool advertising and
+the harness's current-human protocol guidance vary. Acceptance questions stay fixed.
 Observed maxima describe those fixtures; runtime validation uses negotiated
 128/512 ceilings. No shortened persona or transport-only semantic claim is accepted.
 
-Offline closure passes 343 tests, typecheck and build. Independent reviews found
+Offline closure passes 351 tests, typecheck and build. Independent reviews found
 and closed SQLite interleavings, visible-question ordering, omitted edit versions,
 late presentation, repair capture and transport-failure cancellation gaps.
 The earlier focused lineage review passes 81 checks and TypeScript with no remaining finding.
@@ -151,3 +159,13 @@ reset was nonresponsive. The malformed tagged web call then stopped the journey.
 Both runs published failed atomic releases and preserved their original artifacts.
 The parser fix is offline-only and adds no completion. It does not qualify recall,
 correction, web semantics, erasure or isolation; the acceptance questions are unchanged.
+
+Actual v4 passed initial preference recall and the independent conversational Zed
+correction. Reset after editing the original source stayed nonresponsive. The web
+loop parsed the shorthand but repeated three completed reads, then exceeded its
+three-call ceiling. Its atomic failed release and all artifacts remain unchanged.
+The offline loop fix replays those exact replies with one actual read and a bounded
+final-answer attempt. Their malformed closing split token remains model output;
+that regression proves execution/provenance, without crediting display semantics.
+The final independent loop review found no substantive issues after 117 tests and
+ten offline probes, including duplicate native IDs, mutation freshness and pruning.
