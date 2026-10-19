@@ -1,9 +1,9 @@
-# Offline evidence integration
+# Evidence integration
 
-This caller targets Remora `d3d1ee3`, with strict lineage validation at `a96f638`.
-Patch remains offline. The installed bundle, environment, cutoff, commands,
-services, policy and original banks are unchanged. Actual full-caller inference
-remains unqualified after the isolated v2/v3 attempts. Offline proofs use invented responses only.
+The deployed caller is immutable `47f2fb8`/`996f43e`, paired with Remora runtime
+`9062f61`/source `8e04001`. Mia approved deployment and a clean model context after
+the isolated full-persona v5 journey and independent review. Original Discord
+records, bank data, source identities and revisions survive the cutover.
 
 ## Negotiation
 
@@ -87,19 +87,22 @@ Facts and evidence retain separate numeric ID namespaces. Evidence list preserve
 complete quotations, source actors, context and provenance, with a private JSON
 export. Record forget and source forget are distinct operations. Clear covers
 both kinds. Protocord enforces owner-only personal access and Discord shared-bank
-permissions. New evidence command options remain unpublished. Fact-only search
+permissions. Reviewed evidence options are published on `/memory`; the other five
+global command objects are unchanged. Fact-only search
 does not enumerate evidence.
 
 Local retirement does not itself notify Remora of a blank edit or Discord deletion.
 This qualification uses a real nonblank source revision. Backend source erasure
 uses the explicit management endpoint; no blank text or renamed source is forged.
 
-## Proposed clean cutover
+## Clean cutover
 
 Ordinary rollover cannot repair incomplete lineage. A reply that consumes unknown
 legacy history can produce another unqualified displayed reply indefinitely.
-The eventual release must therefore review an explicit clean model-context boundary.
-No boundary is applied by this offline work.
+The approved release applies an explicit clean model-context boundary under the
+exclusive principal-wide generation fence. Both active write banks have durable
+creation-ID cutoffs. Caller plaintext caches are fenced before pending context
+boundaries are persisted; each chat's next new human message starts clean context.
 
 1. Qualify the exact assembled caller on isolated new banks and review its replies.
 2. While generation is fenced, choose the creation-ID cutoff and persist it per bank.
@@ -169,3 +172,25 @@ final-answer attempt. Their malformed closing split token remains model output;
 that regression proves execution/provenance, without crediting display semantics.
 The final independent loop review found no substantive issues after 117 tests and
 ten offline probes, including duplicate native IDs, mutation freshness and pruning.
+
+Actual v5 completed the unchanged journey with 18 completions and 34 HTTP 200
+responses. Reset recalled all three preferences; conversational correction and
+same-ID source editing recalled Zed. The web tool completed without a loop and
+its displayed reply re-entered history with provenance. Evidence record/source
+forgetting, immutable replay and observed shared/private isolation reached closure.
+The independent review found no hard wrong-speaker, disclosure or storage
+resurrection failure. Web meaning remains partial because replies omit offline
+devices. Full captured ancestry can retire a later correction alongside its old
+source; independent-correction preservation is unproved. SQL redaction is logical,
+without a SQLite free-page erasure claim. These are bounded results, not general
+semantic concept formation or all-stream dreaming.
+
+The authorized live cutover preserves the qualified persona and all existing
+environment values, adding only `REMORA_OBSERVATION_START_ID`. It installs the
+immutable reviewed caller and publishes only `/memory` evidence additions.
+Real LlmClient startup matches the complete authenticated capabilities exactly;
+Discord READY confirms the approved DM and selected guild/channel. Context/output
+limits stay 12,288/256, native tools/thinking/search/names stay disabled, and
+legacy entity declarations stay absent. No inference or deletion probes accompany
+startup. Private runtime, boundary, publication and readiness evidence is under
+`~/.cache/patch-remora-dm-trial/diagnosis/everyday-release-2026-10-19/`.

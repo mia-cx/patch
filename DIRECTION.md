@@ -22,19 +22,19 @@ Plain model text sends normally; optional reply metadata targets a visible messa
 Reactions, own-message edits/deletion, threads, polls, stickers and fixed-text follow-ups are implemented.
 DDG search/fetch identifies Patch/Protocord; persistent scoped notes offer no code execution.
 All model inputs and outputs should be eligible for passive memory, preserving each source's origin.
-Offline evidence transport targets Remora `a96f638`/`d3d1ee3`; see [caller mapping](spec/all-stream-evidence.md).
+Live evidence transport uses Remora `9062f61`/`8e04001`; see [caller mapping](spec/all-stream-evidence.md).
 Raw human/web views and authenticated generated parents preserve exact origins and frozen ancestry.
 Transformed Discord displays depend on their raw parent. Principal-wide erasure fences purge caller plaintext.
-Release requires an explicit clean model-context boundary; rollover cannot repair an untracked reply chain.
+Mia approved the clean model-context boundary; rollover cannot repair an untracked reply chain.
 Preserve all old Discord/history records and bank data, without re-extraction or source renaming.
-Caller mechanics pass 351 offline tests; full-persona v4 source-edit recall and the later journey remain unqualified.
-No evidence profile, cutoff, command update or rollout is installed; Patch stays offline pending coordinated qualification.
+Caller mechanics pass 351 tests; full-persona v5 supports bounded recall/correction/erasure/isolation, with partial web meaning.
+Immutable caller `47f2fb8`/`996f43e` is live with durable write-bank cutoffs and a principal-wide clean context boundary.
 Causal tool exchanges and completed-read reuse keep the three-call ceiling; games remain deferred. See [v2](spec/v2.md).
 
 Mia added only guild `1559060271404945512`, channel `1561529690953490442`, alongside the owner DM.
-Read channel/server banks and write only the channel; runtime `3e6ba7a` is configured offline while Remora trains.
+Read channel/server banks and write only the channel; the approved DM and exact shared scope are enabled.
 
-Patch's Remora client is opt-in for one-to-one DMs. Caller-owned history uses real
+Patch's Remora client supports the approved DM and shared scope. Caller-owned history uses real
 user/assistant roles. Incoming turns retain author IDs, names, pronouns, and reply
 targets in readable labels; Patch replies remain plain assistant text. Separate
 metadata retains Patch reply references and identifies the raw final user turn.
@@ -56,9 +56,9 @@ assistant text plain and reference metadata beside its reply: XML assistant
 wrappers leak into output, and cumulative metadata footers obscure recent
 dialogue in Gemma's 512-token local attention. llama.cpp qualification does not
 gate this HF trial.
-Mia approved passive formation/dreaming (`8770d95`, serving `dfc09d9`) on the same HF API.
-The scoped trial is held offline for training, with tagged tools (three calls per turn) retained for resumption.
-Startup capabilities and Discord READY pass with unchanged persona/history/source tuple.
+Mia approved evidence formation, replacing narrow passive writer/dreaming with attributed quotations on the same HF API.
+The scoped trial is online with tagged tools (three calls per turn); general semantic concept formation/dreaming remains open.
+Startup capabilities and Discord READY pass with the original persona and source identities.
 Earlier ownership leaks led to preserving source authorship separately from fact subjects.
 Patch supports the optional `speaker: {bank, id}` attribution field and optional
 speaker-binding capability from contract `193e295`. Writable turns infer identity
@@ -79,10 +79,10 @@ the reconstructed persona and 22 history messages contain no dog name, yet cold
 and warm recall reproduce the off-topic dog reply. An empty fact allowlist and
 bare Gemma both produce a relevant follow-up; restoring recall restores the
 failure. All bank rows and policy bytes are unchanged.
-The authorized fix is now live on `18787`: reviewed runtime `d0b8b52`, released
-with release docs `70ba7c9`, adds the optional turn-start relevance gate using
-frozen head C100/-5. The active profile is
-`gemma-reference-12288-native-cache-source-projected-turn-relevance`.
+The turn relevance fix adds an optional turn-start gate using reviewed runtime
+`d0b8b52` and release docs `70ba7c9`. Frozen head C100/-5 remains in the active
+profile on `18787`:
+`gemma-reference-12288-native-cache-source-projected-turn-relevance-all-stream-evidence`.
 Read the [turn relevance guide](https://github.com/mia-cx/remora/blob/70ba7c9c8a4a9c0cf7bef12b6dde97ebe271c000/docs/api/turn-relevance.md)
 for the mechanism and launch artifact checks. Raw partial-reply refresh is
 unchanged. The 27 behavioral checks, one-shot fresh64 gates, public HTTP checks
@@ -99,8 +99,8 @@ shared channel/server banks follow Discord access and management permissions.
 Show actual authorized records and storage receipts. Explicit forgetting must
 invalidate memory caches and affected caller history; a model reply is not proof
 of deletion. Keep Remora's API generic and require separate deletion grants.
-The `/memory` commands are published against reviewed
-Remora runtime `4e95553`, contract `f00a364` ([management guide](https://github.com/mia-cx/remora/blob/54f7bd6/docs/api/memory-management.md)).
+The `/memory` fact/evidence controls are published; the other five global command objects are preserved.
+Management builds on runtime `4e95553`, contract `f00a364` ([guide](https://github.com/mia-cx/remora/blob/54f7bd6/docs/api/memory-management.md)).
 Active-recall client `87760e8` is installed; `memory_search` stays hidden until Remora advertises support and four valid limits.
 Canonical facts use explicit third-person statements bound to generic stable
 entity references, keeping fact subjects separate
