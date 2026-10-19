@@ -30,7 +30,8 @@ An old creation remains excluded even after an edit. Local actors preserve
 authorship; source authors never imply fact subjects.
 
 The current human message stays literal. Historical human bodies use reversible
-JSON views. Author labels, participant rosters, reply references and tool protocol
+JSON views. Native assistant bodies stay literal, including genuine quotation marks;
+their source views use literal encoding. Author labels, participant rosters, reply references and tool protocol
 syntax are distinct caller framing. Unknown legacy content, other bots,
 attachments and unqualified assistant history remain explicitly uncovered.
 

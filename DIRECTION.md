@@ -29,6 +29,7 @@ Mia approved the clean model-context boundary; rollover cannot repair an untrack
 Preserve all old Discord/history records and bank data, without re-extraction or source renaming.
 Caller mechanics pass 351 tests; full-persona v5 supports bounded recall/correction/erasure/isolation, with partial web meaning.
 Immutable caller `47f2fb8`/`996f43e` is live with durable write-bank cutoffs and a principal-wide clean context boundary.
+Cueing web calls and literal assistant-history fixes pass offline tests, but E2B still stops after searching. See [diagnosis](spec/quotes-and-web-diagnosis.md).
 Causal tool exchanges and completed-read reuse keep the three-call ceiling; games remain deferred. See [v2](spec/v2.md).
 
 Mia added only guild `1559060271404945512`, channel `1561529690953490442`, alongside the owner DM.
@@ -47,15 +48,11 @@ The shared contract and synthetic full-persona request are in `spec/fixtures`.
 Initial HF/native TypeScript smokes establish durable retries and 7,310-token SYSTEM reuse,
 not whole-history continuity. Native CPU qualification is limited to its exact BF16 assets;
 see the released guides at `865ade5`. It does not establish GPU or broad HF parity.
-The controlled HF trial is scoped to Mia's one-to-one DM, restricted to that
-channel with global command registration skipped. It uses separate trial SQLite
-settings and a fresh context starting at the first new human message; subsequent
-turns grow normally. Attributed chat-role rendering now passes both real failed
-follow-ups cold and cached, with durable receipts and bank rows preserved. Keep
-assistant text plain and reference metadata beside its reply: XML assistant
-wrappers leak into output, and cumulative metadata footers obscure recent
-dialogue in Gemma's 512-token local attention. llama.cpp qualification does not
-gate this HF trial.
+The HF trial uses separate SQLite settings and skips automatic global registration.
+Attributed chat roles pass both original failed follow-ups cold and cached, preserving receipts and bank rows.
+Keep assistant dialogue literal and reference metadata beside its reply. XML wrappers leak into output;
+cumulative metadata footers obscure recent dialogue in Gemma's 512-token local attention.
+llama.cpp qualification does not gate this HF trial.
 Mia approved evidence formation, replacing narrow passive writer/dreaming with attributed quotations on the same HF API.
 The scoped trial is online with tagged tools (three calls per turn); general semantic concept formation/dreaming remains open.
 Startup capabilities and Discord READY pass with the original persona and source identities.
@@ -93,6 +90,8 @@ cache files and policies are preserved. The release passed startup and Discord
 READY before the offline hold. Caller, persona, source tuple and history stay unchanged. Names
 remain separately gated. Coordinate any GPU window before changing the shared
 model lease. No LoRA.
+Mia requested Unsloth quantized E4B instruction weights. Remora owns offline loading/adaptation;
+keep Patch and Laya unchanged until its concrete coordinated drain window. No new probes or classifier enablement.
 Memory inspection and forgetting belong to Protocord slash commands backed by
 deterministic Remora management endpoints. Users control their personal DM bank;
 shared channel/server banks follow Discord access and management permissions.

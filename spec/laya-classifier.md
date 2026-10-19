@@ -12,6 +12,8 @@ On 2026-10-19, the unchanged Gemma prompt passed 4/8 archived cases on multiling
 
 The final prompt handles ambient acknowledgement, human-directed replies, role pings, discussion about Patch and a short continuation. It misses indirect address without a mention and a correction phrased in third person. Warm HTTP calls took about 29–35 ms in this run; the first took 73 ms. This is a small classifier-only measurement while Gemma stayed loaded.
 
+A later development variant added contrasting indirect-address examples. It passed 7/8, fixing the third-person correction but still rejecting "don't you, Patch?" at about 54% silence. That variant is not adopted. More explicit examples did not resolve the remaining indirect-address case.
+
 Both `RESPONSE_CLASSIFIER_ENABLED` and `DM_RESPONSE_CLASSIFIER_ENABLED` remain false in the scoped trial. No prompt edit enables them. Live Patch remains on its existing immutable caller build until a separate caller deployment. The implementation is available for testing; these eight cases do not qualify automatic conversation gating.
 
 ## Local GPU service
