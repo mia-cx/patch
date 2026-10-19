@@ -16,6 +16,7 @@ import {
   escapeAttribute,
   escapeTranscriptText,
 } from "../conversation/escape.js";
+import { ConversationObservations } from "../conversation/observations.js";
 import { buildRemoraRequest } from "../conversation/remora.js";
 import type { ConversationContextStore } from "../conversation/store.js";
 import {
@@ -103,6 +104,22 @@ export async function respond(options: RespondOptions): Promise<void> {
       "response generation started",
     );
     const remora = buildRemoraRequest(config, message);
+    let observations: ConversationObservations | undefined;
+    if (remora && llm.observationLimits) {
+      const store = actionContext?.harness?.store;
+      if (!store)
+        throw new Error(
+          "Evidence formation requires the durable harness store",
+        );
+      observations = new ConversationObservations({
+        store,
+        remora,
+        message,
+        botUserId,
+        startId: config.remoraObservationStartId ?? "",
+        limits: llm.observationLimits,
+      });
+    }
     const scopedActionContext = actionContext
       ? { ...actionContext, readBanks: remora?.read_banks ?? [] }
       : undefined;
@@ -175,7 +192,11 @@ export async function respond(options: RespondOptions): Promise<void> {
     }
 
     const promptTranscript = remora
-      ? formatTranscriptMessages(transcript, message.id)
+      ? formatTranscriptMessages(
+          transcript,
+          message.id,
+          observations ? (block) => observations.humanSource(block) : undefined,
+        )
       : transcriptText;
     if (Array.isArray(promptTranscript) && classifierDecision) {
       promptTranscript.push({
@@ -189,6 +210,8 @@ export async function respond(options: RespondOptions): Promise<void> {
       availableActionsPrompt,
       remora?.turn?.text,
     );
+    if (observations)
+      promptMessages[promptMessages.length - 1] = observations.currentMessage();
 
     if (config.llmTraceLogging) {
       log.debug(
@@ -231,8 +254,11 @@ export async function respond(options: RespondOptions): Promise<void> {
         native: !tagged,
         signal: controller.signal,
         generate: async (messages, continuation, remainingCalls) => {
-          const requestRemora =
-            continuation && remora ? readOnlyRemora(remora) : remora;
+          const requestRemora = observations
+            ? observations.request(messages)
+            : continuation && remora
+              ? readOnlyRemora(remora)
+              : remora;
           const result = await generateResponse({
             llm,
             promptMessages: messages,

@@ -88,6 +88,14 @@ export type ObservationBatch = typeof Batch.Type;
 export type ObservationInput = typeof Input.Type;
 export type ObservationView = typeof View.Type;
 
+/** Caller-only provenance for an exact rendered segment. Offsets use JavaScript string indices. */
+export type ObservationSegment = {
+  source: Omit<ObservationInput, "views" | "context">;
+  start: number;
+  end: number;
+  encoding?: ObservationView["encoding"];
+};
+
 const Receipt = Schema.Struct({
   saved: Schema.Array(EvidenceId).check(
     Schema.isMaxLength(64),

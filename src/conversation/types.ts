@@ -20,6 +20,8 @@ export type ConversationMessage = {
   authorPronouns?: string;
   authorIsBot: boolean;
   content: string;
+  /** Original SDK text, before mention stripping or transcript rendering. */
+  source?: { text: string; revision: number };
   timestamp: Date;
   replyTo?: MessageRef;
   mentionsBot: boolean;
@@ -43,6 +45,7 @@ export type TranscriptBlock = {
   channelId?: string;
   threadId?: string;
   content: string;
+  source?: { text: string; revision: number };
   attachments: Attachment[];
 };
 

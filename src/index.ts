@@ -64,6 +64,10 @@ const llm = new LlmClient(config, settings);
 const memory = new RemoraMemoryClient(config);
 if (config.remoraDmEnabled || config.discordTrialGuild) {
   const capabilities = await llm.initializeRemora();
+  if (llm.observationLimits && !config.remoraObservationStartId)
+    throw new Error(
+      "Evidence formation requires an explicit coordinated REMORA_OBSERVATION_START_ID before Discord connects",
+    );
   await memory.initialize(capabilities);
   if (config.discordTrialDmChannelId)
     contextStore.recordMemoryContext(config.discordTrialDmChannelId);
@@ -111,6 +115,22 @@ const actionContext = {
     web: new WebClient(),
   },
 };
+
+if (llm.observationLimits) {
+  const banks = [
+    ...(config.discordTrialDmChannelId && config.remoraDmEnabled
+      ? [`discord:dm:${config.discordTrialDmChannelId}`]
+      : []),
+    ...(config.discordTrialGuild
+      ? [`discord:channel:${config.discordTrialGuild.channelId}`]
+      : []),
+  ];
+  for (const bank of banks)
+    actionContext.harness.store.observationCutoff(
+      bank,
+      config.remoraObservationStartId ?? "",
+    );
+}
 
 registerDefaultActions(actionRegistry);
 

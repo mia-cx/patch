@@ -4,6 +4,7 @@ import type { ModelSettingProvider } from "../settings/store.js";
 import {
   type ObservationLimits,
   ObservationLimitsSchema,
+  type ObservationSegment,
   validateObservationBatch,
 } from "./evidence.js";
 import {
@@ -16,6 +17,8 @@ import {
 export type LlmMessage = {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  /** Exact source segments for the caller's observation compiler; never sent as message fields. */
+  observationSources?: readonly ObservationSegment[];
   tool_call_id?: string;
   tool_calls?: Array<{
     id: string;
@@ -255,7 +258,9 @@ export class LlmClient {
       this.validateIdentityLimits(request.remora.identity);
     const body: LlamaChatCompletionRequest = {
       model: this.settings?.getLlmModel() ?? this.config.llmModel,
-      messages: request.messages,
+      messages: request.messages.map(
+        ({ observationSources: _, ...message }) => message,
+      ),
       chat_template_kwargs: {
         enable_thinking:
           request.enableThinking ?? this.config.llmEnableThinking,

@@ -123,6 +123,7 @@ export function toConversationMessage(
       message.author.username,
     authorIsBot: message.author.bot,
     content: stripBotMention(message.content, botUserId).trim(),
+    source: { text: message.content, revision: message.editedTimestamp ?? 0 },
     timestamp: message.createdAt,
     mentionsBot: message.mentions.users.has(botUserId),
     attachments: [...message.attachments.values()].map(toAttachment),

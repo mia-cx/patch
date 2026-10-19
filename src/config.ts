@@ -20,6 +20,7 @@ export type Config = {
   maxToolCalls: number;
   remoraDmEnabled: boolean;
   remoraReadBanks: readonly string[];
+  remoraObservationStartId?: string;
   botOwnerUserIds: ReadonlySet<string>;
   debugLogging: boolean;
   llmTraceLogging: boolean;
@@ -68,6 +69,9 @@ const ConfigSchema = Schema.Struct({
   maxToolCalls: PositiveInteger,
   remoraDmEnabled: Schema.Boolean,
   remoraReadBanks: Schema.Array(Schema.String),
+  remoraObservationStartId: Schema.String.check(
+    Schema.isPattern(/^(?:|\d{1,20})$/),
+  ),
   botOwnerUserIds: Schema.ReadonlySet(Schema.String),
   debugLogging: Schema.Boolean,
   llmTraceLogging: Schema.Boolean,
@@ -119,6 +123,7 @@ export function loadConfigEffect(env: NodeJS.ProcessEnv = process.env) {
       maxToolCalls: Math.min(integer(env.MAX_TOOL_CALLS, 3), 8),
       remoraDmEnabled: boolean(env.REMORA_DM_ENABLED, false),
       remoraReadBanks: splitCsv(env.REMORA_READ_BANKS),
+      remoraObservationStartId: env.REMORA_OBSERVATION_START_ID?.trim() ?? "",
       botOwnerUserIds: new Set(splitCsv(env.BOT_OWNER_USER_IDS)),
       debugLogging: boolean(env.DEBUG_LOGGING, false),
       llmTraceLogging: boolean(env.LLM_TRACE_LOGGING, false),

@@ -4,6 +4,12 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 type Note = { path: string; text: string; revision: string };
+export type ObservationContext = {
+  id: string;
+  revision: number;
+  digest: string;
+};
+type ObservationManifest = { digest: string; context: string };
 export type Followup = {
   id: string;
   scope: string;
@@ -36,6 +42,14 @@ export class HarnessStore {
         id TEXT PRIMARY KEY, scope TEXT NOT NULL, at INTEGER NOT NULL,
         text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', message_id TEXT
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS harness_observation_cutoffs (
+        bank TEXT PRIMARY KEY, creation_id TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS harness_observation_sources (
+        bank TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL,
+        digest TEXT NOT NULL, context TEXT NOT NULL,
+        PRIMARY KEY(bank, id, revision)
+      ) STRICT;
     `);
     // A process can disappear after Discord accepts a message. Never blindly resend it.
     this.db
@@ -47,6 +61,65 @@ export class HarnessStore {
 
   close() {
     this.db.close();
+  }
+
+  /** The coordinated cutover excludes old creations permanently, including later edits. */
+  observationCutoff(bank: string, creationId: string) {
+    if (!/^\d{1,20}$/.test(creationId))
+      throw new Error(
+        "Evidence formation requires REMORA_OBSERVATION_START_ID",
+      );
+    this.db
+      .prepare(
+        "INSERT OR IGNORE INTO harness_observation_cutoffs VALUES (?, ?)",
+      )
+      .run(bank, creationId);
+    const existing = this.db
+      .prepare(
+        "SELECT creation_id FROM harness_observation_cutoffs WHERE bank = ?",
+      )
+      .get(bank);
+    if (existing?.creation_id !== creationId)
+      throw new Error(
+        "Observation cutover conflicts with the durable bank boundary",
+      );
+    return BigInt(creationId);
+  }
+
+  /** Freeze only digests and context references. Source plaintext stays caller-owned. */
+  freezeObservation(
+    bank: string,
+    id: string,
+    revision: number,
+    digest: string,
+    context: readonly ObservationContext[],
+  ): readonly ObservationContext[] {
+    this.db
+      .prepare(
+        "INSERT OR IGNORE INTO harness_observation_sources VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(bank, id, revision, digest, JSON.stringify(context));
+    return this.observationContext(bank, id, revision, digest) ?? [];
+  }
+
+  /** Read the original context before selecting parents for a new source after rollover. */
+  observationContext(
+    bank: string,
+    id: string,
+    revision: number,
+    digest: string,
+  ): readonly ObservationContext[] | undefined {
+    const existing = this.db
+      .prepare(
+        "SELECT digest, context FROM harness_observation_sources WHERE bank = ? AND id = ? AND revision = ?",
+      )
+      .get(bank, id, revision) as ObservationManifest | undefined;
+    if (!existing) return;
+    if (existing.digest !== digest)
+      throw new Error(
+        "Observation source conflicts with its original revision",
+      );
+    return JSON.parse(existing.context) as ObservationContext[];
   }
 
   listNotes(scope: string) {

@@ -1,5 +1,6 @@
 import { getBotIdentity } from "../identity.js";
 import type { LlmMessage } from "../llm/client.js";
+import type { ObservationInput } from "../llm/evidence.js";
 import { escapeAttribute, escapeTranscriptText } from "./escape.js";
 import type {
   ConversationMessage,
@@ -29,6 +30,7 @@ export function buildTranscript(
       context: message.context ?? "reply_chain",
       channelId: message.channelId,
       content: message.content,
+      ...(message.source ? { source: message.source } : {}),
       attachments: message.attachments,
     };
 
@@ -68,6 +70,9 @@ export function formatTranscript(transcript: Transcript): string {
 export function formatTranscriptMessages(
   transcript: Transcript,
   currentMessageId: string,
+  humanSource?: (
+    block: TranscriptBlock,
+  ) => Omit<ObservationInput, "views" | "context"> | undefined,
 ): LlmMessage[] {
   const messages: LlmMessage[] = [
     {
@@ -87,12 +92,39 @@ export function formatTranscriptMessages(
         content: `Following Patch reply:\n${formatAttributes(block)}`,
       });
     }
+    const source = block.role === "human" ? humanSource?.(block) : undefined;
+    const prefix =
+      block.kind === "response"
+        ? ""
+        : `Speaker: ${formatAttributes(block)}\n\n`;
+    // JSON string views preserve original mentions, whitespace and reserved markup exactly.
+    const encoded =
+      source && block.source
+        ? JSON.stringify(block.source.text)
+            .replaceAll("<", "\\u003c")
+            .replaceAll(">", "\\u003e")
+            .replaceAll("&", "\\u0026")
+        : undefined;
     messages.push({
       role: block.kind === "response" ? "assistant" : "user",
       content:
-        block.kind === "response"
-          ? formatBlockBody(block)
-          : `Speaker: ${formatAttributes(block)}\n\n${formatBlockBody(block)}`,
+        encoded === undefined
+          ? `${prefix}${formatBlockBody(block)}`
+          : [prefix + encoded, ...block.attachments.map(formatAttachment)].join(
+              "\n",
+            ),
+      ...(source && encoded !== undefined
+        ? {
+            observationSources: [
+              {
+                source,
+                start: prefix.length,
+                end: prefix.length + encoded.length,
+                encoding: "json_string" as const,
+              },
+            ],
+          }
+        : {}),
     });
   }
   // Source binding requires the next user message to contain only its original text.
