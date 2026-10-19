@@ -18,6 +18,10 @@ import {
   PermissionsBitField,
 } from "discord.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  evidenceCapabilities,
+  makeEvidenceRecord,
+} from "../../test/fixtures/evidence.js";
 import { loadConfig } from "../config.js";
 import { ConversationContextStore } from "../conversation/store.js";
 import { dispatchInteraction } from "../discord/actions/dispatch.js";
@@ -304,6 +308,189 @@ async function runtime(thread = true) {
 }
 
 describe("Patch's Protocord integration", () => {
+  // Proves the same numeric ID is displayed as two distinct storage kinds, privately and with source voice preserved.
+  it("lists facts and evidence through their separate routes", async () => {
+    const app = await runtime(false);
+    const bank = `discord:guild:${GUILD}`;
+    await app.context.memory.initialize(
+      parseRemoraCapabilities(evidenceCapabilities),
+    );
+    const request = vi.fn(async (url: string) => {
+      expect(new URL(url).searchParams.get("bank")).toBe(bank);
+      return Response.json(
+        url.includes("/evidence?")
+          ? {
+              object: "remora.evidence.list",
+              version: 1,
+              bank,
+              revision: REVISION,
+              data: [makeEvidenceRecord(bank)],
+              next_cursor: null,
+            }
+          : {
+              object: "remora.memory.list",
+              version: 1,
+              bank,
+              revision: REVISION,
+              data: [
+                {
+                  id: 1,
+                  text: "A canonical statement.",
+                  kind: "fact",
+                  source: "user",
+                  subjects: {},
+                },
+              ],
+              next_cursor: null,
+            },
+      );
+    });
+    vi.stubGlobal("fetch", request);
+    await app.dispatch(
+      app.command(
+        "memory",
+        memoryOptions("list", "server"),
+        MEMBER,
+        READ_ACCESS,
+      ),
+    );
+    const body = app.rest.patch.mock.calls.at(-1)?.[1]?.body;
+    expect(body).toMatchObject({
+      content: expect.stringContaining("fact #1"),
+      allowed_mentions: { parse: [], replied_user: false },
+    });
+    expect(body).toMatchObject({
+      content: expect.stringContaining("evidence #1"),
+    });
+    expect(body).toMatchObject({
+      content: expect.stringContaining("subjects unresolved"),
+    });
+    expect(app.rest.post.mock.calls[0]?.[1]?.body).toMatchObject({
+      data: { flags: MessageFlags.Ephemeral },
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  // Proves evidence deletion and source deletion retain Discord management gates and the principal-wide generation fence.
+  it.each(["record", "source", "unauthorized_source"] as const)(
+    "handles evidence %s with scoped erasure",
+    async (scenario) => {
+      const app = await runtime(false);
+      const bank = `discord:channel:${CHANNEL}`;
+      app.context.contextStore.setStart(CHANNEL, "1");
+      app.context.contextStore.recordMemoryContext(CHANNEL);
+      await app.context.memory.initialize(
+        parseRemoraCapabilities(evidenceCapabilities),
+      );
+      const calls: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init: RequestInit) => {
+          calls.push(url);
+          if (init.method !== "POST")
+            return Response.json({
+              object: "remora.evidence.list",
+              version: 1,
+              bank,
+              revision: REVISION,
+              data: [makeEvidenceRecord(bank)],
+              next_cursor: null,
+            });
+          expect(app.context.contextStore.allowsMessage(CHANNEL, "1")).toBe(
+            false,
+          );
+          const source = scenario !== "record";
+          expect(JSON.parse(String(init.body))).toEqual({
+            bank,
+            request_id: "1000000000000000009",
+            expected_revision: REVISION,
+            ...(source ? { id: 1 } : { ids: [1] }),
+          });
+          return Response.json({
+            object: "remora.evidence.mutation",
+            version: 1,
+            bank,
+            request_id: "1000000000000000009",
+            operation: source ? "forget_source" : "forget",
+            replayed: false,
+            deleted_ids: [1],
+            deleted_count: 1,
+            dependent_suppression: {
+              bank,
+              visible_active_count: 0,
+              ...(source ? { ids: [] } : {}),
+            },
+            revision: REVISION,
+            cache_invalidated: true,
+            reset_required: true,
+          });
+        }),
+      );
+      const options: APIApplicationCommandInteractionDataOption[] = [
+        {
+          name: scenario === "record" ? "forget" : "forget-source",
+          type: ApplicationCommandOptionType.Subcommand,
+          options: [
+            {
+              name: "scope",
+              type: ApplicationCommandOptionType.String,
+              value: "channel",
+            },
+            ...(scenario === "record"
+              ? [
+                  {
+                    name: "ids",
+                    type: ApplicationCommandOptionType.String as const,
+                    value: "1",
+                  },
+                  {
+                    name: "kind",
+                    type: ApplicationCommandOptionType.String as const,
+                    value: "evidence",
+                  },
+                ]
+              : [
+                  {
+                    name: "id",
+                    type: ApplicationCommandOptionType.Integer as const,
+                    value: 1,
+                  },
+                ]),
+          ],
+        },
+      ];
+      await app.dispatch(
+        app.command(
+          "memory",
+          options,
+          MEMBER,
+          READ_ACCESS |
+            (scenario === "unauthorized_source"
+              ? 0n
+              : PermissionsBitField.Flags.ManageMessages),
+        ),
+      );
+      if (scenario === "unauthorized_source") {
+        expect(calls).toEqual([]);
+        expect(app.context.contextStore.getStart(CHANNEL)).toBe("1");
+      } else {
+        expect(calls).toHaveLength(2);
+        expect(calls.every((url) => url.includes("/remora/evidence"))).toBe(
+          true,
+        );
+        expect(calls[1]).toMatch(
+          scenario === "record"
+            ? /\/evidence\/forget$/
+            : /\/evidence\/forget-source$/,
+        );
+        expect(app.context.contextStore.getStart(CHANNEL)).toBeUndefined();
+        expect(app.rest.patch.mock.calls.at(-1)?.[1]?.body).toMatchObject({
+          content: expect.stringContaining("forgot 1 memory"),
+        });
+      }
+    },
+  );
+
   // Proves invalid user-supplied targets stop before management requests or context resets.
   it.each(["0", "1.5", "1e2", "9007199254740992", "2,2"])(
     "refuses malformed memory IDs %s",
