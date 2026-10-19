@@ -19,10 +19,10 @@ through pnpm workspace dependencies. Publishing packages is deferred.
 
 Patch actions use Protocord's shared validation, authorization and trigger lifecycle.
 Plain model text sends normally; optional reply metadata targets a visible message ID.
-Next: reactions, own-message edits/deletion, threads, polls, stickers and follow-ups.
-Use DDG search/fetch with Patch/Protocord identity and browser-style fallback agents.
-Keep scoped, persistent text notes with no shell or code execution.
-Map games now; defer implementation and keep daily play durable when built. See [v2](spec/v2.md).
+Reactions, own-message edits/deletion, threads, polls, stickers and fixed-text follow-ups are implemented.
+DDG search/fetch identifies Patch/Protocord; persistent scoped notes offer no code execution.
+Native/tagged tool results return to the model without repeating Remora source writes.
+Games remain mapped/deferred. Actual-model tool selection awaits qualification; tools stay undeployed. See [v2](spec/v2.md).
 
 Start Remora conversation trials in a single-human place. Wrong-person recall
 and semantic forgetting collateral remain unresolved for shared places.
@@ -56,10 +56,10 @@ assistant text plain and reference metadata beside its reply: XML assistant
 wrappers leak into output, and cumulative metadata footers obscure recent
 dialogue in Gemma's 512-token local attention. llama.cpp qualification does not
 gate this HF trial.
-Mia approved the validated HF profile. Keep the DM trial offline until Remora's
-owning thread explicitly hands it back for resume. Earlier recall let
-Patch claim a human's facts as her own;
-the agreed fix preserves source authorship separately from fact subjects.
+Mia approved passive formation/dreaming (`8770d95`, serving `dfc09d9`) on the same HF API.
+The scoped trial is online from reviewed Patch `7720cb3`; new tools are excluded.
+Startup capabilities and Discord READY pass with unchanged persona/history/source tuple.
+Earlier ownership leaks led to preserving source authorship separately from fact subjects.
 Patch supports the optional `speaker: {bank, id}` attribution field and optional
 speaker-binding capability from contract `193e295`. Writable turns infer identity
 from their existing source tuple. Capabilities disclose optional `memory_delivery`.

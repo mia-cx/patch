@@ -19,6 +19,43 @@ installing. Installation builds the local Protocord packages. Copy
 `.env.example` to `.env`, configure the development bot and model endpoint, then
 run `pnpm dev`.
 
+## Harness tools
+
+Plain model output sends a normal message. A leading
+`<reply to="MESSAGE_ID" />` opts into a reply to a visible message in the same
+channel, without pinging its author. Only the first chunk replies.
+
+Patch's Protocord actions now include:
+
+- Reactions and removal of her own reactions; edits/deletion of her own messages.
+- Starting/joining/leaving threads, native polls, poll results and server emoji/stickers.
+- Durable fixed-text follow-ups: schedule, inspect and cancel, without another model call.
+- DuckDuckGo search and readable public HTTPS pages, with real source links.
+- Persistent conversation-scoped text notes: list, read, write and delete with revisions.
+
+`LLM_TOOL_MODE=auto` uses native OpenAI tool calls when supported and tagged
+text when Remora advertises `tools:false`. Other modes are `native`, `tagged`
+and `off`. `MAX_TOOL_CALLS` defaults to three and is capped at eight per turn.
+Results return to the model; only the initial request supplies a writable Remora
+source. Tool continuations retain the current speaker and use read-only recall.
+
+Web requests identify Patch, Protocord and Node.js HTTPS. Browser-style fallback
+agents retain that identity. Every redirect resolves and pins a public IP;
+requests have a 20-second bound and a 2 MB decoded limit. Reads return 4,000
+characters with continuation offsets. No credentials or downloaded code execute.
+
+Notes and follow-ups live in `SETTINGS_DB_PATH`, separate from Discord transcripts.
+Notes allow 16 KiB each, 64 documents and 256 KiB per conversation. They expose
+virtual text names, never host paths or a shell. Ordinary context resets retain
+notes. A memory-deletion fence clears **all notes and queued follow-up text under
+Patch's API credential**, conservatively preventing forgotten facts surviving there.
+An uncertain Discord delivery is held for reconciliation rather than resent.
+
+Games remain deferred. These paths are tested through the actual Discord SDK
+with invented network responses; actual Remora tool selection is not yet qualified.
+The resumed DM trial uses the previous reviewed Patch build, excluding these tools.
+No command publication accompanies this implementation. See [v2](spec/v2.md).
+
 ## Conversation context
 
 Each DM, guild channel, and thread has a fixed starting message, persisted in
@@ -82,9 +119,9 @@ deletion receipts. Shared evidence conflicts leave saved facts intact. Discord
 messages remain; new human assertions can teach a fact again. Existing source
 receipts are retained by Remora.
 
-The commands are published for the development bot, which is online against
-reviewed Remora management runtime `4e95553` and contract `f00a364`.
-All 183 Patch tests and 14 isolated HTTP checks pass; the other five global
+The commands are published for the development bot. Their qualification used
+Remora management runtime `4e95553` and contract `f00a364`.
+That release passed 183 Patch tests and 14 isolated HTTP checks; the other five global
 commands were preserved. See the [Remora management guide](https://github.com/mia-cx/remora/blob/54f7bd6/docs/api/memory-management.md).
 
 ## Remora DM integration
@@ -176,9 +213,12 @@ deny assistant ownership. Every call returns `writes:null` and reuses 7,310 SYST
 tokens; bank rows, cache files and policies remain unchanged. The
 [turn relevance guide](https://github.com/mia-cx/remora/blob/70ba7c9c8a4a9c0cf7bef12b6dde97ebe271c000/docs/api/turn-relevance.md)
 covers the gate and launch artifact checks. Harness name mapping stays disabled.
-The scoped DM trial is online on the released profile
-with Discord READY and authenticated Remora capabilities verified; existing
-conversation boundaries, memory facts and source receipts are preserved.
+Mia approved resuming the scoped trial on passive runtime `8770d95`, serving
+HEAD `dfc09d9`, with profile
+`gemma-reference-12288-native-cache-source-projected-turn-relevance-passive-formation-dreaming`.
+The existing reviewed Patch `7720cb3` passed actual startup capabilities and
+Discord READY on that release. Conversation boundaries, persona, source tuples,
+memory facts and receipts are preserved; new tools and name mapping stay excluded.
 [remora-patch-request.json](spec/fixtures/remora-patch-request.json) is the archived
 qualification request with Patch's actual persona and fictional history in the
 original transcript format. The real TypeScript client smoke passed against the
