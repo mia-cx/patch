@@ -21,7 +21,7 @@ Patch actions use Protocord's shared validation, authorization and trigger lifec
 Plain model text sends normally; optional reply metadata targets a visible message ID.
 Reactions, own-message edits/deletion, threads, polls, stickers and fixed-text follow-ups are implemented.
 DDG search/fetch identifies Patch/Protocord; persistent scoped notes offer no code execution.
-Native/tagged tool results return to the model without repeating Remora source writes.
+Next: noteworthy tool discoveries should form separate, provenance-linked passive memories; continuations currently read only.
 Tools are enabled in the scoped DM trial for actual-model evaluation; games remain deferred. See [v2](spec/v2.md).
 
 Start Remora conversation trials in a single-human place. Wrong-person recall
