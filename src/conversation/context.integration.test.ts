@@ -306,6 +306,22 @@ async function runtime(
 }
 
 describe("persistent chat context", () => {
+  // Proves a cross-channel reference cannot pull another place's messages into a shared conversation.
+  it("does not fetch reply ancestors outside the current channel", async () => {
+    const app = await runtime(ChannelType.GuildText);
+    const otherChannel = "1000000000000000099";
+    app.add(1);
+    app.add(2, {
+      message_reference: { channel_id: otherChannel, message_id: packet(1).id },
+    });
+    await app.context(2);
+    expect(
+      app.rest.mock.calls.some(([route]) =>
+        route.startsWith(`/channels/${otherChannel}`),
+      ),
+    ).toBe(false);
+  });
+
   // Proves explicit forgetting fences all memory-backed chats, including other banks, across restarts.
   it("fences memory-backed chats before deletion without resetting plain conversations", async () => {
     const dir = mkdtempSync(join(tmpdir(), "patch-memory-reset-"));

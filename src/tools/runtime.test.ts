@@ -270,6 +270,77 @@ const call = (name: string, args: object) =>
   `<tool_call>${JSON.stringify({ name, arguments: args })}</tool_call>`;
 
 describe("complete harness with the actual Discord SDK", () => {
+  // Proves an opted-in shared conversation uses channel/server recall, never private extras, with source-bound roles and tools intact.
+  it("uses shared banks and preserves speakers in the configured guild channel", async () => {
+    const app = await runtime(true, true);
+    app.config.discordTrialDmChannelId = "1000000000000000090";
+    app.config.discordTrialGuild = { guildId: GUILD, channelId: CHANNEL };
+    app.config.remoraReadBanks = ["discord:dm:private"];
+    app.complete
+      .mockResolvedValueOnce({
+        content: call("web_fetch", { url: "https://example.com/" }),
+      })
+      .mockResolvedValueOnce({ content: "found that page" });
+    const current = toConversationMessage(app.message, BOT);
+    await app.run([
+      {
+        ...current,
+        id: "1000000000000000008",
+        authorId: "1000000000000000009",
+        authorName: "Robin",
+        content: "I play cello.",
+      },
+      {
+        ...current,
+        id: PREVIOUS,
+        authorId: BOT,
+        authorName: "Patch",
+        authorIsBot: true,
+        content: "that's cool",
+      },
+      current,
+    ]);
+    const first = app.complete.mock.calls[0]?.[0];
+    expect(first?.remora).toEqual({
+      read_banks: [`discord:channel:${CHANNEL}`, `discord:guild:${GUILD}`],
+      write_bank: `discord:channel:${CHANNEL}`,
+      turn: {
+        id: `discord:message:${CURRENT}`,
+        revision: 0,
+        speaker_id: `discord:user:${HUMAN}`,
+        text: "look that up",
+      },
+    });
+    expect(first?.messages.at(-1)).toEqual({
+      role: "user",
+      content: "look that up",
+    });
+    expect(first?.messages).toContainEqual({
+      role: "assistant",
+      content: "that's cool",
+    });
+    expect(
+      first?.messages.some(
+        (message) =>
+          message.role === "user" &&
+          message.content.includes('author_id="1000000000000000009"') &&
+          message.content.includes("I play cello."),
+      ),
+    ).toBe(true);
+    const second = app.complete.mock.calls[1]?.[0];
+    expect(second?.remora?.read_banks).toEqual(first?.remora?.read_banks);
+    expect(second?.remora?.write_bank).toBeUndefined();
+    expect(second?.remora?.turn).toBeUndefined();
+    expect(
+      second?.messages.some((message) =>
+        message.content.includes("A real fixture page."),
+      ),
+    ).toBe(true);
+    expect(
+      app.rest.post.mock.calls.filter(([route]) => route.endsWith("/messages")),
+    ).toHaveLength(1);
+  });
+
   // Proves explicit recall returns qualified facts through the model loop without rewriting the human source or widening selected banks.
   it("searches caller-selected banks through Protocord and continues read-only", async () => {
     const app = await runtime(false, true);
@@ -882,15 +953,28 @@ describe("complete harness with the actual Discord SDK", () => {
   });
 
   // Proves scheduled text delivers once without another model call.
-  it("delivers a durable follow-up once", async () => {
-    const app = await runtime();
-    app.store.schedule(CHANNEL, 2000, "checking in", 1000);
-    await deliverFollowups(app);
-    await deliverFollowups(app);
-    expect(
-      app.rest.post.mock.calls.filter(([route]) => route.endsWith("/messages")),
-    ).toHaveLength(1);
-    expect(app.complete).not.toHaveBeenCalled();
-    expect(app.store.followups(CHANNEL)).toEqual([]);
-  });
+  it.each([false, true])(
+    "delivers a scoped durable follow-up once, guild=%s",
+    async (guild) => {
+      const app = await runtime(guild);
+      app.config.discordTrialDmChannelId = guild
+        ? "1000000000000000090"
+        : CHANNEL;
+      app.config.discordTrialGuild = {
+        guildId: GUILD,
+        channelId: guild ? CHANNEL : "1000000000000000091",
+      };
+      app.store.schedule(CHANNEL, 2000, "checking in", 1000);
+      app.store.schedule("1000000000000000092", 2000, "out of scope", 1000);
+      await deliverFollowups(app);
+      await deliverFollowups(app);
+      expect(
+        app.rest.post.mock.calls.filter(([route]) =>
+          route.endsWith("/messages"),
+        ),
+      ).toHaveLength(1);
+      expect(app.complete).not.toHaveBeenCalled();
+      expect(app.store.followups(CHANNEL)).toEqual([]);
+    },
+  );
 });
