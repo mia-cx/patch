@@ -101,7 +101,7 @@ invalidate memory caches and affected caller history; a model reply is not proof
 of deletion. Keep Remora's API generic and require separate deletion grants.
 The `/memory` commands are published against reviewed
 Remora runtime `4e95553`, contract `f00a364` ([management guide](https://github.com/mia-cx/remora/blob/54f7bd6/docs/api/memory-management.md)).
-All 183 Patch tests and 14 isolated HTTP checks pass; the other five commands were preserved.
+Active recall is prepared offline against `28216a6`: scoped `memory_search` requires its feature and four limits; no rollout.
 The memory representation uses explicit third-person facts bound to generic stable
 entity references, keeping fact subjects separate
 from source authors and preserving raw evidence and receipts. Names are optional

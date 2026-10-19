@@ -127,6 +127,14 @@ commands were preserved. See the [Remora management guide](https://github.com/mi
 
 ## Remora DM integration
 
+Offline active-recall support adds `memory_search(query, limit?, min_score?)`
+through Protocord. It is hidden unless Remora advertises `memory_search` with all
+four valid search limits and the conversation has an eligible selected bank
+scope. The model cannot add banks. Returned subject identities and source voices
+stay separate; similarity scores are rankings. No source or generation writes
+come from search. This support is not deployed or enabled on the current trial.
+See [Remora's active-recall guide](https://github.com/mia-cx/remora/blob/28216a6/docs/api/active-recall.md).
+
 `REMORA_DM_ENABLED=true` enables memory for text turns in one-to-one DMs. Point
 the existing `LLM_BASE_URL`, `LLM_MODEL`, and `LLM_API_KEY` at an isolated Remora
 service. The validated profiles require `LLM_TEMPERATURE=0`, thinking disabled,
@@ -161,8 +169,11 @@ metadata and a matching write receipt. Receipts and observed cache reuse are
 logged; a writer failure preserves the generated reply and logs the failure.
 
 The shared contract snapshot is [remora-contract-v1.json](spec/fixtures/remora-contract-v1.json).
-It matches Remora commit `f00a364` semantically, preserving the earlier name and identity contract;
-only JSON formatting differs.
+It matches Remora commit `28216a6` semantically, preserving the earlier management,
+name and identity contracts. The canonical source SHA256 is
+`f90ecb2120f1053da54e2d53239cc6ec873370b8fa709ba3aece329a5a9dd0e3`.
+The companion [memory-search.json](spec/fixtures/memory-search.json) resolves its
+contract references to the local snapshot filename; JSON formatting also differs.
 Read-only callers may supply `remora.speaker: { bank, id }` to identify the current
 human's attribution scope. The ID is opaque and grants no access; writable turns
 infer that scope from `write_bank` and `turn.speaker_id`. The optional
