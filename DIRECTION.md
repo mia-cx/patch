@@ -20,8 +20,9 @@ through pnpm workspace dependencies. Publishing packages is deferred.
 Patch owns concrete Discord actions; Protocord owns their shared validation,
 availability, authorization, execution, presentation and triggers. Design the next
 harness tools around reactions, chosen reply targets, threads and self-initiated
-stateful activities. Daily play and active games need durable state. Model and
-slash triggers share actions; Protocord's AI extension remains a scaffold.
+stateful activities; keep daily play and active games durable. Add `web_search`,
+`web_fetch` with sources and persistent scoped text notes, without shell or code
+execution. Model and slash triggers share actions; Protocord's AI remains a scaffold.
 
 Start Remora conversation trials in a single-human place. Wrong-person recall
 and semantic forgetting collateral remain unresolved for shared places.
