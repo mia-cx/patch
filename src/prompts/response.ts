@@ -21,7 +21,9 @@ export const RESPONSE_TEMPLATE_TOKEN_MARGIN = 1_024;
 export function buildResponseContextBudget(
   config: Config,
   mode: ResponseTranscriptMode,
-  nativeHistory = config.remoraDmEnabled && mode === "dm",
+  nativeHistory = mode === "dm"
+    ? config.remoraDmEnabled
+    : Boolean(config.discordTrialGuild),
   actionsPrompt = "",
   nativeTools: readonly LlmTool[] = [],
 ): ContextBudget {

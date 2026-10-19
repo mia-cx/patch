@@ -6,6 +6,7 @@ import {
   type TextBasedChannel,
 } from "discord.js";
 import { Schema } from "effect";
+import { allowsConversation } from "../discord/scope.js";
 import type { ActionContext, ActionRegistry } from "./context.js";
 import { actionInput } from "./context.js";
 import { toolCall } from "./tool-calls.js";
@@ -91,8 +92,10 @@ export function registerHarnessActions(registry: ActionRegistry) {
         if (!invocation.channelId || !context.toolScope)
           throw new Error("Harness tools require an active conversation");
         if (
-          context.config.discordTrialDmChannelId &&
-          invocation.channelId !== context.config.discordTrialDmChannelId
+          !allowsConversation(context.config, {
+            channelId: invocation.channelId,
+            guildId: invocation.guildId,
+          })
         )
           throw new Error("Outside the scoped trial conversation");
         if (options.guildOnly && !invocation.guildId)

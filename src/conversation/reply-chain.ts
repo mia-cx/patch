@@ -18,6 +18,8 @@ export async function reconstructReplyChain(
 
   for (let depth = 0; depth < MAX_REPLY_DEPTH; depth += 1) {
     if (!current.replyTo) break;
+    // A message reference never grants access to another conversation's history.
+    if (current.replyTo.channelId !== trigger.channelId) break;
     if (
       startMessageId &&
       BigInt(current.replyTo.messageId) < BigInt(startMessageId)

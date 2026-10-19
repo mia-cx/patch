@@ -1,4 +1,5 @@
 import type { ActionContext } from "../actions/context.js";
+import { allowsConversation, isScopedTrial } from "../discord/scope.js";
 
 /** Deliver stored text once; an ambiguous send stays uncertain and is never blindly retried. */
 export async function deliverFollowups(context: ActionContext) {
@@ -6,8 +7,9 @@ export async function deliverFollowups(context: ActionContext) {
   if (!store) return;
   for (const job of store.due()) {
     if (
-      context.config.discordTrialDmChannelId &&
-      job.scope !== context.config.discordTrialDmChannelId
+      isScopedTrial(context.config) &&
+      job.scope !== context.config.discordTrialDmChannelId &&
+      job.scope !== context.config.discordTrialGuild?.channelId
     )
       continue;
     await context.queue.add(
@@ -17,6 +19,13 @@ export async function deliverFollowups(context: ActionContext) {
           const channel = await context.client.channels.fetch(job.scope);
           if (!channel?.isSendable())
             throw new Error("Follow-up channel is no longer sendable");
+          if (
+            !allowsConversation(context.config, {
+              channelId: channel.id,
+              guildId: "guildId" in channel ? channel.guildId : null,
+            })
+          )
+            throw new Error("Follow-up is outside the scoped trial");
           const message = await channel.send({
             content: job.text,
             allowedMentions: { parse: [], repliedUser: false },

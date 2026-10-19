@@ -154,7 +154,10 @@ export class LlmClient {
       throw new Error(
         "The Remora HF profile requires ACTIVITY_UPDATES_ENABLED=false; activity requests use sampling",
       );
-    const bankCount = new Set(this.config.remoraReadBanks).size + 1;
+    const bankCount = Math.max(
+      new Set(this.config.remoraReadBanks).size + 1,
+      this.config.discordTrialGuild ? 2 : 0,
+    );
     if (
       bankCount > limits.max_read_banks ||
       (bankCount > 1 && !features.multi_bank)

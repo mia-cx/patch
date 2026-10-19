@@ -25,6 +25,7 @@ import {
   discordClientOptions,
 } from "./discord/discord-js-adapter.js";
 import { DiscordPronounProvider } from "./discord/pronouns.js";
+import { allowsConversation, isScopedTrial } from "./discord/scope.js";
 import { getBotIdentity } from "./identity.js";
 import { LlmClient } from "./llm/client.js";
 import { ModelCatalog } from "./llm/model-catalog.js";
@@ -45,7 +46,7 @@ const config = loadConfig();
 const identity = getBotIdentity();
 const logger = createLogger(config.debugLogging || config.llmTraceLogging);
 const client = new Client(
-  config.discordTrialDmChannelId
+  config.discordTrialDmChannelId && !config.discordTrialGuild
     ? {
         ...discordClientOptions,
         intents: [
@@ -61,12 +62,17 @@ const settings = new SettingsStore(config.settingsDbPath, {
 const contextStore = new ConversationContextStore(config.settingsDbPath);
 const llm = new LlmClient(config, settings);
 const memory = new RemoraMemoryClient(config);
-if (config.remoraDmEnabled) {
+if (config.remoraDmEnabled || config.discordTrialGuild) {
   const capabilities = await llm.initializeRemora();
   await memory.initialize(capabilities);
   if (config.discordTrialDmChannelId)
     contextStore.recordMemoryContext(config.discordTrialDmChannelId);
-  const budget = buildResponseContextBudget(config, "dm");
+  if (config.discordTrialGuild)
+    contextStore.recordMemoryContext(config.discordTrialGuild.channelId);
+  const budget = buildResponseContextBudget(
+    config,
+    config.discordTrialGuild ? "global" : "dm",
+  );
   if (
     budget.promptTokens + (budget.responseTokens ?? 0) >=
     budget.contextTokens
@@ -80,7 +86,7 @@ if (config.remoraDmEnabled) {
       contextTokens: config.llmContextTokens,
       maxTokens: config.llmMaxTokens,
     },
-    "Remora DM memory enabled",
+    "Remora memory enabled",
   );
 }
 const modelCatalog = new ModelCatalog(llm, logger);
@@ -116,8 +122,8 @@ client.once(Events.ClientReady, (readyClient) => {
     logger.warn({ error }, "failed to prewarm model catalog");
   });
 
-  // A one-DM trial must not change the application's global Discord commands.
-  if (!config.discordTrialDmChannelId) {
+  // Scoped trials must not change the application's global Discord commands.
+  if (!isScopedTrial(config)) {
     void registerDiscordCommands(readyClient, actionRegistry).catch((error) => {
       logger.error({ error }, "failed to register action triggers");
     });
@@ -131,17 +137,14 @@ client.once(Events.ClientReady, (readyClient) => {
       llmModel: settings.getLlmModel(),
       settingsDbPath: config.settingsDbPath,
       trialDmChannelId: config.discordTrialDmChannelId || undefined,
+      trialGuild: config.discordTrialGuild,
     },
     `${identity.name.toLowerCase()} online`,
   );
 });
 
 client.on(Events.MessageCreate, (message) => {
-  if (
-    config.discordTrialDmChannelId &&
-    message.channelId !== config.discordTrialDmChannelId
-  )
-    return;
+  if (!allowsConversation(config, message)) return;
   void handleMessage(message).catch((error) => {
     logger.error(
       { error, messageId: message.id, channelId: message.channelId },
@@ -151,11 +154,7 @@ client.on(Events.MessageCreate, (message) => {
 });
 
 client.on(Events.MessageUpdate, (oldMessage, newMessage) => {
-  if (
-    config.discordTrialDmChannelId &&
-    newMessage.channelId !== config.discordTrialDmChannelId
-  )
-    return;
+  if (!allowsConversation(config, newMessage)) return;
   void handleMessageUpdate(oldMessage, newMessage).catch((error) => {
     logger.error(
       { error, messageId: newMessage.id, channelId: newMessage.channelId },
@@ -166,8 +165,11 @@ client.on(Events.MessageUpdate, (oldMessage, newMessage) => {
 
 client.on(Events.InteractionCreate, (interaction) => {
   if (
-    config.discordTrialDmChannelId &&
-    interaction.channelId !== config.discordTrialDmChannelId &&
+    isScopedTrial(config) &&
+    !allowsConversation(config, {
+      channelId: interaction.channelId ?? "",
+      guildId: interaction.guildId,
+    }) &&
     !(interaction.isChatInputCommand() && interaction.commandName === "memory")
   )
     return;
@@ -483,6 +485,7 @@ async function isReplyToBot(
 ): Promise<boolean> {
   const reference = message.reference;
   if (!reference?.messageId || !reference.channelId) return false;
+  if (reference.channelId !== message.channelId) return false;
 
   try {
     const parent = await adapter.fetchMessage({

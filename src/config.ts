@@ -4,6 +4,7 @@ export type Config = {
   discordToken: string;
   discordClientId: string;
   discordTrialDmChannelId: string;
+  discordTrialGuild: { guildId: string; channelId: string } | undefined;
   llmBaseUrl: string;
   llmModel: string;
   llmApiKey: string;
@@ -46,6 +47,12 @@ const ConfigSchema = Schema.Struct({
   discordToken: Schema.String.check(Schema.isMinLength(1)),
   discordClientId: Schema.String.check(Schema.isMinLength(1)),
   discordTrialDmChannelId: Schema.String,
+  discordTrialGuild: Schema.UndefinedOr(
+    Schema.Struct({
+      guildId: Schema.String.check(Schema.isPattern(/^\d{1,20}$/)),
+      channelId: Schema.String.check(Schema.isPattern(/^\d{1,20}$/)),
+    }),
+  ),
   llmBaseUrl: Schema.String.check(Schema.isMinLength(1)),
   llmModel: Schema.String.check(Schema.isMinLength(1)),
   llmApiKey: Schema.String.check(Schema.isMinLength(1)),
@@ -87,6 +94,14 @@ export function loadConfigEffect(env: NodeJS.ProcessEnv = process.env) {
       discordToken: required(env, "DISCORD_TOKEN"),
       discordClientId: required(env, "DISCORD_CLIENT_ID"),
       discordTrialDmChannelId: env.DISCORD_TRIAL_DM_CHANNEL_ID?.trim() ?? "",
+      discordTrialGuild:
+        env.DISCORD_TRIAL_GUILD_ID?.trim() ||
+        env.DISCORD_TRIAL_GUILD_CHANNEL_ID?.trim()
+          ? {
+              guildId: env.DISCORD_TRIAL_GUILD_ID?.trim() ?? "",
+              channelId: env.DISCORD_TRIAL_GUILD_CHANNEL_ID?.trim() ?? "",
+            }
+          : undefined,
       llmBaseUrl: trimTrailingSlash(
         env.LLM_BASE_URL ?? "http://10.0.3.2:8080/v1",
       ),

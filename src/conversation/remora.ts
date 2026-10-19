@@ -1,19 +1,28 @@
 import { ChannelType, type Message } from "discord.js";
 import type { Config } from "../config.js";
+import { allowsConversation } from "../discord/scope.js";
 import type { RemoraRequest } from "../llm/remora.js";
 
-/** Maps a new one-to-one DM to its bank and stable, revisioned source identity. */
+/** Keep personal banks in DMs; opted-in guild turns read shared banks and write only their channel. */
 export function buildRemoraRequest(
   config: Config,
   message: Message,
 ): RemoraRequest | undefined {
-  if (!config.remoraDmEnabled || message.channel.type !== ChannelType.DM)
-    return;
-  if (!message.content.trim()) return;
+  if (!message.content.trim() || !allowsConversation(config, message)) return;
 
-  const bank = `discord:dm:${message.channelId}`;
+  const personal =
+    message.channel.type === ChannelType.DM && config.remoraDmEnabled;
+  const shared =
+    message.guildId &&
+    config.discordTrialGuild &&
+    message.guildId === config.discordTrialGuild.guildId &&
+    message.channelId === config.discordTrialGuild.channelId;
+  if (!personal && !shared) return;
+  const bank = `discord:${personal ? "dm" : "channel"}:${message.channelId}`;
   return {
-    read_banks: [...new Set([bank, ...config.remoraReadBanks])],
+    read_banks: personal
+      ? [...new Set([bank, ...config.remoraReadBanks])]
+      : [bank, `discord:guild:${message.guildId}`],
     write_bank: bank,
     turn: {
       id: `discord:message:${message.id}`,
