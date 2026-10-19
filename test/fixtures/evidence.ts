@@ -33,7 +33,7 @@ export const evidenceCapabilities = {
     max_observation_total_chars: 262144,
     max_observation_id_chars: 256,
   },
-};
+} as const;
 
 /** Invented quotation, with explicit source voice and deliberately unresolved subjects. */
 export function makeEvidenceRecord(bank = "room-a", id = 1) {

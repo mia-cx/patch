@@ -15,6 +15,52 @@ function store(path = ":memory:") {
 }
 
 describe("text workspace and durable actions", () => {
+  // Proves restarts retain cutover and exact context identities, while source conflicts and boundary rewinds fail locally.
+  it("persists immutable observation boundaries and context manifests", () => {
+    const dir = mkdtempSync(join(tmpdir(), "patch-observations-"));
+    resources.push(() => rmSync(dir, { recursive: true, force: true }));
+    const path = join(dir, "observations.sqlite");
+    const first = new HarnessStore(path);
+    expect(first.observationCutoff("bank:A", "100")).toBe(100n);
+    const context = [
+      { id: "message:12", revision: 1000, digest: "a".repeat(64) },
+    ];
+    expect(
+      first.freezeObservation(
+        "bank:A",
+        "message:13",
+        0,
+        "b".repeat(64),
+        context,
+      ),
+    ).toEqual(context);
+    first.close();
+    const next = store(path);
+    expect(next.observationCutoff("bank:A", "100")).toBe(100n);
+    expect(() => next.observationCutoff("bank:A", "90")).toThrow(
+      "durable bank boundary",
+    );
+    expect(
+      next.freezeObservation("bank:A", "message:13", 0, "b".repeat(64), []),
+    ).toEqual(context);
+    expect(() =>
+      next.freezeObservation(
+        "bank:A",
+        "message:13",
+        0,
+        "c".repeat(64),
+        context,
+      ),
+    ).toThrow("original revision");
+    expect(
+      next.freezeObservation("bank:A", "message:13", 1, "c".repeat(64), []),
+    ).toEqual([]);
+    expect(next.observationCutoff("bank:B", "200")).toBe(200n);
+    expect(
+      next.freezeObservation("bank:B", "message:13", 0, "d".repeat(64), []),
+    ).toEqual([]);
+  });
+
   // Proves scoped notes survive restart as literal text, with optimistic edits and no host paths.
   it("persists scoped text and rejects stale edits and host paths", () => {
     const dir = mkdtempSync(join(tmpdir(), "patch-notes-"));

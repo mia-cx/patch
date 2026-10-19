@@ -1,17 +1,28 @@
 import { readFileSync } from "node:fs";
 import { ChannelType, Client, ClientUser } from "discord.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { evidenceCapabilities } from "../../test/fixtures/evidence.js";
 import type { ActionContext } from "../actions/context.js";
 import { registerDefaultActions } from "../actions/defaults.js";
 import { createPatchActionRegistry } from "../actions/registry.js";
 import { loadConfig } from "../config.js";
+import { ConversationObservations } from "../conversation/observations.js";
+import { buildRemoraRequest } from "../conversation/remora.js";
 import { ConversationContextStore } from "../conversation/store.js";
+import {
+  buildTranscript,
+  formatTranscriptMessages,
+} from "../conversation/transcript.js";
 import type { ConversationMessage } from "../conversation/types.js";
 import {
   DiscordJsAdapter,
   toConversationMessage,
 } from "../discord/discord-js-adapter.js";
 import { LlmClient } from "../llm/client.js";
+import {
+  type ObservationBatch,
+  decodeObservationView,
+} from "../llm/evidence.js";
 import { ModelCatalog } from "../llm/model-catalog.js";
 import { parseRemoraCapabilities } from "../llm/remora.js";
 import { createLogger } from "../logger.js";
@@ -20,6 +31,7 @@ import { GenerationQueue } from "../queue.js";
 import { respond } from "../response/responder.js";
 import { SettingsStore } from "../settings/store.js";
 import { deliverFollowups } from "./followups.js";
+import { toolResultMessage } from "./observations.js";
 import { HarnessStore } from "./store.js";
 import { runToolTurn } from "./turn.js";
 import { WebClient } from "./web.js";
@@ -270,6 +282,364 @@ const call = (name: string, args: object) =>
   `<tool_call>${JSON.stringify({ name, arguments: args })}</tool_call>`;
 
 describe("complete harness with the actual Discord SDK", () => {
+  // Proves the real responder negotiates evidence, binds raw SDK text and web excerpts, and never sends caller metadata or legacy writes over HTTP.
+  it("observes raw human and web sources through the real tool continuation", async () => {
+    const app = await runtime(false, true);
+    app.complete.mockRestore();
+    app.config.llmTemperature = 0;
+    app.config.remoraObservationStartId = "1000000000000000000";
+    app.message.content = `  <@${BOT}> A😀 & <response>raw</response>\r\n`;
+    const bank = `discord:dm:${CHANNEL}`;
+    const requests: Array<{
+      messages: Array<{ role: string; content: string }>;
+      remora: { observations: ObservationBatch; read_banks: string[] };
+    }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/capabilities"))
+          return Response.json(evidenceCapabilities);
+        expect(url).toBe("http://remora.test/v1/chat/completions");
+        const body = JSON.parse(String(init?.body));
+        requests.push(body);
+        const attempt = `generation-${String(requests.length).repeat(32)}`;
+        return Response.json({
+          choices: [
+            {
+              message: {
+                content:
+                  requests.length === 1
+                    ? call("web_fetch", { url: "https://example.com/" })
+                    : "found that page",
+              },
+            },
+          ],
+          remora: {
+            version: 1,
+            backend: "transformers",
+            read_banks: [bank],
+            selected: [],
+            writes: null,
+            cache: {
+              requested: true,
+              reused_tokens: 0,
+              evaluated_tokens: 100,
+              invalidated: null,
+            },
+            observations: {
+              inputs: body.remora.observations.inputs.map(
+                (input: { id: string; revision: number }) => ({
+                  source_id: input.id,
+                  revision: input.revision,
+                  outcome: "rejected",
+                  receipt: {
+                    saved: [],
+                    superseded: [],
+                    status: "not_admitted",
+                    replayed: false,
+                    admission_identity: "a".repeat(64),
+                  },
+                }),
+              ),
+              generated: [
+                {
+                  source_id: `${attempt}:output`,
+                  revision: 0,
+                  outcome: "untracked_dependencies",
+                  receipt: {
+                    saved: [],
+                    superseded: [],
+                    status: "not_admitted",
+                    replayed: false,
+                    admission_identity: null,
+                  },
+                },
+              ],
+              attempt_id: attempt,
+              input_replayed: false,
+            },
+          },
+        });
+      }),
+    );
+    await app.llm.initializeRemora();
+    await app.run();
+    expect(requests).toHaveLength(2);
+    for (const request of requests) {
+      expect(request.remora).not.toHaveProperty("turn");
+      expect(request.remora).not.toHaveProperty("write_bank");
+      expect(request.remora).not.toHaveProperty("identity");
+      expect(
+        request.messages.every(
+          (message) => !Object.hasOwn(message, "observationSources"),
+        ),
+      ).toBe(true);
+      expect(request.messages.at(-1)?.content).toBe(app.message.content);
+      const human = request.remora.observations.inputs.find(
+        (input) => input.id === `discord:message:${CURRENT}`,
+      );
+      expect(human).toMatchObject({
+        origin: "human_input",
+        actor: { bank, role: "human", id: `discord:user:${HUMAN}` },
+      });
+      expect(
+        request.remora.observations.inputs.some(
+          (input) => input.origin === "assistant_output",
+        ),
+      ).toBe(false);
+    }
+    const second = requests[1];
+    const external =
+      second?.remora.observations.inputs.filter(
+        (input) => input.origin === "external_observation",
+      ) ?? [];
+    expect(external).toHaveLength(2);
+    expect(
+      external.every(
+        (input) =>
+          input.tool === "web_fetch" &&
+          input.url === "https://example.com/" &&
+          !input.actor,
+      ),
+    ).toBe(true);
+    const excerpts = external.flatMap((input) =>
+      input.views.map((view) =>
+        decodeObservationView(
+          Array.from(second?.messages[view.message_index]?.content ?? "")
+            .slice(view.start, view.end)
+            .join(""),
+          view.encoding,
+        ),
+      ),
+    );
+    expect(excerpts).toContain("A real fixture page.");
+    expect(
+      external.every((input) =>
+        input.context?.includes(`discord:message:${CURRENT}`),
+      ),
+    ).toBe(true);
+    expect(requests[0]?.remora.observations.id).not.toBe(
+      second?.remora.observations.id,
+    );
+    expect(
+      app.rest.post.mock.calls.filter(([route]) => route.endsWith("/messages")),
+    ).toHaveLength(1);
+  });
+
+  // Proves raw and escaped views remain one source, context manifests survive rerendering, and missing original dependencies cannot silently change them.
+  it("reuses exact history identities and omits sources with changed original context", async () => {
+    const app = await runtime(false, true);
+    const remora = buildRemoraRequest(app.config, app.message);
+    if (!remora) throw new Error("Missing fixture memory scope");
+    const mapper = new ConversationObservations({
+      store: app.store,
+      remora,
+      message: app.message,
+      botUserId: BOT,
+      startId: "1000000000000000000",
+      limits: evidenceCapabilities.limits,
+    });
+    const raw = `  <@${BOT}> A😀 & <response>hi</response>\r\n`;
+    const current = toConversationMessage(app.message, BOT);
+    const older: ConversationMessage = {
+      ...current,
+      id: "1000000000000000001",
+      content: "normalized",
+      source: { text: raw, revision: 10 },
+    };
+    const transcript = buildTranscript([older, current], BOT);
+    const history = formatTranscriptMessages(transcript, CURRENT, (block) =>
+      mapper.humanSource(block),
+    );
+    const first = mapper.request([...history, mapper.currentMessage()]);
+    expect(first.observations?.inputs).toHaveLength(2);
+    const olderInput = first.observations?.inputs[0];
+    const view = olderInput?.views[0];
+    if (!view) throw new Error("Missing source view");
+    expect(
+      decodeObservationView(
+        Array.from(history[view.message_index]?.content ?? "")
+          .slice(view.start, view.end)
+          .join(""),
+        view.encoding,
+      ),
+    ).toBe(raw);
+    expect(first.observations?.inputs[1]?.context).toEqual([
+      `discord:message:${older.id}`,
+    ]);
+    const rerendered = formatTranscriptMessages(
+      buildTranscript([{ ...older, authorName: "renamed 😀" }, current], BOT),
+      CURRENT,
+      (block) => mapper.humanSource(block),
+    );
+    expect(
+      mapper.request([...rerendered, mapper.currentMessage()]).observations?.id,
+    ).toBe(first.observations?.id);
+    expect(
+      mapper.request([mapper.currentMessage()]).observations?.inputs,
+    ).toEqual([]);
+    const edited = formatTranscriptMessages(
+      buildTranscript(
+        [{ ...older, source: { text: "changed", revision: 11 } }, current],
+        BOT,
+      ),
+      CURRENT,
+      (block) => mapper.humanSource(block),
+    );
+    expect(
+      mapper
+        .request([...edited, mapper.currentMessage()])
+        .observations?.inputs.map((input) => input.id),
+    ).toEqual([`discord:message:${older.id}`]);
+  });
+
+  // Proves a fresh post-reset human source does not inherit an unavailable historical context chain.
+  it("admits a fresh source independently of omitted historical dependencies", async () => {
+    const app = await runtime(false, true);
+    const remora = buildRemoraRequest(app.config, app.message);
+    if (!remora) throw new Error("Missing fixture memory scope");
+    const options = {
+      store: app.store,
+      remora,
+      message: app.message,
+      botUserId: BOT,
+      startId: "1000000000000000000",
+      limits: evidenceCapabilities.limits,
+    };
+    const mapper = new ConversationObservations(options);
+    const first = mapper.request([mapper.currentMessage()]);
+    const old = toConversationMessage(app.message, BOT);
+    // A second turn freezes the first source as its context.
+    app.message.id = "1000000000000000010";
+    app.message.content = "second turn";
+    const second = new ConversationObservations({
+      ...options,
+      remora: buildRemoraRequest(app.config, app.message) ?? remora,
+    });
+    const secondHistory = formatTranscriptMessages(
+      buildTranscript([old], BOT),
+      app.message.id,
+      (block) => second.humanSource(block),
+    );
+    expect(
+      second.request([...secondHistory, second.currentMessage()]).observations
+        ?.inputs[1]?.context,
+    ).toEqual([first.observations?.inputs[0]?.id]);
+    const middle = toConversationMessage(app.message, BOT);
+    // A rollover removes the first turn, so the second cannot replay its exact original context.
+    app.message.id = "1000000000000000011";
+    app.message.content = "an independent new detail";
+    const third = new ConversationObservations({
+      ...options,
+      remora: buildRemoraRequest(app.config, app.message) ?? remora,
+    });
+    const recentHistory = formatTranscriptMessages(
+      buildTranscript([middle], BOT),
+      app.message.id,
+      (block) => third.humanSource(block),
+    );
+    const result = third.request([...recentHistory, third.currentMessage()]);
+    expect(
+      result.observations?.inputs.map((input) => ({
+        id: input.id,
+        context: input.context,
+      })),
+    ).toEqual([{ id: `discord:message:${app.message.id}`, context: [] }]);
+  });
+
+  // Proves pre-cutover edits, foreign-channel history and transformed assistant display cannot become independent evidence.
+  it("requires a cutover and excludes old or unqualified history", async () => {
+    const app = await runtime(false, true);
+    const remora = buildRemoraRequest(app.config, app.message);
+    if (!remora) throw new Error("Missing fixture memory scope");
+    const options = {
+      store: app.store,
+      remora,
+      message: app.message,
+      botUserId: BOT,
+      limits: evidenceCapabilities.limits,
+    };
+    expect(
+      () => new ConversationObservations({ ...options, startId: "" }),
+    ).toThrow("REMORA_OBSERVATION_START_ID");
+    const mapper = new ConversationObservations({
+      ...options,
+      startId: CURRENT,
+    });
+    const human = toConversationMessage(app.message, BOT);
+    const { source: _, ...withoutSource } = human;
+    for (const row of [
+      {
+        ...human,
+        source: { text: "an old message edited today", revision: 200 },
+      },
+      { ...human, id: PREVIOUS, channelId: "foreign" },
+      { ...human, id: PREVIOUS, authorId: BOT, authorIsBot: true },
+      { ...withoutSource, id: PREVIOUS },
+    ]) {
+      const block = buildTranscript([row], BOT).blocks[0];
+      if (!block) throw new Error("Missing fixture block");
+      expect(mapper.humanSource(block)).toBeUndefined();
+    }
+    expect(
+      mapper.request([mapper.currentMessage()]).observations?.inputs,
+    ).toEqual([]);
+    expect(
+      () => new ConversationObservations({ ...options, startId: "1" }),
+    ).toThrow("durable bank boundary");
+  });
+
+  // Proves duplicate snippets retain their own URL, while recalled facts, replayable scratch data and truncated receipts stay untracked.
+  it("binds tool JSON values by path rather than matching their text", () => {
+    const results = [
+      {
+        name: "web_search",
+        completed: true,
+        output: {
+          results: [
+            { title: "same", snippet: "same😀", url: "https://one.test/" },
+            { title: "same", snippet: "same😀", url: "https://two.test/" },
+          ],
+        },
+      },
+      {
+        name: "memory_search",
+        completed: true,
+        output: { text: "same😀", url: "https://forbidden.test/" },
+      },
+      {
+        name: "scratch_read",
+        completed: true,
+        output: { text: "same😀", url: "https://forbidden.test/" },
+      },
+      {
+        name: "web_fetch",
+        completed: true,
+        truncated: true,
+        output: { text: "partial", url: "https://forbidden.test/" },
+      },
+    ];
+    const rendered = toolResultMessage(results, "prefix😀\n", "turn-1");
+    expect(rendered.content).toBe(`prefix😀\n${JSON.stringify(results)}`);
+    const segments = rendered.observationSources ?? [];
+    expect(segments).toHaveLength(4);
+    expect(new Set(segments.map(({ source }) => source.id)).size).toBe(4);
+    expect(segments.map(({ source }) => source.url)).toEqual([
+      "https://one.test/",
+      "https://one.test/",
+      "https://two.test/",
+      "https://two.test/",
+    ]);
+    expect(
+      segments.map((segment) =>
+        decodeObservationView(
+          rendered.content.slice(segment.start, segment.end),
+          segment.encoding,
+        ),
+      ),
+    ).toEqual(["same", "same😀", "same", "same😀"]);
+  });
+
   // Proves an opted-in shared conversation uses channel/server recall, never private extras, with source-bound roles and tools intact.
   it("uses shared banks and preserves speakers in the configured guild channel", async () => {
     const app = await runtime(true, true);
