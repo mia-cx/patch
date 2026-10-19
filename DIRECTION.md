@@ -27,9 +27,9 @@ Raw human/web views and authenticated generated parents preserve exact origins a
 Transformed Discord displays depend on their raw parent. Principal-wide erasure fences purge caller plaintext.
 Mia approved the clean model-context boundary; rollover cannot repair an untracked reply chain.
 Preserve all old Discord/history records and bank data, without re-extraction or source renaming.
-Caller mechanics pass 351 tests; full-persona v5 supports bounded recall/correction/erasure/isolation, with partial web meaning.
-Immutable caller `47f2fb8`/`996f43e` is live with durable write-bank cutoffs and a principal-wide clean context boundary.
-Cueing web calls and literal assistant-history fixes pass offline tests, but E2B still stops after searching. See [diagnosis](spec/quotes-and-web-diagnosis.md).
+Caller mechanics pass 360 tests; full-persona E4B qualification supports bounded recall/correction/erasure/isolation and fetched-page meaning.
+Immutable caller `209603b`/`51eb418` is live with the existing durable cutoffs and principal-wide context boundary.
+Assistant history stays literal; tagged web calls pass the actual E4B caller journey. The earlier E2B search-only failure remains recorded in the [diagnosis](spec/quotes-and-web-diagnosis.md).
 Causal tool exchanges and completed-read reuse keep the three-call ceiling; games remain deferred. See [v2](spec/v2.md).
 
 Mia added only guild `1559060271404945512`, channel `1561529690953490442`, alongside the owner DM.
@@ -77,7 +77,7 @@ and warm recall reproduce the off-topic dog reply. An empty fact allowlist and
 bare Gemma both produce a relevant follow-up; restoring recall restores the
 failure. All bank rows and policy bytes are unchanged.
 The turn relevance fix adds an optional turn-start gate using reviewed runtime
-`d0b8b52` and release docs `70ba7c9`. Frozen head C100/-5 remains in the active
+`d0b8b52` and release docs `70ba7c9`. Turn relevance remains enabled in the active
 profile on `18787`:
 `gemma-reference-12288-native-cache-source-projected-turn-relevance-all-stream-evidence`.
 Read the [turn relevance guide](https://github.com/mia-cx/remora/blob/70ba7c9c8a4a9c0cf7bef12b6dde97ebe271c000/docs/api/turn-relevance.md)
@@ -90,8 +90,8 @@ cache files and policies are preserved. The release passed startup and Discord
 READY before the offline hold. Caller, persona, source tuple and history stay unchanged. Names
 remain separately gated. Coordinate any GPU window before changing the shared
 model lease. No LoRA.
-Mia requested Unsloth quantized E4B instruction weights. Remora owns offline loading/adaptation;
-keep Patch and Laya unchanged until its concrete coordinated drain window. No new probes or classifier enablement.
+Mia's approved Unsloth NF4 E4B switch is live as `gemma-4-e4b-it-unsloth-bnb-4bit`.
+The 18-completion full-persona journey passes bounded gates with Laya resident. Startup caps/Discord READY pass; only the caller model aliases change alongside reviewed `209603b`. Classifier gates remain off.
 Memory inspection and forgetting belong to Protocord slash commands backed by
 deterministic Remora management endpoints. Users control their personal DM bank;
 shared channel/server banks follow Discord access and management permissions.

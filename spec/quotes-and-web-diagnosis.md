@@ -27,7 +27,7 @@ Bare function-looking text is not executable. The raw human message remains sepa
 The real SDK/responder regression dispatches this captured syntax, reads a fictional result and posts the answer.
 It fakes inference and external web responses, so it proves caller mechanics rather than model selection.
 
-## Actual-model limit
+## E2B comparison
 
 Eight bounded E2B calls used read banks plus the same speaker, without observation batches or writable tuples.
 Every response returned `writes:null` and no observation receipts. No Discord messages were sent.
@@ -39,5 +39,30 @@ Brief instructions improved initial call selection; literal history alone did no
 Private captures and comparisons live under
 `/home/mia/.cache/patch-remora-dm-trial/diagnosis/quotes-web-2026-10-19/`.
 `verified/attempts.json` and `verified/result.json` preserve the actual search-only negative result.
-No new model probes or deployment follow this slice. Patch and Laya stay unchanged while Remora prepares E4B.
-Future model qualification must require a real page result and an answer grounded in it.
+This result remains an E2B failure; the later E4B qualification does not change it.
+
+## Qualified E4B release
+
+Mia approved the Unsloth NF4 E4B switch. The unchanged full-persona acceptance journey at
+`209603b` completes 18 generations and 34 caller HTTP requests on isolated invented banks.
+It executes `web_fetch`, uses the page's offline-until-sync detail, and recalls that detail after reset.
+Plain and indirect preferences, later conversational correction, same-ID source edits, erasure/retry,
+and the observed private/shared isolation checks pass their bounded gates with Laya resident.
+Physical SQL review finds no Oolong plaintext after erasure and no unrelated-bank changes.
+Revision and erasure also retire the useful independent correction through captured ancestry;
+independent correction preservation remains unproved. This is conservative collateral erasure,
+not a failure to read a surviving correction. General web and memory quality remain unqualified.
+
+The scoped caller now runs immutable `209603b`/`51eb418` with
+`gemma-4-e4b-it-unsloth-bnb-4bit`. Both the environment and persisted model setting use this alias.
+The full capability document matches the previous release except for the model value.
+Actual LlmClient negotiation, Discord READY in the existing DM and selected guild channel,
+and Laya English CUDA health pass. Classifier gates stay off.
+All other caller SQLite rows/schema, history, source IDs, cutoffs, persona, scopes and command objects remain unchanged.
+Release verification uses startup and health only, with no inference, deletion or registration probes.
+
+Private release proof lives under
+`/home/mia/.cache/patch-remora-dm-trial/diagnosis/e4b-release-2026-10-19/`.
+`resumed.json` binds the installed bundle, startup capabilities, model setting and preservation checks.
+Backend qualification and the preserved rejected attempts live under
+`/home/mia/.cache/ardm-runs/reviews/e4b-quant-port-2026-10-19/`.
