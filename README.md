@@ -38,7 +38,8 @@ text when Remora advertises `tools:false`. Other modes are `native`, `tagged`
 and `off`. `MAX_TOOL_CALLS` defaults to three and is capped at eight per turn.
 Results return to the model. Legacy Remora profiles write only the initial human
 source; tool continuations use read-only recall. The offline
-[evidence integration](spec/all-stream-evidence.md) also binds individual web results.
+[evidence integration](spec/all-stream-evidence.md) binds web results and authenticated
+raw-output parents for transformed Discord display.
 
 Web requests identify Patch, Protocord and Node.js HTTPS. Browser-style fallback
 agents retain that identity. Every redirect resolves and pins a public IP;
@@ -182,7 +183,8 @@ assistant text, with their message references in separate metadata that identifi
 the current speaker before the exact raw new human message, included once with
 a stable Discord message ID and edit revision. Generation retries keep
 the same source identity. Remora owns durable write deduplication. Classifier,
-activity, and output-formatting requests carry no memory extension. An edit used
+activity requests carry no memory extension. Legacy formatting stays memory-free;
+evidence-aware repair binds its actual generated parent with an empty recall allowlist. An edit used
 as a new trigger advances its source revision; changing older supplied history
 alone does not request deletion of its saved facts.
 
@@ -199,9 +201,9 @@ name and identity contracts. The canonical source SHA256 is
 The companion [memory-search.json](spec/fixtures/memory-search.json) resolves its
 contract references to the local snapshot filename; JSON formatting also differs.
 The independently negotiated [all-stream-evidence.json](spec/fixtures/all-stream-evidence.json)
-matches Remora companion `60cbdf5`, SHA256
-`c7b377b423a5f927f54245e59dbf6a9c173198eb5c0116c5e52741314fffd6da`.
-Its offline caller mapping and current generated-output limits are documented
+matches Remora companion `d3d1ee3`, SHA256
+`3d4760b113e65869f1d8cc5fceb3a4a81cf2d9f9eb85c48df03b5585ccc5b941`.
+Its offline generated-reference mapping and prepared full-persona qualification are documented
 in [the integration guide](spec/all-stream-evidence.md). No evidence profile or
 observation cutoff is installed in the held trial.
 Read-only callers may supply `remora.speaker: { bank, id }` to identify the current

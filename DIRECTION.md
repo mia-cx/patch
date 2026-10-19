@@ -22,9 +22,12 @@ Plain model text sends normally; optional reply metadata targets a visible messa
 Reactions, own-message edits/deletion, threads, polls, stickers and fixed-text follow-ups are implemented.
 DDG search/fetch identifies Patch/Protocord; persistent scoped notes offer no code execution.
 All model inputs and outputs should be eligible for passive memory, preserving each source's origin.
-Offline evidence transport/controls target Remora `e6d5754`, companion `60cbdf5`; see [caller mapping](spec/all-stream-evidence.md).
-Raw human and individual web sources use exact views, frozen contexts and a durable creation-ID cutoff.
-Earlier messages and transformed assistant history stay untracked. The current persona blocks generated retention.
+Offline evidence transport targets Remora `a96f638`/`d3d1ee3`; see [caller mapping](spec/all-stream-evidence.md).
+Raw human/web views and authenticated generated parents preserve exact origins and frozen ancestry.
+Transformed Discord displays depend on their raw parent. Principal-wide erasure fences purge caller plaintext.
+Release requires an explicit clean model-context boundary; rollover cannot repair an untracked reply chain.
+Preserve all old Discord/history records and bank data, without re-extraction or source renaming.
+Caller mechanics pass 328 offline tests; full-persona inference and shared transfer remain unqualified.
 No evidence profile, cutoff, command update or rollout is installed; Patch stays offline pending coordinated qualification.
 Tools are enabled in the scoped DM trial for actual-model evaluation; games remain deferred. See [v2](spec/v2.md).
 
@@ -38,7 +41,8 @@ metadata retains Patch reply references and identifies the raw final user turn.
 Stable source IDs and edit revisions survive generation retries. Read-bank
 selection never adds write destinations or grants.
 Runtime capabilities bound context/output; write receipts and observed cache reuse
-are validated. Classifier, activity, and formatting calls have no memory access.
+are validated. Classifier and activity calls have no memory access.
+Evidence-aware formatting observes its real dependency with an empty recall allowlist.
 The shared contract and synthetic full-persona request are in `spec/fixtures`.
 Initial HF/native TypeScript smokes establish durable retries and 7,310-token SYSTEM reuse,
 not whole-history continuity. Native CPU qualification is limited to its exact BF16 assets;
