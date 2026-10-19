@@ -27,7 +27,7 @@ Raw human/web views and authenticated generated parents preserve exact origins a
 Transformed Discord displays depend on their raw parent. Principal-wide erasure fences purge caller plaintext.
 Release requires an explicit clean model-context boundary; rollover cannot repair an untracked reply chain.
 Preserve all old Discord/history records and bank data, without re-extraction or source renaming.
-Caller mechanics pass 328 offline tests; full-persona inference and shared transfer remain unqualified.
+Caller mechanics pass 343 offline tests; full-persona v3 correction/web and shared transfer remain unqualified.
 No evidence profile, cutoff, command update or rollout is installed; Patch stays offline pending coordinated qualification.
 Tools are enabled in the scoped DM trial for actual-model evaluation; games remain deferred. See [v2](spec/v2.md).
 

@@ -3,7 +3,7 @@
 This caller targets Remora `d3d1ee3`, with strict lineage validation at `a96f638`.
 Patch remains offline. The installed bundle, environment, cutoff, commands,
 services, policy and original banks are unchanged. Actual full-caller inference
-qualification is pending. Offline proofs use invented responses only.
+remains unqualified after the isolated v2/v3 attempts. Offline proofs use invented responses only.
 
 ## Negotiation
 
@@ -107,8 +107,8 @@ No boundary is applied by this offline work.
 
 ## Prepared full-caller qualification
 
-[qualify.ts](../test/full-caller/qualify.ts) is prepared but has not run. It requires
-the future private `ready.json` and matching token-file path. It accepts only
+[qualify.ts](../test/full-caller/qualify.ts) requires each coordinated window's
+private `ready.json` and matching token-file path. It accepts only
 `127.0.0.1:18789/v1`, model `private-gemma-full-caller-v1` and four explicitly
 mapped `full-caller-v1-*` banks. It makes at most 24 completions and 63 caller HTTP
 requests. All Discord transports are invented local SDK packets; actual WebClient
@@ -133,10 +133,21 @@ or cross-bank disclosure fails qualification.
 It freezes exact complete persona bytes, the caller source/fixture closure and
 observed source/view counts in `full-caller-contract-v1`. The audit includes 41
 offered history pairs, three tagged tool rounds and actual formatting repair.
+The first tool round replays v3's captured `web_fetch{url:...}` shorthand through
+the real parser and schema-validated action path, retaining its exact raw parent.
 Observed maxima describe those fixtures; runtime validation uses negotiated
 128/512 ceilings. No shortened persona or transport-only semantic claim is accepted.
 
-Offline closure passes 328 tests, typecheck and build. Independent reviews found
+Offline closure passes 343 tests, typecheck and build. Independent reviews found
 and closed SQLite interleavings, visible-question ordering, omitted edit versions,
 late presentation, repair capture and transport-failure cancellation gaps.
-The final focused closure passes 81 checks and TypeScript with no remaining finding.
+The earlier focused lineage review passes 81 checks and TypeScript with no remaining finding.
+
+The frozen `5b410b0` actual v2 run stopped at its first reset-recall request.
+The v3 run completed 11 model attempts and 17 HTTP responses, all HTTP 200.
+Its first reset recalled Helix, oolong and future garage correctly. After a later
+Zed correction, reset still answered Helix; after editing the original source,
+reset was nonresponsive. The malformed tagged web call then stopped the journey.
+Both runs published failed atomic releases and preserved their original artifacts.
+The parser fix is offline-only and adds no completion. It does not qualify recall,
+correction, web semantics, erasure or isolation; the acceptance questions are unchanged.
