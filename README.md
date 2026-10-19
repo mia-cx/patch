@@ -132,9 +132,9 @@ through Protocord. It is hidden unless Remora advertises `memory_search` with al
 four valid search limits and the conversation has an eligible selected bank
 scope. The model cannot add banks. Returned subject identities and source voices
 stay separate; similarity scores are rankings. No source or generation writes
-come from search. Client runtime `87760e8` is deployed from `9240e41` in the scoped
-trial. Authenticated startup and Discord READY pass with unchanged environment
-and backend. Search stays hidden until the backend advertises support.
+come from search. Client runtime `87760e8` passed scoped-trial startup from `9240e41`.
+Patch is now held offline for Remora training while the additional guild-channel
+configuration is installed. Search stays hidden until the backend advertises support.
 See [Remora's active-recall guide](https://github.com/mia-cx/remora/blob/28216a6/docs/api/active-recall.md).
 
 `REMORA_DM_ENABLED=true` enables memory for text turns in one-to-one DMs. Point
@@ -147,6 +147,23 @@ subscribes only to DM events, confines conversation replies to that DM, and skip
 automatic global command registration. `/memory` can still be invoked in other
 places with the required permissions. Use a separate `SETTINGS_DB_PATH` to keep trial settings and context
 boundaries apart from other runs.
+
+Set both `DISCORD_TRIAL_GUILD_ID` and `DISCORD_TRIAL_GUILD_CHANNEL_ID` to add one
+exact shared channel. This also enables its Remora integration. Guild events are
+enabled, with handling restricted to that guild/channel pair and the existing
+trial DM. Other channels and child threads stay excluded. Automatic command
+registration remains disabled. Normal guild replies require a mention or reply
+to Patch while the optional classifier is disabled.
+Runtime `3e6ba7a` is installed while Patch stays offline for training. REST-only
+verification confirms access to view, read history and send in the selected channel.
+
+That shared channel reads `discord:channel:<channelId>` and
+`discord:guild:<guildId>`, and writes only the channel bank. Personal banks and
+`REMORA_READ_BANKS` extras never enter shared-channel requests. Remora must grant
+both reads and channel writes; passive dreaming also needs full channel forget
+authority. `/memory` still enforces Discord permissions for explicit deletion.
+Current passive formation rejects guild-bank ancestry in a channel-bank write;
+read grants do not authorize copying guild evidence into channel memories.
 
 Each DM reads and writes `discord:dm:<channelId>`. `REMORA_READ_BANKS` adds up to
 seven comma-separated read banks; it never adds write destinations. Remora's
@@ -253,9 +270,9 @@ before the later identity work. The current
 [serving guide](https://github.com/mia-cx/remora/blob/242fae2c141a7d0c5ebf8ec8dcebaec6ffc1351c/docs/api/serving.md)
 and [HF Patch handback](https://github.com/mia-cx/remora/blob/66f86295869a9c8ceb71195def08b14d67358a5c/docs/api/patch-handoff-2026-10-16.md)
 cover launch/policy and the archival integration proof respectively.
-The controlled HF trial uses one owner DM with
-`DISCORD_TRIAL_DM_CHANNEL_ID` and separate SQLite settings. Existing global
-Discord command registration is skipped in that mode.
+The controlled HF trial uses an owner DM and one explicitly configured guild
+channel with separate SQLite settings. Existing global command registration
+stays disabled. Patch remains offline during Remora training.
 
 The native `/context reset` command was published globally for the development bot
 on 2026-10-17, preserving the other four commands. Guild commands cannot be invoked

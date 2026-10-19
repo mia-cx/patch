@@ -24,8 +24,8 @@ DDG search/fetch identifies Patch/Protocord; persistent scoped notes offer no co
 Next: all model inputs and outputs—user queries, tool results, its own reasoning and replies—must be eligible for passive memory.
 Tools are enabled in the scoped DM trial for actual-model evaluation; games remain deferred. See [v2](spec/v2.md).
 
-Start Remora conversation trials in a single-human place. Wrong-person recall
-and semantic forgetting collateral remain unresolved for shared places.
+Mia added only guild `1559060271404945512`, channel `1561529690953490442`, alongside the owner DM.
+Read channel/server banks and write only the channel; runtime `3e6ba7a` is configured offline while Remora trains.
 
 Patch's Remora client is opt-in for one-to-one DMs. Caller-owned history uses real
 user/assistant roles. Incoming turns retain author IDs, names, pronouns, and reply
@@ -57,7 +57,7 @@ wrappers leak into output, and cumulative metadata footers obscure recent
 dialogue in Gemma's 512-token local attention. llama.cpp qualification does not
 gate this HF trial.
 Mia approved passive formation/dreaming (`8770d95`, serving `dfc09d9`) on the same HF API.
-The scoped trial runs runtime `87760e8` from `9240e41`, using tagged tools (three calls per turn).
+The scoped trial is held offline for training, with tagged tools (three calls per turn) retained for resumption.
 Startup capabilities and Discord READY pass with unchanged persona/history/source tuple.
 Earlier ownership leaks led to preserving source authorship separately from fact subjects.
 Patch supports the optional `speaker: {bank, id}` attribution field and optional
@@ -101,7 +101,7 @@ invalidate memory caches and affected caller history; a model reply is not proof
 of deletion. Keep Remora's API generic and require separate deletion grants.
 The `/memory` commands are published against reviewed
 Remora runtime `4e95553`, contract `f00a364` ([management guide](https://github.com/mia-cx/remora/blob/54f7bd6/docs/api/memory-management.md)).
-Active-recall client `87760e8` is deployed; `memory_search` stays hidden until Remora advertises support and four valid limits.
+Active-recall client `87760e8` is installed; `memory_search` stays hidden until Remora advertises support and four valid limits.
 The memory representation uses explicit third-person facts bound to generic stable
 entity references, keeping fact subjects separate
 from source authors and preserving raw evidence and receipts. Names are optional
