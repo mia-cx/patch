@@ -31,7 +31,7 @@ describe("model output controls", () => {
     });
   });
 
-  // Proves shorthand preserves one string token exactly, including URL punctuation, without interpreting it as code or a number.
+  // Proves shorthand preserves one literal string, including a multiword query, without evaluating code or guessing multiple arguments.
   it.each([
     [
       "web_fetch",
@@ -39,6 +39,7 @@ describe("model output controls", () => {
       "https://fictional-release.example/aurora?a=1&b=x%2Cy#badge",
     ],
     ["scratch_read", "path", "notes/2026-10-19.md"],
+    ["web_search", "query", "article of the day wikipedia"],
     ["delete_message", "message_id", "123"],
   ])("decodes one literal %s argument", (name, key, value) => {
     expect(
@@ -60,7 +61,7 @@ describe("model output controls", () => {
     "<tool_call>web_fetch{url:}</tool_call>",
     "<tool_call>web_fetch{url:https://example.com/,offset:2}</tool_call>",
     '<tool_call>web_fetch{url:"https://example.com/"}</tool_call>',
-    "<tool_call>web_search{query:two words}</tool_call>",
+    "<tool_call>web_search{query:two\nwords}</tool_call>",
     "<tool_call>web_fetch{url:https://example.com/\\x}</tool_call>",
     "<tool_call>web_fetch{url:[https://example.com/]}</tool_call>",
     "<tool_call>web_fetch({url:https://example.com/})</tool_call>",

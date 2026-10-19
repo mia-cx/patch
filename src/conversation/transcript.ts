@@ -77,6 +77,7 @@ export function formatTranscriptMessages(
     block: TranscriptBlock,
   ) => Omit<ObservationInput, "views" | "context"> | undefined,
   assistantBody?: (block: TranscriptBlock) => LlmMessage | undefined,
+  currentTurnInstructions = "",
 ): LlmMessage[] {
   const messages: LlmMessage[] = [
     {
@@ -165,7 +166,12 @@ export function formatTranscriptMessages(
   if (current) {
     messages.push({
       role: "user",
-      content: `Current human message:\n${formatAttributes(current)}`,
+      content: [
+        currentTurnInstructions,
+        `Current human message:\n${formatAttributes(current)}`,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
     });
   }
   return messages;

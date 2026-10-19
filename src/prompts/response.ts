@@ -26,6 +26,7 @@ export function buildResponseContextBudget(
     : Boolean(config.discordTrialGuild),
   actionsPrompt = "",
   nativeTools: readonly LlmTool[] = [],
+  currentTurnInstructions = "",
 ): ContextBudget {
   const promptChars = buildResponseMessages(
     nativeHistory ? [] : "",
@@ -36,7 +37,7 @@ export function buildResponseContextBudget(
   return {
     contextTokens: config.llmContextTokens,
     promptTokens:
-      Math.ceil(promptChars / 4) +
+      Math.ceil((promptChars + currentTurnInstructions.length) / 4) +
       RESPONSE_TEMPLATE_TOKEN_MARGIN +
       (nativeTools.length
         ? Math.ceil(JSON.stringify(nativeTools).length / 4)

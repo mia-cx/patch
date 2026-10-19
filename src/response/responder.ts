@@ -55,6 +55,7 @@ import {
 import {
   OUTPUT_INSTRUCTIONS,
   TAGGED_TOOL_INSTRUCTIONS,
+  WEB_TURN_INSTRUCTIONS,
 } from "../tools/output.js";
 import { runToolTurn } from "../tools/turn.js";
 
@@ -151,6 +152,13 @@ export async function respond(options: RespondOptions): Promise<void> {
     const enabledActions = mode === "off" ? [] : availableActions;
     const actionTools = toLlmTools(enabledActions);
     const tools = tagged ? [] : actionTools;
+    const currentTurnInstructions =
+      tagged &&
+      ["web_search", "web_fetch"].every((name) =>
+        actionTools.some((tool) => tool.function.name === name),
+      )
+        ? WEB_TURN_INSTRUCTIONS
+        : "";
     const availableActionsPrompt = [
       OUTPUT_INSTRUCTIONS,
       ...(tagged && actionTools.length ? [TAGGED_TOOL_INSTRUCTIONS] : []),
@@ -165,6 +173,7 @@ export async function respond(options: RespondOptions): Promise<void> {
       remora !== undefined,
       availableActionsPrompt,
       tools,
+      currentTurnInstructions,
     );
     const chain = contextMessages
       ? rolloverConversationContext(contextMessages, budget)
@@ -214,6 +223,7 @@ export async function respond(options: RespondOptions): Promise<void> {
           observations
             ? (block) => observations.assistantBody(block)
             : undefined,
+          currentTurnInstructions,
         )
       : transcriptText;
     if (Array.isArray(promptTranscript) && classifierDecision) {

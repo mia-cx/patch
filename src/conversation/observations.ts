@@ -132,7 +132,9 @@ export class ConversationObservations {
         this.observeRevision(piece.id, piece.revision);
       if (result.content) result.content += "\n<split />\n";
       const start = result.content.length;
-      result.content += JSON.stringify(piece.text);
+      // HTTP serialization already escapes dialogue. Encoding it again here adds
+      // literal quotation marks to the assistant's historical speech.
+      result.content += piece.text;
       const end = result.content.length;
       const parent =
         BigInt(piece.id) > this.cutoff
@@ -156,7 +158,7 @@ export class ConversationObservations {
           end,
           source_start: scalar(parent.text.slice(0, offset)),
           source_end: scalar(parent.text.slice(0, offset + piece.text.length)),
-          encoding: "json_string",
+          encoding: "literal",
         });
       } else {
         sources.push({
@@ -167,7 +169,7 @@ export class ConversationObservations {
           },
           start,
           end,
-          encoding: "json_string",
+          encoding: "literal",
           context: [parent.id],
         });
         parents.push(parent);

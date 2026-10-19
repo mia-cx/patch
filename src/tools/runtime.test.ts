@@ -301,6 +301,81 @@ const call = (name: string, args: object) =>
   `<tool_call>${JSON.stringify({ name, arguments: args })}</tool_call>`;
 
 describe("complete harness with the actual Discord SDK", () => {
+  // Proves the captured multiword tagged search dispatches through Protocord, fetches its result and continues without rewriting the human turn.
+  it("executes the captured Wikipedia lookup syntax through the real caller", async () => {
+    const app = await runtime(false, true);
+    if (!app.harness) throw new Error("Missing harness");
+    app.complete.mockRestore();
+    app.config.llmTemperature = 0;
+    app.config.remoraObservationStartId = "1000000000000000000";
+    app.message.content = "whats the article of the day on wikipedia?";
+    const network = vi.fn(async (url: URL) => {
+      if (url.hostname === "html.duckduckgo.com")
+        return {
+          status: 200,
+          headers: { "content-type": "text/html" },
+          body: '<div class="result"><a class="result__a" href="https://example.com/featured">Featured fixture article</a><p class="result__snippet">The fictional daily article.</p></div>',
+        };
+      if (url.href === "https://example.com/featured")
+        return {
+          status: 200,
+          headers: { "content-type": "text/html" },
+          body: "<main>Today's fictional featured article is Aster.</main>",
+        };
+      throw new Error("Unexpected fixture web request");
+    });
+    app.harness.web = new WebClient({
+      resolve: async () => [{ address: "93.184.216.34", family: 4 }],
+      request: network,
+    });
+    const requests: Array<{
+      messages: LlmMessage[];
+      remora: { observations: ObservationBatch };
+    }> = [];
+    const outputs = [
+      "<tool_call>web_search{query:article of the day wikipedia}</tool_call>",
+      '<tool_call>{"name":"web_fetch","arguments":{"url":"https://example.com/featured"}}</tool_call>',
+      "today's featured article is aster",
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/capabilities"))
+          return Response.json(evidenceCapabilities);
+        expect(url).toBe("http://remora.test/v1/chat/completions");
+        const request = JSON.parse(String(init?.body));
+        requests.push(request);
+        return Response.json(
+          observationReply(
+            request.remora.observations,
+            outputs[requests.length - 1] ?? "",
+            requests.length,
+          ),
+        );
+      }),
+    );
+    await app.llm.initializeRemora();
+    await app.run([toConversationMessage(app.message, BOT)]);
+    expect(network).toHaveBeenCalledTimes(2);
+    expect(requests).toHaveLength(3);
+    for (const request of requests)
+      expect(
+        request.messages.filter(
+          (message) => message.content === app.message.content,
+        ),
+      ).toHaveLength(1);
+    const initial = requests[0]?.messages;
+    expect(initial?.at(-2)?.content).toContain("Emit the tagged JSON call");
+    expect(initial?.at(-1)?.content).toBe(app.message.content);
+    expect(
+      app.rest.post.mock.calls.find(([route]) =>
+        route.endsWith("/messages"),
+      )?.[1]?.body,
+    ).toMatchObject({
+      content: expect.stringContaining("today's featured article is aster"),
+    });
+  });
+
   // Proves captured duplicate read requests use one actual result, follow the human causally, and finish without a fourth tool attempt.
   it("finishes the captured v4 web loop without replaying the human or the read", async () => {
     const app = await runtime(false, true);
@@ -708,7 +783,7 @@ describe("complete harness with the actual Discord SDK", () => {
     ).toEqual([]);
   });
 
-  // Proves merged chunks retain displayed order even when one is an exact reference and the next is a transformation.
+  // Proves native assistant dialogue stays literal while exact references and transformed chunks retain order and ancestry.
   it("selects the final mixed assistant chunk as the indirect-answer context", async () => {
     const app = await runtime(false, true);
     const remora = buildRemoraRequest(app.config, app.message);
@@ -724,7 +799,7 @@ describe("complete harness with the actual Discord SDK", () => {
     const tea = {
       id: "generation-tea:output",
       revision: 0,
-      text: "Do you like tea?",
+      text: 'Do you like "tea"?',
     };
     const coffee = {
       id: "generation-coffee:output",
@@ -758,6 +833,9 @@ describe("complete harness with the actual Discord SDK", () => {
       CURRENT,
       (block) => mapper.humanSource(block),
       (block) => mapper.assistantBody(block),
+    );
+    expect(rendered.find((item) => item.role === "assistant")?.content).toBe(
+      'Do you like "tea"?\n<split />\nDo you like coffee?',
     );
     const batch = mapper.request([
       ...rendered,
