@@ -22,7 +22,7 @@ Plain model text sends normally; optional reply metadata targets a visible messa
 Reactions, own-message edits/deletion, threads, polls, stickers and fixed-text follow-ups are implemented.
 DDG search/fetch identifies Patch/Protocord; persistent scoped notes offer no code execution.
 Native/tagged tool results return to the model without repeating Remora source writes.
-Games remain mapped/deferred. Actual-model tool selection awaits qualification; tools stay undeployed. See [v2](spec/v2.md).
+Tools are enabled in the scoped DM trial for actual-model evaluation; games remain deferred. See [v2](spec/v2.md).
 
 Start Remora conversation trials in a single-human place. Wrong-person recall
 and semantic forgetting collateral remain unresolved for shared places.
@@ -57,7 +57,7 @@ wrappers leak into output, and cumulative metadata footers obscure recent
 dialogue in Gemma's 512-token local attention. llama.cpp qualification does not
 gate this HF trial.
 Mia approved passive formation/dreaming (`8770d95`, serving `dfc09d9`) on the same HF API.
-The scoped trial is online from reviewed Patch `7720cb3`; new tools are excluded.
+The scoped trial runs v2 runtime `0e22f88` from `58831ff`, using tagged tools (three calls per turn).
 Startup capabilities and Discord READY pass with unchanged persona/history/source tuple.
 Earlier ownership leaks led to preserving source authorship separately from fact subjects.
 Patch supports the optional `speaker: {bank, id}` attribution field and optional

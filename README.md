@@ -53,7 +53,8 @@ An uncertain Discord delivery is held for reconciliation rather than resent.
 
 Games remain deferred. These paths are tested through the actual Discord SDK
 with invented network responses; actual Remora tool selection is not yet qualified.
-The resumed DM trial uses the previous reviewed Patch build, excluding these tools.
+Mia enabled these tools in the scoped DM trial on the reviewed `58831ff` build.
+Startup capabilities and Discord READY pass; the trial uses tagged calls, at most three per turn.
 No command publication accompanies this implementation. See [v2](spec/v2.md).
 
 ## Conversation context
@@ -216,9 +217,10 @@ covers the gate and launch artifact checks. Harness name mapping stays disabled.
 Mia approved resuming the scoped trial on passive runtime `8770d95`, serving
 HEAD `dfc09d9`, with profile
 `gemma-reference-12288-native-cache-source-projected-turn-relevance-passive-formation-dreaming`.
-The existing reviewed Patch `7720cb3` passed actual startup capabilities and
-Discord READY on that release. Conversation boundaries, persona, source tuples,
-memory facts and receipts are preserved; new tools and name mapping stay excluded.
+The trial first resumed on Patch `7720cb3`, then Mia authorized the v2 tools
+rollout on `58831ff` (runtime `0e22f88`). Actual startup capabilities and Discord
+READY pass. Conversation boundaries, persona, source tuples, memory facts and
+receipts are preserved; name mapping stays disabled.
 [remora-patch-request.json](spec/fixtures/remora-patch-request.json) is the archived
 qualification request with Patch's actual persona and fictional history in the
 original transcript format. The real TypeScript client smoke passed against the
