@@ -40,6 +40,7 @@ import {
   type ResponseTranscriptMode,
   buildResponseMessages,
 } from "../prompts/response.js";
+import { findBrokenReplyLinks } from "./reply-links.js";
 
 const FAILURE_MESSAGE =
   "sorry, brain fog. couldn't get my thoughts into a usable shape. try that again?";
@@ -47,6 +48,7 @@ const TYPING_WORDS_PER_MINUTE = 180;
 const AVERAGE_WORD_CHARS = 5;
 const MIN_FOLLOWUP_TYPING_DELAY_MS = 150;
 const MAX_FOLLOWUP_TYPING_DELAY_MS = 12_000;
+const MAX_LINK_REGENERATIONS = 2;
 
 export type RespondOptions = {
   adapter: DiscordAdapter;
@@ -147,7 +149,7 @@ export async function respond(options: RespondOptions): Promise<void> {
     const timeout = setTimeout(() => controller.abort(), config.llmTimeoutMs);
 
     try {
-      const generated = await generateResponse({
+      const generated = await generateCheckedResponse({
         llm,
         promptMessages,
         signal: controller.signal,
@@ -155,6 +157,7 @@ export async function respond(options: RespondOptions): Promise<void> {
         thinkingMaxTokens: config.llmThinkingMaxTokens,
         thinkingTimeoutMs: config.llmThinkingTimeoutMs,
         tools,
+        log,
       });
       const { response } = generated;
 
@@ -169,12 +172,7 @@ export async function respond(options: RespondOptions): Promise<void> {
         return;
       }
 
-      const content = await repairMissingSplitHints({
-        llm,
-        content: generated.content,
-        signal: controller.signal,
-        log,
-      });
+      const { content } = generated;
 
       if (config.llmTraceLogging) {
         log.debug(
@@ -346,7 +344,7 @@ function withClassifierDecisionBlock(
   return `${transcript.slice(0, insertAt)}\n\n${block}${transcript.slice(insertAt)}`;
 }
 
-async function generateResponse(options: {
+async function generateCheckedResponse(options: {
   llm: LlmClient;
   promptMessages: LlmMessage[];
   signal: AbortSignal;
@@ -354,15 +352,43 @@ async function generateResponse(options: {
   thinkingMaxTokens: number;
   thinkingTimeoutMs: number;
   tools: LlmTool[];
+  log: Logger;
 }): Promise<{ content: string; response: LlmResponse }> {
-  return completeAndSanitize(options.llm, {
-    messages: options.promptMessages,
-    signal: options.signal,
-    enableThinking: options.enableThinking,
-    thinkingMaxTokens: options.thinkingMaxTokens,
-    thinkingTimeoutMs: options.thinkingTimeoutMs,
-    tools: options.tools,
-  });
+  const messages = [...options.promptMessages];
+  for (let attempt = 0; attempt <= MAX_LINK_REGENERATIONS; attempt += 1) {
+    const generated = await completeAndSanitize(options.llm, {
+      messages,
+      signal: options.signal,
+      enableThinking: options.enableThinking,
+      thinkingMaxTokens: options.thinkingMaxTokens,
+      thinkingTimeoutMs: options.thinkingTimeoutMs,
+      tools: options.tools,
+    });
+    if (generated.response.toolCalls?.length) return generated;
+    const content = await repairMissingSplitHints({
+      llm: options.llm,
+      content: generated.content,
+      signal: options.signal,
+      log: options.log,
+    });
+    const broken = await findBrokenReplyLinks(content, options.signal);
+    if (!broken.length) return { content, response: generated.response };
+    options.log.debug(
+      { attempt, brokenLinkCount: broken.length },
+      "withholding reply with broken links",
+    );
+    if (attempt === MAX_LINK_REGENERATIONS) break;
+    messages.push(
+      { role: "assistant", content },
+      {
+        role: "user",
+        content: `The harness checked links in your unsent draft. These checks found missing destinations: ${JSON.stringify(broken)}.
+Reform your response to the original message. Remove the broken links or use a source supported by the conversation or available tools. Do not guess replacement URLs. The draft has not been sent. Output the replacement response or a needed tool call.`,
+      },
+    );
+  }
+  // Nothing from a rejected draft reaches Discord, even after the retry budget.
+  throw new Error("Response still contains broken links after regeneration");
 }
 
 async function completeAndSanitize(
