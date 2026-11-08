@@ -59,6 +59,7 @@ import {
   WEB_TURN_INSTRUCTIONS,
 } from "../tools/output.js";
 import { runToolTurn } from "../tools/turn.js";
+import { findBrokenReplyLinks } from "./reply-links.js";
 
 const FAILURE_MESSAGE =
   "sorry, brain fog. couldn't get my thoughts into a usable shape. try that again?";
@@ -298,6 +299,17 @@ export async function respond(options: RespondOptions): Promise<void> {
         nativeTools: tools,
         native: !tagged,
         signal: controller.signal,
+        maxDraftRetries: MAX_LINK_REGENERATIONS,
+        // A plausible URL is not a page: confirmed 404s and missing DNS names never reach Discord.
+        reviewDraft: async (content) => {
+          const broken = await findBrokenReplyLinks(content, controller.signal);
+          if (!broken.length) return undefined;
+          log.debug(
+            { brokenLinkCount: broken.length },
+            "withholding reply with broken links",
+          );
+          return `The harness checked links in your unsent draft and found missing destinations: ${JSON.stringify(broken)}. The draft was not sent. Rewrite your reply to the original message: remove the broken links or use a source from the conversation or your tools. Do not guess replacement URLs.`;
+        },
         ...(observations
           ? { assertCurrent: () => observations.assertCurrent() }
           : {}),

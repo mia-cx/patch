@@ -31,6 +31,30 @@ const READ_ONLY = new Set([
 const RESULT_BUDGET = 6_000;
 const ERROR_RECEIPT_CHARS = 80;
 
+/** Replay a generated turn verbatim, referencing its captured source when one exists. */
+function observedAssistant(
+  content: string,
+  source: CompletedGeneration | undefined,
+): LlmMessage {
+  return {
+    role: "assistant",
+    content,
+    ...(source
+      ? {
+          observationReferences: [
+            {
+              source,
+              start: 0,
+              end: content.length,
+              source_start: 0,
+              source_end: Array.from(content).length,
+            },
+          ],
+        }
+      : { observationUnknown: [{ start: 0, end: content.length }] }),
+  };
+}
+
 /** Run bounded tools before presentation; preserve exact web-result segments for observation-capable callers. */
 export async function runToolTurn(options: {
   messages: LlmMessage[];
@@ -51,6 +75,10 @@ export async function runToolTurn(options: {
   signal: AbortSignal;
   onResponse?: (response: LlmResponse) => CompletedGeneration | undefined;
   assertCurrent?: () => void;
+  /** Check a final draft before presentation; returned harness feedback asks the model to rewrite it. */
+  reviewDraft?: (content: string) => Promise<string | undefined>;
+  /** Rewrites allowed after rejected drafts; one more rejection fails the turn unsent. */
+  maxDraftRetries?: number;
 }) {
   const results: Array<{
     name: string;
@@ -65,7 +93,9 @@ export async function runToolTurn(options: {
     assistant: LlmMessage;
     start: number;
     count: number;
+    feedback?: string;
   }> = [];
+  let rejectedDrafts = 0;
   let firstExchange = 0;
   let finalOnly = false;
   const completedReads = new Map<string, number>();
@@ -98,6 +128,7 @@ export async function runToolTurn(options: {
           messages.push({
             role: "user",
             content:
+              exchange.feedback ??
               "Harness tool results above already contain this completed read. Tools are disabled. Answer the original human request using those results; do not emit another tool call.",
           });
         else if (!options.native)
@@ -138,7 +169,7 @@ export async function runToolTurn(options: {
     }
     const response = await options.generate(
       messages,
-      results.length > 0,
+      results.length > 0 || rejectedDrafts > 0,
       finalOnly ? 0 : options.maxCalls - count,
     );
     const generatedSource = options.onResponse?.(response) ?? undefined;
@@ -154,6 +185,20 @@ export async function runToolTurn(options: {
     if (!calls.length) {
       if (!parsed.content)
         throw new Error("Model returned neither text nor an action");
+      const feedback = await options.reviewDraft?.(parsed.content);
+      if (feedback) {
+        if (rejectedDrafts >= (options.maxDraftRetries ?? 0))
+          throw new Error("Draft still rejected after rewrites");
+        rejectedDrafts++;
+        // The withheld draft stays in context, attributed like any other generated turn.
+        exchanges.push({
+          start: results.length,
+          count: 0,
+          assistant: observedAssistant(response.content, generatedSource),
+          feedback,
+        });
+        continue;
+      }
       return {
         content: parsed.content,
         replyTo,
@@ -210,27 +255,7 @@ export async function runToolTurn(options: {
             function: { name: call.name, arguments: call.arguments },
           })),
         }
-      : {
-          role: "assistant",
-          content: response.content,
-          ...(generatedSource
-            ? {
-                observationReferences: [
-                  {
-                    source: generatedSource,
-                    start: 0,
-                    end: response.content.length,
-                    source_start: 0,
-                    source_end: Array.from(response.content).length,
-                  },
-                ],
-              }
-            : {
-                observationUnknown: [
-                  { start: 0, end: response.content.length },
-                ],
-              }),
-        };
+      : observedAssistant(response.content, generatedSource);
     if (reused.some(Boolean)) {
       if (!reused.every(Boolean))
         throw new Error("Repeated read in a mixed tool batch");
