@@ -19,6 +19,7 @@ through pnpm workspace dependencies. Publishing packages is deferred.
 Patch actions use Protocord's shared validation, authorization and trigger lifecycle.
 Plain model text splits at `<|message_split|>` outside code; legacy `<split />` remains accepted. Headings keep their newlines. Optional reply metadata targets a visible message ID.
 Reactions, own-message edits/deletion, threads, polls, stickers and fixed-text follow-ups are implemented.
+Final drafts pass a link check before any chunk is sent. A confirmed 404 (HEAD confirmed by GET) or definite DNS absence withholds the draft and asks for at most two rewrites through the tool loop; auth, server and timeout results are inconclusive and send. Checks follow bounded redirects and never reach private networks. Rejected drafts never post.
 Follow-ups support one-off timestamps or cron with explicit IANA timezone, persisted next occurrences and bounded missed-tick coalescing.
 Ambiguous sends pause the schedule. Recurring delivery is synthetically qualified, without deployment or real scheduled messages.
 DDG search/fetch identifies Patch/Protocord; persistent scoped notes offer no code execution.

@@ -67,6 +67,7 @@ const TYPING_WORDS_PER_MINUTE = 180;
 const AVERAGE_WORD_CHARS = 5;
 const MIN_FOLLOWUP_TYPING_DELAY_MS = 150;
 const MAX_FOLLOWUP_TYPING_DELAY_MS = 12_000;
+const MAX_LINK_REGENERATIONS = 2;
 
 export type RespondOptions = {
   adapter: DiscordAdapter;
