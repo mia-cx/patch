@@ -5,6 +5,7 @@ import {
 } from "../conversation/escape.js";
 import type { LlmTool } from "../llm/client.js";
 import type { ActionContext, ActionRegistry } from "./context.js";
+import { modelDeclarationSchema } from "./model-schema.js";
 import { isToolCallTrigger } from "./tool-calls.js";
 
 export type ModelVisibleAction = {
@@ -60,7 +61,7 @@ export function toLlmTools(
       function: {
         name: action.name,
         description: action.description,
-        parameters: action.inputSchemaJson,
+        parameters: modelDeclarationSchema(action.inputSchemaJson),
       },
     }));
 }
