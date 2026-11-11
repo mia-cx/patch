@@ -56,6 +56,7 @@ const Source = Schema.Struct({
         value.actor.actor.role === "assistant"),
   ),
 );
+export const EvidenceSourceMetadataSchema = Source;
 const Span = Schema.Struct({
   start: EvidenceIndex.check(Schema.isLessThanOrEqualTo(65535)),
   end: EvidenceId.check(Schema.isLessThanOrEqualTo(65536)),

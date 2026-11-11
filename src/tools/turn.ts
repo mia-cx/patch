@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Message } from "discord.js";
+import { Schema } from "effect";
 import type { ActionContext, ActionRegistry } from "../actions/context.js";
 import {
   TOOL_CALL_PROVIDER_ID,
@@ -8,6 +9,10 @@ import {
 } from "../actions/tool-calls.js";
 import type { LlmMessage, LlmResponse, LlmTool } from "../llm/client.js";
 import type { CompletedGeneration } from "../llm/evidence.js";
+import {
+  MemoryToolOutcomeSchema,
+  MemoryToolResultSchema,
+} from "../memory/tool-contract.js";
 import { toolResultMessage } from "./observations.js";
 import { parseModelOutput } from "./output.js";
 import type { WebSource } from "./web.js";
@@ -153,6 +158,11 @@ export async function runToolTurn(options: {
         generatedSource,
       };
     }
+    const memoryControl = calls.some(
+      (call) => call.name === "memory_save" || call.name === "memory_forget",
+    );
+    if (memoryControl && calls.length !== 1)
+      throw new Error("Memory controls must be the only action in their turn");
     const { registry, context } = options;
     if (!registry || !context) throw new Error("Tool execution unavailable");
     // Validate the whole leading section before the first side effect.
@@ -275,9 +285,12 @@ export async function runToolTurn(options: {
       };
       let output: unknown;
       let failure: string | undefined;
+      const memoryEpochBefore = memoryControl
+        ? context.harness?.store.privacyEpoch()
+        : undefined;
       if (!READ_ONLY.has(call.name)) completedReads.clear();
       try {
-        if (READ_ONLY.has(call.name) || !context.harness)
+        if (memoryControl || READ_ONLY.has(call.name) || !context.harness)
           output = await execute();
         else
           output = await context.harness.store.mutate(
@@ -290,6 +303,45 @@ export async function runToolTurn(options: {
         failure = error instanceof Error ? error.message : "Tool failed";
         output = { error: failure };
         continueAfter = true;
+      }
+      // Forgetting fences this generation's old context. Present only a deterministic
+      // receipt, including errors, without decoding or replaying the erased prompt.
+      if (memoryControl) {
+        const result =
+          failure === undefined
+            ? Schema.decodeUnknownSync(MemoryToolOutcomeSchema)(output)
+            : undefined;
+        const memoryEpoch = context.harness?.store.privacyEpoch();
+        if (
+          result?.status === "clarification_required" &&
+          memoryEpoch !== memoryEpochBefore
+        )
+          throw new Error(
+            "Memory clarification was invalidated by a privacy fence",
+          );
+        const failureMessage =
+          "couldn't confirm the memory operation. use /memory list to check before trying again.";
+        const memoryToolResult = Schema.decodeUnknownSync(
+          MemoryToolResultSchema,
+        )(
+          result
+            ? { name: call.name, output: result, completed: true }
+            : {
+                name: call.name,
+                output: { error: failureMessage },
+                completed: false,
+                error: failureMessage,
+              },
+        );
+        return {
+          content: result?.content ?? failureMessage,
+          sources: [] as WebSource[],
+          generatedSource: undefined,
+          replyTo: undefined,
+          memoryControl: true,
+          memoryToolResult,
+          ...(memoryEpoch !== undefined ? { memoryEpoch } : {}),
+        };
       }
       const data =
         output && typeof output === "object" && "result" in output

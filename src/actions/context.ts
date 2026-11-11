@@ -48,6 +48,8 @@ export type ActionContext = {
   harness?: { store: HarnessStore; web: WebClient };
   /** Caller-selected recall scope for this turn; model arguments cannot widen it. */
   readBanks?: readonly string[];
+  /** Sole destination chosen by the Discord adapter; read grants cannot widen it. */
+  writeBank?: string | undefined;
   toolScope?: {
     messageIds: ReadonlySet<string>;
     signal: AbortSignal;

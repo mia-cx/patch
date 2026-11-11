@@ -95,6 +95,8 @@ The 18-completion full-persona journey passes bounded gates with Laya resident. 
 Memory inspection and forgetting belong to Protocord slash commands backed by
 deterministic Remora management endpoints. Users control their personal DM bank;
 shared channel/server banks follow Discord access and management permissions.
+Explicit remember/forget tools preserve human evidence, exact authorized IDs and confirmed receipts.
+Their separate Remora save API is implemented but undeployed; see [explicit controls](spec/explicit-memory-tools.md).
 Show actual authorized records and storage receipts. Explicit forgetting must
 invalidate memory caches and affected caller history; a model reply is not proof
 of deletion. Keep Remora's API generic and require separate deletion grants.

@@ -28,6 +28,16 @@ type ToolCallEvent = {
   message: Message;
 };
 
+/** Only the provider event carries the authenticated Discord source. */
+export function isToolCallEvent(value: unknown): value is ToolCallEvent {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "message" in value &&
+    "toolCall" in value
+  );
+}
+
 /** Expose an explicitly selected action to Patch's model. */
 export function toolCall<Input>(input: {
   name: string;
