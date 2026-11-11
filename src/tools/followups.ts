@@ -1,7 +1,8 @@
+import { createHash } from "node:crypto";
 import type { ActionContext } from "../actions/context.js";
 import { allowsConversation, isScopedTrial } from "../discord/scope.js";
 
-/** Deliver stored text once; an ambiguous send stays uncertain and is never blindly retried. */
+/** Deliver one persisted occurrence; ambiguous sends pause their schedule without automatic retry. */
 export async function deliverFollowups(context: ActionContext) {
   const store = context.harness?.store;
   if (!store) return;
@@ -14,7 +15,7 @@ export async function deliverFollowups(context: ActionContext) {
       continue;
     await context.queue.add(
       async () => {
-        if (!store.claim(job.id)) return;
+        if (!store.claim(job.id, job.at)) return;
         try {
           const channel = await context.client.channels.fetch(job.scope);
           if (!channel?.isSendable())
@@ -26,15 +27,19 @@ export async function deliverFollowups(context: ActionContext) {
             })
           )
             throw new Error("Follow-up is outside the scoped trial");
+          if (!store.sending(job.id, job.at)) return;
           const message = await channel.send({
             content: job.text,
             allowedMentions: { parse: [], repliedUser: false },
-            nonce: job.id.replaceAll("-", "").slice(0, 25),
+            nonce: createHash("sha256")
+              .update(`${job.id}:${job.at}`)
+              .digest("hex")
+              .slice(0, 25),
             enforceNonce: true,
           });
-          store.finish(job.id, message.id);
+          store.finish(job.id, message.id, Date.now(), job.at);
         } catch (error) {
-          store.finish(job.id);
+          store.finish(job.id, undefined, Date.now(), job.at);
           context.logger.warn(
             { error, channelId: job.scope, followupId: job.id },
             "follow-up outcome uncertain; automatic retry disabled",

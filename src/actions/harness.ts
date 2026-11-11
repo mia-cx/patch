@@ -7,6 +7,7 @@ import {
 } from "discord.js";
 import { Schema } from "effect";
 import { allowsConversation } from "../discord/scope.js";
+import { parseFollowupTimestamp } from "../tools/followup-schedule.js";
 import type { ActionContext, ActionRegistry } from "./context.js";
 import { actionInput } from "./context.js";
 import { toolCall } from "./tool-calls.js";
@@ -328,28 +329,50 @@ export function registerHarnessActions(registry: ActionRegistry) {
   );
   register(
     "schedule_followup",
-    "Schedule exact text in this conversation at an ISO timestamp with timezone, within one year. This schedules no new model generation.",
-    Schema.Struct({ at: Schema.String, text: Text }),
+    "Schedule exact text: {at,text} once OR {cron,timezone,text} repeating (5-field cron, IANA timezone). Current conversation only, next occurrence within one year. No new generation. Never guess timezone.",
+    Schema.Union([
+      Schema.Struct({ at: Schema.String, text: Text }),
+      Schema.Struct({
+        cron: Schema.String.check(
+          Schema.isMinLength(1),
+          Schema.isMaxLength(128),
+        ),
+        timezone: Schema.String.check(
+          Schema.isMinLength(1),
+          Schema.isMaxLength(100),
+        ),
+        text: Text,
+      }),
+    ]),
     async (input, context, channelId) => {
-      if (!/(Z|[+-]\d{2}:\d{2})$/.test(input.at))
-        throw new Error("Supply an ISO timestamp with timezone");
+      if ("cron" in input)
+        return context.harness?.store.scheduleRecurring(
+          channelId,
+          input.cron,
+          input.timezone,
+          input.text,
+        );
       return context.harness?.store.schedule(
         channelId,
-        Date.parse(input.at),
+        parseFollowupTimestamp(input.at),
         input.text,
       );
     },
   );
   register(
     "list_followups",
-    "List pending or uncertain follow-ups in this conversation.",
+    "List active follow-ups in this conversation, including cron/timezone, next_at (ISO), and pending/sending/uncertain status. An uncertain schedule is paused.",
     Schema.Struct({}),
     async (_input, context, channelId) =>
-      context.harness?.store.followups(channelId),
+      context.harness?.store.followups(channelId).map((job) => ({
+        ...job,
+        recurring: job.cron !== null,
+        next_at: new Date(job.at).toISOString(),
+      })),
   );
   register(
     "cancel_followup",
-    "Cancel a pending follow-up in this conversation.",
+    "Cancel an entire one-off or recurring follow-up in this conversation. An already in-flight send may finish.",
     Schema.Struct({ id: Schema.String }),
     async (input, context, channelId) =>
       context.harness?.store.cancel(channelId, input.id),

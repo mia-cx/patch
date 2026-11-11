@@ -5,6 +5,7 @@ import {
 } from "../conversation/escape.js";
 import type { LlmTool } from "../llm/client.js";
 import type { ActionContext, ActionRegistry } from "./context.js";
+import { modelDeclarationSchema } from "./model-schema.js";
 import { isToolCallTrigger } from "./tool-calls.js";
 
 export type ModelVisibleAction = {
@@ -60,7 +61,7 @@ export function toLlmTools(
       function: {
         name: action.name,
         description: action.description,
-        parameters: action.inputSchemaJson,
+        parameters: modelDeclarationSchema(action.inputSchemaJson),
       },
     }));
 }
@@ -91,21 +92,32 @@ export function formatCompactActionsPrompt(
   return [
     "Available tools (omit optional arguments instead of passing null):",
     ...available.map((action) => {
-      const schema = action.inputSchemaJson;
-      const required = new Set(
-        Array.isArray(schema.required) ? schema.required : [],
-      );
-      const properties = schema.properties;
-      const args =
-        properties && typeof properties === "object"
-          ? Object.entries(properties)
-              .map(
-                ([key, value]) =>
-                  `${key}${required.has(key) ? "" : "?"}:${compactType(value, !required.has(key))}`,
-              )
-              .join(", ")
-          : "";
-      return `${action.name}(${args}) ${action.description.slice(0, 100)}`;
+      const variants: readonly unknown[] = Array.isArray(
+        action.inputSchemaJson.anyOf,
+      )
+        ? action.inputSchemaJson.anyOf
+        : [action.inputSchemaJson];
+      const signatures = variants.map((schema) => {
+        if (!schema || typeof schema !== "object") return `${action.name}()`;
+        const required = new Set(
+          "required" in schema && Array.isArray(schema.required)
+            ? schema.required
+            : [],
+        );
+        const properties =
+          "properties" in schema ? schema.properties : undefined;
+        const args =
+          properties && typeof properties === "object"
+            ? Object.entries(properties)
+                .map(
+                  ([key, value]) =>
+                    `${key}${required.has(key) ? "" : "?"}:${compactType(value, !required.has(key))}`,
+                )
+                .join(", ")
+            : "";
+        return `${action.name}(${args})`;
+      });
+      return `${signatures.join(" | ")} ${action.description.slice(0, 100)}`;
     }),
   ].join("\n");
 }
