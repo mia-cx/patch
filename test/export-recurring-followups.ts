@@ -58,11 +58,25 @@ const app = await followupHarness();
 try {
   const steps: Array<{
     call?: { name: string; arguments: Record<string, unknown> };
+    request?: { role: "user"; content: string };
     outcome: unknown;
     response_shape?: Record<string, unknown>;
     wire_message?: unknown;
   }> = [];
-  const invoke = async (name: string, args: Record<string, unknown>) => {
+  const invoke = async (
+    name: string,
+    args: Record<string, unknown>,
+    replay = false,
+  ) => {
+    if (!replay)
+      app.nextRequest(
+        name === "list_followups"
+          ? "Which reminders are active in this conversation?"
+          : name === "cancel_followup"
+            ? "Please cancel the synthetic reminder."
+            : "Please schedule the synthetic reminder.",
+      );
+    const request = { role: "user" as const, content: app.message.content };
     const call = { name, arguments: args };
     let outcome: unknown;
     try {
@@ -73,7 +87,7 @@ try {
         tool_result_emitted: false,
         error: error instanceof Error ? error.message : String(error),
       };
-      steps.push({ call, outcome });
+      steps.push({ request, call, outcome });
       return outcome;
     }
     const wire_message = app.wireResults.at(-1);
@@ -81,6 +95,7 @@ try {
     assert.equal(wire_message.role, "tool");
     assert.deepEqual(JSON.parse(wire_message.content), outcome);
     steps.push({
+      request,
       call,
       outcome,
       response_shape: responseShape(outcome),
@@ -100,7 +115,7 @@ try {
   });
   const [job] = app.store.followups(FOLLOWUP_CHANNEL);
   assert.ok(job);
-  assert.partialDeepStrictEqual(await invoke("schedule_followup", args), {
+  assert.partialDeepStrictEqual(await invoke("schedule_followup", args, true), {
     completed: true,
     output: { replayed: true },
   });

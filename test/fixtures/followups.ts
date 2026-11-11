@@ -160,6 +160,10 @@ export async function followupHarness(path = ":memory:") {
     wireResults,
     deliveries,
     invoke,
+    nextRequest(content: string) {
+      message.id = String(BigInt(message.id) + 1n);
+      message.content = content;
+    },
     close() {
       store.close();
       settings.close();
