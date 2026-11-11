@@ -16,7 +16,7 @@ Purpose: abstract inventory for recomposing Patch's prompt rules. This is not a 
 | Metadata truth | Use participant metadata for names/pronouns; `missing` means unknown. | `system/transcript.md` | response, classifier | Keep. This is tribal/mechanical context the model cannot infer. |
 | Addressee/reference resolution | Resolve `you`, pronouns, self-questions, action direction. | `system/transcript.md`, `response-user.md` | response, classifier | Keep, but split: transcript legend handles metadata; response task handles action direction. |
 | Mention policy | Don't ping latest author; only mention when requested/needed; never everyone/here/roles. | `system/mentions.md` | response, leave | Mechanical Discord output constraint. Consider code enforcement for leading reply-target mentions. |
-| Message splitting | `<split />` protocol. | `system/splitting.md` | response, leave | Mechanical output tool. Keep concise. |
+| Message splitting | `<\|message_split\|>` protocol. | `system/splitting.md` | response, leave | Mechanical output tool. Keep concise. |
 | Safety/refusal | Serious harm/crime refusal; distress care; repair after hurt/boundary/wrong pronoun/name. | `system/safety.md` | response, leave | Keep compact and high-priority. Avoid mixing ordinary style criticism with serious harm. |
 | Repair after bad response | If user critiques/corrects Patch, accept and answer fresh. | `system/safety.md`, `system/style.md`, `response-user.md` | response | Currently scattered. Make one repair bucket, probably response-task-local plus safety for harm/boundaries. |
 | Casual style target | Short Discordy lines, sparse punctuation, no assistant voice. | `system/style.md` | response, leave | Keep positive examples. Avoid long lists of forbidden phrases; they become token soup. |
@@ -91,7 +91,7 @@ Standalone only. Keep JSON-only prompt.
 | Strip accidental leading mention of reply target | Mechanical Discord output constraint; models repeatedly fail it. |
 | Block `@everyone`, `@here`, role mentions | Platform safety/mechanics. |
 | No Unicode emoji | Already code-enforceable and easier than prompt. |
-| Split/send chunks | Already code-owned. Prompt only exposes `<split />`. |
+| Split/send chunks | Already code-owned. Prompt only exposes `<\|message_split\|>`. |
 | Context window trimming per model | Runtime/mechanical; do not ask model to manage it. |
 | Reserved transcript token neutralization | Already code-owned. Prompt only documents the format. |
 

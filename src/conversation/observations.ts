@@ -17,6 +17,8 @@ import type {
   HarnessStore,
   ObservationContext,
 } from "../tools/store.js";
+import { escapeMessageSplit } from "./escape.js";
+import { MESSAGE_SPLIT } from "./reserved-tokens.js";
 import type { ConversationMessage, TranscriptBlock } from "./types.js";
 
 type Source = Omit<ObservationInput, "views" | "context">;
@@ -130,14 +132,16 @@ export class ConversationObservations {
     for (const piece of pieces) {
       if (BigInt(piece.id) > this.cutoff)
         this.observeRevision(piece.id, piece.revision);
-      if (result.content) result.content += "\n<split />\n";
+      if (result.content) result.content += MESSAGE_SPLIT;
       const start = result.content.length;
       // HTTP serialization already escapes dialogue. Encoding it again here adds
       // literal quotation marks to the assistant's historical speech.
-      result.content += piece.text;
+      const text = escapeMessageSplit(piece.text);
+      result.content += text;
       const end = result.content.length;
+      // An escaped marker no longer equals its source text, so it claims no ancestry.
       const parent =
-        BigInt(piece.id) > this.cutoff
+        BigInt(piece.id) > this.cutoff && text === piece.text
           ? this.options.store.displayParent(
               this.namespace,
               this.bank,

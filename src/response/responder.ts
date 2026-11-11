@@ -22,6 +22,7 @@ import {
   observationNamespace,
 } from "../conversation/observations.js";
 import { buildRemoraRequest } from "../conversation/remora.js";
+import { MESSAGE_SPLIT } from "../conversation/reserved-tokens.js";
 import type { ConversationContextStore } from "../conversation/store.js";
 import {
   buildTranscript,
@@ -447,8 +448,7 @@ async function repairMissingSplitHints(options: {
   const messages: LlmMessage[] = [
     {
       role: "system",
-      content:
-        "Repair Discord output formatting only. Preserve the exact words, order, casing, and punctuation. Replace casual message-separating line breaks or blank lines with literal <split />. If the text is a poem, list, quote, code, or structured markdown, return it unchanged. Output only the repaired text.",
+      content: `Repair Discord output formatting only. Preserve the exact words, order, casing, and punctuation. Replace each casual message-separating line break or blank line with ${MESSAGE_SPLIT}, with no newline around it. If the text is a poem, list, quote, heading, code, or structured markdown, return it unchanged. Output only the repaired text.`,
     },
     { role: "user", content: options.content },
   ];
