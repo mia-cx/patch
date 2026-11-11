@@ -7,17 +7,18 @@
   "schema_scope": "Runtime-derived structural JSON Schemas plus the listed permission, Unicode-scalar, source binding, timestamp validity, receipt-ID equality and policy invariants. JSON Schema alone does not grant permission or prove these cross-field invariants.",
   "provenance": {
     "patch": {
-      "commit": "0f65a2386bcf5004f828d6e09c7c41dbbdf57aab",
+      "commit": "1643b3bcfeb40db0398751dc5df1358709592e28",
       "files": {
         "src/actions/memory-tools.ts": "3ffb9f07aebfe4e0c203b36f6c7f167accff16682781c9995a94b49e5debe96a",
         "src/actions/tool-calls.ts": "89c2a4cfc163b62b4ac88171dd0ce81af31301eaa0ce65f2e8de7bf9b5f71c31",
+        "src/actions/action-context.ts": "cb868cec5f3f326f0d029d074b3e003f733209d9d678e564a83d3f434f365d53",
         "src/memory/client.ts": "db24ba79b4004488e510f67fffc4a0ae525517daecc9eeed277f107303c4d9c5",
         "src/memory/save.ts": "bfaea482854b02b41de71e87db8b13d65bcf8f87568e4130ce1221dd98bda3f9",
         "src/memory/tool-contract.ts": "df366901149c93170224ab1f65e26c1950e7649753df4c91a922618eb65cbcbd",
         "src/memory/journal.ts": "c7291848559e34103aaccaa186bba238376bea46ffc34ee75758e32752af8661",
         "src/tools/turn.ts": "44f71b5af4b8bbbc39b0dc9918074c244857c7389e0283c3b3d205093abd31cf",
         "src/response/responder.ts": "3040b355ebf610a73a420f870855bc0c455856e9421ec38c75ce22e2a01172fd",
-        "src/memory/tools.integration.test.ts": "d6658b2edb725f27bc2fff63719c5e48cac8a9791ed15fc9f227d96028d48500"
+        "src/memory/tools.integration.test.ts": "2e94523829943ce9c3afa3e3e5d603339186b89970230c6540e97ad1dab26126"
       }
     },
     "remora": {
@@ -89,6 +90,48 @@
       }
     }
   ],
+  "parser_schemas": {
+    "memory_save": {
+      "type": "object",
+      "additionalProperties": false,
+      "$defs": {}
+    },
+    "memory_forget": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": ["personal", "channel", "server"]
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["fact", "evidence"]
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "allOf": [
+                {
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": ["scope", "kind"],
+      "additionalProperties": false,
+      "$defs": {}
+    }
+  },
+  "declaration_boundary": "tools contains model-visible declarations from toLlmTools; parser_schemas contains strict registry validators. Generic model projection may change declarations independently of parser authorization.",
   "schemas": {
     "backend_save_request": {
       "type": "object",

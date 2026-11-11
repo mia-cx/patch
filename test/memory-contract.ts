@@ -2,6 +2,8 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Schema } from "effect";
+import type { ActionRegistry } from "../src/actions/context.js";
+import { isToolCallTrigger } from "../src/actions/tool-calls.js";
 import type { LlmTool } from "../src/llm/client.js";
 import {
   MemorySaveReceiptSchema,
@@ -41,6 +43,7 @@ export function buildMemoryContract(
   tools: readonly LlmTool[],
   examples: Record<string, unknown>,
   backendRoot: string,
+  registry: ActionRegistry,
 ) {
   const revisions = (root: string, files: string[]) => ({
     commit: execFileSync("git", ["-C", root, "rev-parse", "HEAD"], {
@@ -65,6 +68,7 @@ export function buildMemoryContract(
       patch: revisions(process.cwd(), [
         "src/actions/memory-tools.ts",
         "src/actions/tool-calls.ts",
+        "src/actions/action-context.ts",
         "src/memory/client.ts",
         "src/memory/save.ts",
         "src/memory/tool-contract.ts",
@@ -88,6 +92,16 @@ export function buildMemoryContract(
     tools: tools.filter((tool) =>
       ["memory_save", "memory_forget"].includes(tool.function.name),
     ),
+    parser_schemas: Object.fromEntries(
+      ["memory_save", "memory_forget"].map((name) => {
+        const trigger = registry.getTrigger("patch:tool-call", name)?.trigger;
+        if (!trigger || !isToolCallTrigger(trigger))
+          throw new Error("Missing memory parser");
+        return [name, trigger.input.jsonSchema];
+      }),
+    ),
+    declaration_boundary:
+      "tools contains model-visible declarations from toLlmTools; parser_schemas contains strict registry validators. Generic model projection may change declarations independently of parser authorization.",
     schemas: Object.fromEntries(
       Object.entries(memoryContractSchemas).map(([name, schema]) => {
         const document = Schema.toJsonSchemaDocument(schema);

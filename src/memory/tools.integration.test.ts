@@ -554,14 +554,14 @@ it.skipIf(!process.env.REMORA_TEST_SOURCE)(
     if (process.env.MEMORY_CONTRACT_EXPORT)
       writeFileSync(
         process.env.MEMORY_CONTRACT_EXPORT,
-        `${JSON.stringify(buildMemoryContract(tools, examples, root), null, 2)}\n`,
+        `${JSON.stringify(buildMemoryContract(tools, examples, root, app.registry), null, 2)}\n`,
       );
   },
   20_000,
 );
 
 // Proves the published synthetic contract uses the actual registered arguments and runtime response validators.
-it("validates exported inputs, response shapes and dispatcher envelopes against runtime code", () => {
+it("validates exported inputs, response shapes and dispatcher envelopes against runtime code", async () => {
   const file: unknown = JSON.parse(
     readFileSync(
       new URL("../../spec/fixtures/memory-tools.json", import.meta.url),
@@ -580,11 +580,19 @@ it("validates exported inputs, response shapes and dispatcher envelopes against 
         }),
       ),
       schemas: Schema.Record(Schema.String, Schema.Unknown),
+      parser_schemas: Schema.Record(Schema.String, Schema.Unknown),
       examples: Schema.Record(Schema.String, Schema.Unknown),
     }),
   )(file);
-  const registry = createPatchActionRegistry();
-  registerDefaultActions(registry);
+  const app = await fixture();
+  const { registry } = app;
+  const declarations = toLlmTools(
+    await buildModelVisibleActions({
+      registry,
+      context: app.context,
+      message: app.message,
+    }),
+  );
   for (const tool of contract.tools) {
     const trigger = registry.getTrigger(
       "patch:tool-call",
@@ -594,7 +602,12 @@ it("validates exported inputs, response shapes and dispatcher envelopes against 
       throw new Error("Missing tool trigger");
     expect(trigger.input).toHaveProperty(
       "jsonSchema",
-      tool.function.parameters,
+      contract.parser_schemas[tool.function.name],
+    );
+    expect(tool.function.parameters).toEqual(
+      declarations.find(
+        (candidate) => candidate.function.name === tool.function.name,
+      )?.function.parameters,
     );
   }
   for (const [name, schema] of Object.entries(memoryContractSchemas)) {
