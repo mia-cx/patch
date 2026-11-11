@@ -29,7 +29,7 @@ Patch's Protocord actions now include:
 
 - Reactions and removal of her own reactions; edits/deletion of her own messages.
 - Starting/joining/leaving threads, native polls, poll results and server emoji/stickers.
-- Durable fixed-text follow-ups: schedule, inspect and cancel, without another model call.
+- Durable fixed-text follow-ups: one-off or cron with an explicit IANA timezone, inspect and cancel, without another model call.
 - DuckDuckGo search and readable public HTTPS pages, with real source links.
 - Persistent conversation-scoped text notes: list, read, write and delete with revisions.
 
@@ -52,6 +52,8 @@ virtual text names, never host paths or a shell. Ordinary context resets retain
 notes. A memory-deletion fence clears **all notes and queued follow-up text under
 Patch's API credential**, conservatively preventing forgotten facts surviving there.
 An uncertain Discord delivery is held for reconciliation rather than resent.
+Recurring jobs retain their next occurrence across restarts and skip missed ticks.
+See [recurring follow-ups](spec/recurring-followups.md) for DST, limits and synthetic contracts.
 
 Games remain deferred. These paths are tested through the actual Discord SDK
 with invented network responses; actual Remora tool selection is not yet qualified.

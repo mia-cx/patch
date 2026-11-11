@@ -20,6 +20,8 @@ through pnpm workspace dependencies. Publishing packages is deferred.
 Patch actions use Protocord's shared validation, authorization and trigger lifecycle.
 Plain model text sends normally; optional reply metadata targets a visible message ID.
 Reactions, own-message edits/deletion, threads, polls, stickers and fixed-text follow-ups are implemented.
+Follow-ups support one-off timestamps or cron with explicit IANA timezone, persisted next occurrences and bounded missed-tick coalescing.
+Ambiguous sends pause the schedule. Recurring delivery is synthetically qualified, without deployment or real scheduled messages.
 DDG search/fetch identifies Patch/Protocord; persistent scoped notes offer no code execution.
 All model inputs and outputs should be eligible for passive memory, preserving each source's origin.
 Live evidence transport uses Remora `9062f61`/`8e04001`; see [caller mapping](spec/all-stream-evidence.md).
