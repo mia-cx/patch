@@ -91,21 +91,32 @@ export function formatCompactActionsPrompt(
   return [
     "Available tools (omit optional arguments instead of passing null):",
     ...available.map((action) => {
-      const schema = action.inputSchemaJson;
-      const required = new Set(
-        Array.isArray(schema.required) ? schema.required : [],
-      );
-      const properties = schema.properties;
-      const args =
-        properties && typeof properties === "object"
-          ? Object.entries(properties)
-              .map(
-                ([key, value]) =>
-                  `${key}${required.has(key) ? "" : "?"}:${compactType(value, !required.has(key))}`,
-              )
-              .join(", ")
-          : "";
-      return `${action.name}(${args}) ${action.description.slice(0, 100)}`;
+      const variants: readonly unknown[] = Array.isArray(
+        action.inputSchemaJson.anyOf,
+      )
+        ? action.inputSchemaJson.anyOf
+        : [action.inputSchemaJson];
+      const signatures = variants.map((schema) => {
+        if (!schema || typeof schema !== "object") return `${action.name}()`;
+        const required = new Set(
+          "required" in schema && Array.isArray(schema.required)
+            ? schema.required
+            : [],
+        );
+        const properties =
+          "properties" in schema ? schema.properties : undefined;
+        const args =
+          properties && typeof properties === "object"
+            ? Object.entries(properties)
+                .map(
+                  ([key, value]) =>
+                    `${key}${required.has(key) ? "" : "?"}:${compactType(value, !required.has(key))}`,
+                )
+                .join(", ")
+            : "";
+        return `${action.name}(${args})`;
+      });
+      return `${signatures.join(" | ")} ${action.description.slice(0, 100)}`;
     }),
   ].join("\n");
 }
