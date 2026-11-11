@@ -2,6 +2,7 @@ import { getBotIdentity } from "../identity.js";
 import type { LlmMessage } from "../llm/client.js";
 import type { ObservationInput } from "../llm/evidence.js";
 import { escapeAttribute, escapeTranscriptText } from "./escape.js";
+import { MESSAGE_SPLIT } from "./reserved-tokens.js";
 import type {
   ConversationMessage,
   Transcript,
@@ -288,7 +289,7 @@ function formatBlockContent(block: TranscriptBlock): string {
     .split(RESPONSE_SPLIT_MARKER)
     .map((chunk) => escapeTranscriptText(chunk.trim()))
     .filter(Boolean)
-    .join("\n<split />\n");
+    .join(MESSAGE_SPLIT);
 }
 
 function formatAttributes(block: TranscriptBlock): string {

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { escapeJsonMessageSplit } from "../conversation/escape.js";
 import type { LlmMessage } from "../llm/client.js";
 import type {
   CompletedGeneration,
@@ -112,11 +113,11 @@ export function toolResultMessage(
     const binding = bindings.get(key);
     if (unknownPaths.has(key)) {
       const start = content.length;
-      content += JSON.stringify(item);
+      content += json(item);
       observationUnknown.push({ start, end: content.length });
     } else if (typeof item === "string" && binding) {
       const start = content.length;
-      content += JSON.stringify(item);
+      content += json(item);
       observationSources.push({
         ...binding,
         start,
@@ -134,11 +135,11 @@ export function toolResultMessage(
       content += "{";
       Object.entries(item).forEach(([key, child], index) => {
         if (index) content += ",";
-        content += `${JSON.stringify(key)}:`;
+        content += `${json(key)}:`;
         append(child, [...path, key]);
       });
       content += "}";
-    } else content += JSON.stringify(item);
+    } else content += json(item);
   };
   append(value, []);
   return {
@@ -150,6 +151,10 @@ export function toolResultMessage(
   };
 }
 
+/** Tool text is untrusted, so a marker literal in it must not reach the tokenizer whole. */
+function json(value: Json): string {
+  return escapeJsonMessageSplit(JSON.stringify(value));
+}
 function hash(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }

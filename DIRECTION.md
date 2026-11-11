@@ -1,5 +1,4 @@
 # Direction
-
 Patch is a Discord persona and conversation partner with her own voice, taste,
 boundaries, and timing. Build the simplest useful conversation path before
 expanding the assistant features in the versioned specs.
@@ -18,7 +17,7 @@ and AI scaffold. Patch consumes it as a pinned submodule at `vendor/protocord`
 through pnpm workspace dependencies. Publishing packages is deferred.
 
 Patch actions use Protocord's shared validation, authorization and trigger lifecycle.
-Plain model text sends normally; optional reply metadata targets a visible message ID.
+Plain model text splits at `<|message_split|>` outside code; legacy `<split />` remains accepted. Headings keep their newlines. Optional reply metadata targets a visible message ID.
 Reactions, own-message edits/deletion, threads, polls, stickers and fixed-text follow-ups are implemented.
 Follow-ups support one-off timestamps or cron with explicit IANA timezone, persisted next occurrences and bounded missed-tick coalescing.
 Ambiguous sends pause the schedule. Recurring delivery is synthetically qualified, without deployment or real scheduled messages.

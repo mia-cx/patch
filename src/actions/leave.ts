@@ -38,7 +38,7 @@ const NO_MENTIONS: MessageMentionOptions = {
 
 const Farewell = Schema.String.annotate({
   description:
-    "Exact Discord-visible farewell to send before leaving. May include <split /> for multiple Discord messages.",
+    "Exact Discord-visible farewell to send before leaving. May include <|message_split|> between multiple Discord messages.",
 });
 const LeaveThreadArgs = Schema.Struct({ farewell: Schema.optional(Farewell) });
 type LeaveInvocation = ActionInvocation<typeof LeaveThreadArgs.Type>;

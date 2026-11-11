@@ -1048,7 +1048,7 @@ describe("opt-in Remora DM conversations", () => {
     );
     expect(turns?.[2]?.content).toContain("My puppy is called Pip.");
     expect(turns?.[4]?.content).toBe(
-      "That's lovely.\n<split />\nTell me more.",
+      "That's lovely.<|message_split|>Tell me more.",
     );
     expect(turns?.[3]?.content).toContain('author_id="patch"');
     expect(turns?.[5]?.content).toContain(

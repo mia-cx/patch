@@ -6,6 +6,7 @@ import {
   dispatchToolCall,
   isToolCallTrigger,
 } from "../actions/tool-calls.js";
+import { escapeJsonMessageSplit } from "../conversation/escape.js";
 import type { LlmMessage, LlmResponse, LlmTool } from "../llm/client.js";
 import type { CompletedGeneration } from "../llm/evidence.js";
 import { toolResultMessage } from "./observations.js";
@@ -100,7 +101,9 @@ export async function runToolTurn(options: {
           for (let index = 0; index < exchange.count; index++)
             messages.push({
               role: "tool",
-              content: JSON.stringify(results[exchange.start + index]),
+              content: escapeJsonMessageSplit(
+                JSON.stringify(results[exchange.start + index]),
+              ),
               tool_call_id:
                 exchange.assistant.tool_calls?.[index]?.id ??
                 `patch-${exchange.start + index}`,

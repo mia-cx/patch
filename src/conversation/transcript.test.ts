@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MESSAGE_SPLIT } from "./reserved-tokens.js";
 import { buildTranscript, formatTranscript } from "./transcript.js";
 import type { ConversationMessage } from "./types.js";
 
@@ -122,16 +123,22 @@ describe("formatTranscript", () => {
   it("neutralizes reserved transcript tags in message content", () => {
     const formatted = formatTranscript(
       buildTranscript(
-        [message({ id: "1", content: "<message>nope</message> <split />" })],
+        [
+          message({
+            id: "1",
+            content: `<message>nope</message> <split /> ${MESSAGE_SPLIT}`,
+          }),
+        ],
         "patch",
       ),
     );
 
     expect(formatted).toContain(
-      "<message_escaped>nope</message_escaped> <split_escaped />",
+      "<message_escaped>nope</message_escaped> <split_escaped /> <|message_split_escaped|>",
     );
   });
 
+  // Proves history joins Patch's messages with the bare canonical marker, keeps their newlines, and escapes marker text they contain.
   it("merges adjacent Patch response chunks into one response block", () => {
     const messages: ConversationMessage[] = [
       message({ id: "1", authorId: "mia", authorName: "Mia" }),
@@ -140,14 +147,14 @@ describe("formatTranscript", () => {
         authorId: "patch",
         authorName: "Patch",
         authorIsBot: true,
-        content: "first chunk",
+        content: "## first chunk\n- line one\n\nline two",
       }),
       message({
         id: "3",
         authorId: "patch",
         authorName: "Patch",
         authorIsBot: true,
-        content: "second chunk",
+        content: `second \`${MESSAGE_SPLIT}\` chunk`,
       }),
       message({ id: "4", authorId: "mia", authorName: "Mia" }),
     ];
@@ -157,7 +164,9 @@ describe("formatTranscript", () => {
     expect(formatted).toContain(
       '<response author_name="Patch" pronouns="she/her" author_id="patch" message_ids="2,3" role="self"',
     );
-    expect(formatted).toContain("first chunk\n<split />\nsecond chunk");
+    expect(formatted).toContain(
+      "\n## first chunk\n- line one\n\nline two<|message_split|>second `<|message_split_escaped|>` chunk\n</response>",
+    );
   });
 });
 

@@ -1,79 +1,154 @@
 const DISCORD_MESSAGE_LIMIT = 2000;
 const SAFE_MESSAGE_LIMIT = 1900;
-const SPLIT_HINT = "<split />";
-const SPLIT_HINT_PATTERN = /<split\s*\/?>/gi;
 const MAX_RESPONSE_MESSAGES = 6;
 const MAX_SPLIT_REPAIR_LINES = 4;
 const MAX_SPLIT_REPAIR_LINE_CHARS = 180;
+/** The canonical `MESSAGE_SPLIT` marker, plus the `<split />` hint older adapters emit. */
+const SPLIT_MARKER = /<\|message_split\|>|<split\s*\/?>/i;
+const FENCE = /^([ \t]*)(`{3,}|~{3,})(.*)$/;
+const FENCE_CLOSE_TAIL = new RegExp(
+  `^[ \\t]*(?:$|${SPLIT_MARKER.source})`,
+  "i",
+);
+const PARAGRAPH_BREAK = /\n[ \t]*\n/;
+/** Markdown whose line breaks are layout, never casual message boundaries. */
+const STRUCTURED_MARKDOWN = [
+  /^ {0,3}#{1,6}(?:[ \t]|$)/m, // ATX heading
+  /^-#[ \t]/m, // Discord subtext
+  /^.*\S.*\n {0,3}(?:=+|-+)[ \t]*$/m, // setext heading
+  /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\S/m, // list item
+  /^ {0,3}>/m, // blockquote
+  /^(?: {2,}|\t)\S/m, // indented content
+  /`|^[ \t]*~~~/m, // code
+];
 
+type Range = readonly [start: number, end: number];
+
+/** Casual multi-line output with no explicit markers may ask the model to place them. */
 export function needsSplitHintRepair(content: string): boolean {
-  const trimmed = content.trim();
-  if (!trimmed) return false;
-  if (/<split\s*\/?>/i.test(trimmed)) return false;
-  if (hasProtectedMarkdown(trimmed)) return false;
-
-  const nonEmptyLines = trimmed
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (nonEmptyLines.length < 2) return false;
-  if (nonEmptyLines.length > MAX_SPLIT_REPAIR_LINES) return false;
-  if (nonEmptyLines.some((line) => line.length > MAX_SPLIT_REPAIR_LINE_CHARS)) {
+  if (!content.trim()) return false;
+  if (SPLIT_MARKER.test(content)) return false;
+  if (STRUCTURED_MARKDOWN.some((pattern) => pattern.test(content))) {
     return false;
   }
 
-  return /\n\s*\n/.test(trimmed) || nonEmptyLines.length > 1;
+  const nonEmptyLines = content
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return (
+    nonEmptyLines.length >= 2 &&
+    nonEmptyLines.length <= MAX_SPLIT_REPAIR_LINES &&
+    nonEmptyLines.every((line) => line.length <= MAX_SPLIT_REPAIR_LINE_CHARS)
+  );
 }
 
+/**
+ * Sends one Discord message per explicit marker outside code, keeping every
+ * newline inside a message, then applies Discord's length and burst limits.
+ */
 export function splitDiscordResponse(content: string): string[] {
-  const normalized = normalizeSplitHints(content.trim());
-  const splitCandidates = hasProtectedMarkdown(normalized)
-    ? [removeSplitHintsOutsideCodeFences(normalized)]
-    : splitOnHints(normalized);
-  const chunks = splitCandidates
+  const chunks = splitOnMarkers(content)
     .flatMap((chunk) => splitHardLimit(chunk.trim()))
     .filter(Boolean);
   return capResponseMessages(chunks);
 }
 
-function normalizeSplitHints(content: string): string {
-  return content.replace(SPLIT_HINT_PATTERN, SPLIT_HINT);
+function splitOnMarkers(content: string): string[] {
+  const code = codeRanges(content);
+  const chunks: string[] = [];
+  let start = 0;
+
+  for (const marker of content.matchAll(new RegExp(SPLIT_MARKER, "gi"))) {
+    const index = marker.index;
+    if (code.some(([from, to]) => index >= from && index < to)) continue;
+    chunks.push(content.slice(start, index));
+    start = index + marker[0].length;
+  }
+
+  chunks.push(content.slice(start));
+  return chunks;
 }
 
-function hasProtectedMarkdown(content: string): boolean {
-  return (
-    hasMarkdownHeading(content) ||
-    hasMarkdownList(content) ||
-    hasBlockquote(content) ||
-    hasCodeFence(content)
-  );
+/**
+ * Fenced blocks (``` or ~~~) and inline code spans. Outside a fence, a marker
+ * starts a new line, so a fence may open right after one and close right
+ * before one. An unclosed fence runs to the end.
+ */
+function codeRanges(content: string): Range[] {
+  const starts = [
+    0,
+    ...[...content.matchAll(/\n/g)].map((match) => match.index + 1),
+    ...[...content.matchAll(new RegExp(SPLIT_MARKER, "gi"))].map(
+      (match) => match.index + match[0].length,
+    ),
+  ].sort((a, b) => a - b);
+  const ranges: Range[] = [];
+  let fence: { char: string; length: number; start: number } | undefined;
+  let prose = 0;
+
+  for (const start of starts) {
+    const newline = content.indexOf("\n", start);
+    const line = content.slice(start, newline < 0 ? content.length : newline);
+    const [, indent = "", run = "", info = ""] = FENCE.exec(line) ?? [];
+    const char = run.charAt(0);
+    if (fence) {
+      // Inside a fence, markers are content and only real lines can close it.
+      if (content[start - 1] !== "\n") continue;
+      if (
+        char === fence.char &&
+        run.length >= fence.length &&
+        FENCE_CLOSE_TAIL.test(info)
+      ) {
+        prose = start + indent.length + run.length;
+        ranges.push([fence.start, prose]);
+        fence = undefined;
+      }
+    } else if (run && !(char === "`" && info.includes("`"))) {
+      // A marker or newline inside inline code cannot start a fenced block.
+      if (
+        inlineCodeRanges(content, prose, content.length).some(
+          ([from, to]) => from < start && start < to,
+        )
+      ) {
+        continue;
+      }
+      ranges.push(...inlineCodeRanges(content, prose, start));
+      fence = { char, length: run.length, start };
+    }
+  }
+
+  if (fence) ranges.push([fence.start, content.length]);
+  else ranges.push(...inlineCodeRanges(content, prose, content.length));
+  return ranges;
 }
 
-function hasMarkdownHeading(content: string): boolean {
-  return /^#{1,6}\s+\S/m.test(content);
-}
+/** A backtick run closes at the next run of equal length in the same paragraph. */
+function inlineCodeRanges(
+  content: string,
+  start: number,
+  end: number,
+): Range[] {
+  const prose = content.slice(start, end);
+  const runs = [...prose.matchAll(/`+/g)];
+  const ranges: Range[] = [];
 
-function hasMarkdownList(content: string): boolean {
-  return /^(?:\s*[-*+]\s+\S|\s*\d+[.)]\s+\S)/m.test(content);
-}
+  for (let index = 0; index < runs.length; index += 1) {
+    const open = runs[index];
+    if (!open) continue;
+    const openEnd = open.index + open[0].length;
+    const closeIndex = runs.findIndex(
+      (run, candidate) => candidate > index && run[0].length === open[0].length,
+    );
+    const close = runs[closeIndex];
+    if (!close || PARAGRAPH_BREAK.test(prose.slice(openEnd, close.index))) {
+      continue;
+    }
+    ranges.push([start + open.index, start + close.index + close[0].length]);
+    index = closeIndex;
+  }
 
-function hasBlockquote(content: string): boolean {
-  return /^>\s?\S/m.test(content);
-}
-
-function hasCodeFence(content: string): boolean {
-  return /^```/m.test(content);
-}
-
-function removeSplitHintsOutsideCodeFences(content: string): string {
-  let inFence = false;
-  return content
-    .split("\n")
-    .map((line) => {
-      if (line.trim().startsWith("```")) inFence = !inFence;
-      return inFence ? line : line.replaceAll(SPLIT_HINT, "\n");
-    })
-    .join("\n");
+  return ranges;
 }
 
 function capResponseMessages(chunks: string[]): string[] {
@@ -109,37 +184,6 @@ function appendOmissionMarker(content: string, omitted: number): string {
   }
 
   return `${content.slice(0, SAFE_MESSAGE_LIMIT - marker.length).trim()}${marker}`;
-}
-
-function splitOnHints(content: string): string[] {
-  const chunks: string[] = [];
-  let current = "";
-  let inFence = false;
-
-  for (const line of content.split("\n")) {
-    if (line.trim().startsWith("```")) inFence = !inFence;
-
-    if (inFence) {
-      current = appendLine(current, line);
-      continue;
-    }
-
-    const parts = line.split(SPLIT_HINT);
-    const [firstPart, ...splitParts] = parts;
-    current = appendLine(current, firstPart ?? "");
-
-    for (const part of splitParts) {
-      chunks.push(current.trim());
-      current = part;
-    }
-  }
-
-  chunks.push(current.trim());
-  return chunks;
-}
-
-function appendLine(current: string, line: string): string {
-  return current ? `${current}\n${line}` : line;
 }
 
 function splitHardLimit(content: string): string[] {

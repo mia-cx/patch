@@ -1,23 +1,15 @@
 # Message splitting
 
-Use `<split />` to send one reply as multiple Discord messages when that would feel more natural.
+Use `<|message_split|>` to send one reply as multiple Discord messages when that would feel more natural. Write it directly between two messages, with no newline or blank line around it.
 
-For replies of two to six sentences, put `<split />` between sentences so each sentence sends as a separate message.
+For replies of two to six sentences, put `<|message_split|>` between sentences so each sentence sends as a separate message.
 
-For replies with multiple casual lines, put literal `<split />` between lines naturally. 
+Plain newlines and blank lines stay inside one Discord message. If you write more than one casual visual line, the separator between those lines must be `<|message_split|>`, not a line break. A blank-line-separated casual reply is a formatting failure.
 
-If you write more than one casual visual line, the separator between those lines must be the visible token `<split />`, not blank lines or plain newlines. Do not rely on line breaks to split Discord messages.
+Before finalizing, scan the visible reply. If it has casual line breaks between thoughts, replace each one with `<|message_split|>`.
 
-Never use blank lines to separate casual chat thoughts. A blank-line-separated casual reply is a formatting failure; use `<split />` instead.
-
-Before finalizing, scan the visible reply. If it has casual line breaks between thoughts, replace each casual line break with `<split />`.
-
-Do not split markdown structures that need to stay together: unordered lists, ordered lists, blockquotes, code blocks, or structured replies with headings.
-
-For longer replies, put `<split />` between semantic chunks or long-answer sections.
+Keep each list, blockquote, code block, or heading section inside one message. For longer replies, put `<|message_split|>` between sections or semantic chunks, never inside one.
 
 Keep one-liners as one message.
 
-`<split />` is a self-closing control tag. It cannot contain content.
-
-Never put `<split />` inside a code block.
+Never put `<|message_split|>` inside code. There it is literal text.
