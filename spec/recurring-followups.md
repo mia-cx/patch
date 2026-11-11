@@ -84,7 +84,7 @@ Minute/hour wildcard expressions follow the same parser's traversal rules.
 After committing a clean implementation, run:
 
 ```sh
-pnpm exec tsx test/export-recurring-followups.ts /mnt/media/private/mia-voice-real-context-v1/tool-contracts/recurring-followups.json
+uv run --no-project --with transformers==5.22.2 --with jinja2 --with sentencepiece pnpm exec tsx test/export-recurring-followups.ts /mnt/media/private/mia-voice-real-context-v1/tool-contracts/recurring-followups-gemma-v2.json /home/mia/.cache/huggingface/hub/models--google--gemma-4-E4B-it/snapshots/4ecc2ba63bcac23ba4a767fc87025b1450f84c9c /mnt/media/private/mia-voice-real-context-v1/tool-contracts/memory-tools-parent-verified.json
 ```
 
 The exporter extracts the actual tool schemas and runs native calls through the
@@ -101,3 +101,38 @@ The artifact records full Patch/base/Protocord hashes and distinguishes implemen
 behavior from proposals and live qualification. No model or Discord network call runs.
 The regression suite also exercises tagged calls, DST, restart, limits and cancellation races.
 The private artifact contains only synthetic text; no private messages enter the repository.
+
+## Native model declarations
+
+`toLlmTools` calls the shared `modelDeclarationSchema` export in
+`src/actions/model-schema.ts`. The function projects declaration metadata only.
+Protocord retains the original Effect schemas and parse functions for dispatch.
+The compact tagged prompt continues to show the original scheduling alternatives.
+
+Gemma's native template reads `properties`, `required`, `type` and `nullable`.
+The projection exposes an explicit object root, merges object-alternative fields,
+and requires only fields common to all alternatives. The scheduling description
+states the mutually exclusive one-off versus recurring rule; the parser enforces it.
+Zero-argument declarations expose object roots with empty properties and required lists.
+Nested nullable fields expose their concrete type plus `nullable:true`, including
+fields inside array items. Effect's non-finite numeric sentinel alternatives project
+to the numeric type. Numeric limits and all semantic checks remain runtime-owned.
+
+The model declaration is a Gemma-compatible description, not a replacement validator.
+In particular, `nullable:true` is a template annotation, and projected object unions
+can describe a wider set of arguments than the strict parser accepts.
+Consumers validate calls against `parser_schemas`, never the declaration projection.
+
+The v2 export separates `model_schemas` from exact `parser_schemas` and preserves
+observed receipts, response shapes and source provenance. Its `all_tools` section
+includes every registered declaration for compatibility auditing, independent of
+conversation-specific availability. Supplying a memory contract adds those tools
+to the audit without changing their implementation or source file.
+
+`test/fixtures/gemma4-declarations.jinja` contains the exact first 155 lines of
+`google/gemma-4-E4B-it` revision `4ecc2ba63bcac23ba4a767fc87025b1450f84c9c`.
+The source template SHA-256 is `0a2c8073c878ab1da004bee933a998606537bbb62016310352c7285c3f01c5b5`.
+Regression tests render these macros with `@huggingface/jinja`.
+The export also runs `test/verify-native-declarations.py` against the pinned local
+AutoTokenizer. It verifies every parser field is visible, checks for empty types,
+and checks complete object declarations. This loads tokenizer files only and performs no inference.

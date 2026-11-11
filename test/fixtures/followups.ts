@@ -5,7 +5,7 @@ import {
   toLlmTools,
 } from "../../src/actions/action-context.js";
 import type { ActionContext } from "../../src/actions/context.js";
-import { registerHarnessActions } from "../../src/actions/harness.js";
+import { registerDefaultActions } from "../../src/actions/defaults.js";
 import { createPatchActionRegistry } from "../../src/actions/registry.js";
 import { loadConfig } from "../../src/config.js";
 import { ConversationContextStore } from "../../src/conversation/store.js";
@@ -92,13 +92,20 @@ export async function followupHarness(path = ":memory:") {
     harness: { store, web: new WebClient() },
   };
   const registry = createPatchActionRegistry();
-  registerHarnessActions(registry);
+  registerDefaultActions(registry);
   const actions = await buildModelVisibleActions({
     message,
     context,
     registry,
   });
   const tools = toLlmTools(actions, { include: TOOLS });
+  const parserSchemas = Object.fromEntries(
+    actions.map((action) => [action.name, action.inputSchemaJson]),
+  );
+  // Audit declarations even when a particular tool is unavailable in this synthetic DM.
+  const allModelSchemas = toLlmTools(
+    actions.map((action) => ({ ...action, available: true })),
+  );
   const compactPrompt = formatCompactActionsPrompt(actions);
   const wireResults: LlmMessage[] = [];
 
@@ -156,6 +163,8 @@ export async function followupHarness(path = ":memory:") {
     message,
     store,
     tools,
+    parserSchemas,
+    allModelSchemas,
     compactPrompt,
     wireResults,
     deliveries,

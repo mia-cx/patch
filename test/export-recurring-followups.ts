@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { Schema } from "effect";
+import { modelDeclarationSchema } from "../src/actions/model-schema.js";
 import { deliverFollowups } from "../src/tools/followups.js";
 import { FOLLOWUP_CHANNEL, followupHarness } from "./fixtures/followups.js";
 
@@ -42,6 +45,8 @@ function responseShape(value: unknown): Record<string, unknown> {
 }
 
 const destination = process.argv[2];
+const tokenizerPath = process.argv[3];
+const memoryContractPath = process.argv[4];
 if (!destination)
   throw new Error("Usage: tsx test/export-recurring-followups.ts OUTPUT.json");
 const git = (...args: string[]) =>
@@ -56,6 +61,65 @@ let now = Date.parse("2026-11-11T12:00:00Z");
 Date.now = () => now;
 const app = await followupHarness();
 try {
+  const allModelSchemas = [...app.allModelSchemas];
+  const allParserSchemas = { ...app.parserSchemas };
+  let memoryProvenance: unknown = null;
+  if (memoryContractPath) {
+    const raw = readFileSync(memoryContractPath, "utf8");
+    const jsonSchema = Schema.Record(Schema.String, Schema.Unknown);
+    const contract = Schema.decodeUnknownSync(
+      Schema.Struct({
+        tools: Schema.Array(
+          Schema.Struct({
+            type: Schema.Literal("function"),
+            function: Schema.Struct({
+              name: Schema.String,
+              description: Schema.String,
+              parameters: jsonSchema,
+            }),
+          }),
+        ),
+        parser_schemas: Schema.optional(
+          Schema.Record(Schema.String, jsonSchema),
+        ),
+        provenance: Schema.Unknown,
+      }),
+    )(JSON.parse(raw));
+    for (const tool of contract.tools) {
+      const parser =
+        contract.parser_schemas?.[tool.function.name] ??
+        tool.function.parameters;
+      allParserSchemas[tool.function.name] = parser;
+      allModelSchemas.push({
+        type: "function",
+        function: {
+          ...tool.function,
+          parameters: modelDeclarationSchema(parser),
+        },
+      });
+    }
+    memoryProvenance = {
+      path: resolve(memoryContractPath),
+      sha256: createHash("sha256").update(raw).digest("hex"),
+      source: contract.provenance,
+    };
+  }
+  const nativeDeclarationAudit = tokenizerPath
+    ? (JSON.parse(
+        execFileSync(
+          "python",
+          ["test/verify-native-declarations.py", tokenizerPath],
+          {
+            input: JSON.stringify({
+              model_schemas: allModelSchemas,
+              parser_schemas: allParserSchemas,
+            }),
+            encoding: "utf8",
+            maxBuffer: 2_000_000,
+          },
+        ),
+      ) as unknown)
+    : null;
   const steps: Array<{
     call?: { name: string; arguments: Record<string, unknown> };
     request?: { role: "user"; content: string };
@@ -206,7 +270,7 @@ try {
   );
   assert.deepEqual(app.store.followups(FOLLOWUP_CHANNEL), []);
   const artifact = {
-    format_version: 1,
+    format_version: 2,
     status: "implemented_and_synthetically_tested_not_deployed",
     proposed: [],
     revision: {
@@ -218,6 +282,20 @@ try {
     },
     generated_at: new Date(actualNow()).toISOString(),
     schemas: app.tools,
+    model_schemas: app.tools,
+    parser_schemas: Object.fromEntries(
+      app.tools.map((tool) => [
+        tool.function.name,
+        app.parserSchemas[tool.function.name],
+      ]),
+    ),
+    all_tools: {
+      model_schemas: allModelSchemas,
+      parser_schemas: allParserSchemas,
+      availability:
+        "Declaration audit includes all registered tools, regardless of availability in the synthetic DM. It grants no execution permission.",
+    },
+    native_declaration_audit: nativeDeclarationAudit,
     response_contract: {
       status: "observed_from_implemented_runtime",
       shapes:
@@ -251,9 +329,9 @@ try {
     },
     validation: {
       structural:
-        "Exact registered Protocord schemas; excess properties rejected. Runtime also validates cron, IANA zone, valid ISO calendar/offset, text and quota.",
+        "parser_schemas preserve exact registered Effect JSON Schemas. Runtime decoding and semantic checks remain unchanged, including exclusive at versus cron+timezone. Empty Struct's legacy parser also permits arrays/excess fields; its model declaration is an explicit object.",
       schema_format:
-        "OpenAI function tool definitions, parameters are JSON Schema generated from the actual Effect validators.",
+        "schemas/model_schemas contain exact model-visible function definitions. Their parameters project object alternatives and recursively nullable types to Gemma-readable properties/type/nullable. They describe model arguments; parser_schemas and runtime checks enforce validation. The projection can be less restrictive and nullable:true is a Gemma declaration annotation, not a JSON Schema null union.",
     },
     semantics: {
       destination:
@@ -291,6 +369,15 @@ try {
       tool_receipts:
         "Captured from the actual caller, never inferred from human acknowledgements or delivery prose.",
       private_source_messages_used: false,
+      memory_declaration_source: memoryProvenance,
+      model_projection: {
+        export: "modelDeclarationSchema",
+        module: "src/actions/model-schema.ts",
+        boundary: "toLlmTools in src/actions/action-context.ts",
+        sha256: createHash("sha256")
+          .update(readFileSync("src/actions/model-schema.ts"))
+          .digest("hex"),
+      },
     },
     examples: { native_tool_lifecycle: success, errors: steps },
     qualification: {
