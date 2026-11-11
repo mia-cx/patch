@@ -7,7 +7,7 @@
   "schema_scope": "Runtime-derived structural JSON Schemas plus the listed permission, Unicode-scalar, source binding, timestamp validity, receipt-ID equality and policy invariants. JSON Schema alone does not grant permission or prove these cross-field invariants.",
   "provenance": {
     "patch": {
-      "commit": "b1d6ed82d28524857f0cd03630e2a804d45994ea",
+      "commit": "0f65a2386bcf5004f828d6e09c7c41dbbdf57aab",
       "files": {
         "src/actions/memory-tools.ts": "3ffb9f07aebfe4e0c203b36f6c7f167accff16682781c9995a94b49e5debe96a",
         "src/actions/tool-calls.ts": "89c2a4cfc163b62b4ac88171dd0ce81af31301eaa0ce65f2e8de7bf9b5f71c31",
@@ -21,7 +21,7 @@
       }
     },
     "remora": {
-      "commit": "92c34f51924a269a270b1062e202c3dafff1641d",
+      "commit": "8bd14c950115ffcd55022181145702939ec9ccec",
       "files": {
         "src/ardm/explicit_save.py": "640ebac630f9f5b55c867754043cd81733644ab82780eeacdd53981c15bdfba1",
         "src/ardm/evidence_memory.py": "66450a8bf55556d3bd899331404f16fac47c5fc169a0d5cfc482dd290e3d49ec",
