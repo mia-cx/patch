@@ -7,6 +7,12 @@ import {
   type EvidenceSnapshot,
   EvidenceSnapshotSchema,
 } from "./evidence.js";
+import {
+  type MemorySaveReceipt,
+  MemorySaveReceiptSchema,
+  type MemorySaveRequest,
+  MemorySaveRequestSchema,
+} from "./save.js";
 
 const SafeCount = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(0),
@@ -121,6 +127,7 @@ const MutationReceipt = Schema.Struct({
   cache_invalidated: Schema.Literal(true),
   reset_required: Schema.Literal(true),
 });
+export const MemoryMutationSchema = MutationReceipt;
 const ErrorBody = Schema.Struct({
   error: Schema.Struct({ code: Schema.NullOr(Schema.String) }),
 });
@@ -174,6 +181,16 @@ export class RemoraMemoryClient {
   private limits: MemoryLimits | undefined;
   private searchLimits: MemorySearchLimits | undefined;
   private evidence = false;
+  private saveChars: number | undefined;
+
+  /** Explicit writes require their own negotiated endpoint; automatic writes do not imply support. */
+  get supportsSave() {
+    return this.saveChars !== undefined;
+  }
+
+  get supportsManagement() {
+    return this.limits !== undefined;
+  }
 
   /** Separate evidence namespace; fact-only endpoints never imply evidence access. */
   get supportsEvidence() {
@@ -188,6 +205,7 @@ export class RemoraMemoryClient {
     this.limits = undefined;
     this.searchLimits = undefined;
     this.evidence = false;
+    this.saveChars = undefined;
     const caps =
       capabilities ??
       parseRemoraCapabilities(await this.request("/remora/capabilities"));
@@ -232,6 +250,8 @@ export class RemoraMemoryClient {
     }
     this.initialized = true;
     this.evidence = caps.features.all_stream_evidence === true;
+    if (caps.features.explicit_memory_save)
+      this.saveChars = caps.limits.max_explicit_memory_chars;
     return caps;
   }
 
@@ -240,6 +260,47 @@ export class RemoraMemoryClient {
     if (!this.initialized) await this.initialize();
     if (!this.limits) throw new MemoryManagementError("unsupported_feature");
     return this.limits;
+  }
+
+  /** Save the authenticated adapter's literal human message, never model-written fact text. */
+  async save(request: MemorySaveRequest): Promise<MemorySaveReceipt> {
+    if (!this.initialized) await this.initialize();
+    if (this.saveChars === undefined)
+      throw new MemoryManagementError("unsupported_feature");
+    const input = Schema.decodeUnknownSync(MemorySaveRequestSchema, {
+      onExcessProperty: "error",
+    })(request);
+    if (
+      Array.from(input.source.text).length > this.saveChars ||
+      !Number.isFinite(Date.parse(input.source.observed_at))
+    )
+      throw new MemoryManagementError("invalid_parameter");
+    const receipt = await this.evidenceRequest(
+      MemorySaveReceiptSchema,
+      "/remora/memories/save",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    );
+    if (
+      receipt.bank !== input.bank ||
+      receipt.request_id !== input.request_id ||
+      receipt.source.id !== input.source.id ||
+      receipt.source.revision !== input.source.revision ||
+      receipt.source.origin !== "human_input" ||
+      receipt.source.actor?.actor?.bank !== input.bank ||
+      receipt.source.actor.actor.id !== input.source.actor_id ||
+      receipt.source.actor.actor.role !== "human" ||
+      receipt.source.tool !== null ||
+      receipt.source.url !== null ||
+      (receipt.status === "saved"
+        ? JSON.stringify(receipt.active_ids) !==
+          JSON.stringify(receipt.saved_ids)
+        : receipt.active_ids.length !== 0)
+    )
+      throw new MemoryManagementError("invalid_response");
+    return receipt;
   }
 
   /** Availability without an HTTP request while assembling the model's tool catalogue. */
