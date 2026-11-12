@@ -105,7 +105,7 @@ balance familiar, novel, challenging, and transformative
 - Build the taste graph without embeddings first.
 - Import Last.fm/Trakt/Goodreads activity and ratings first.
 - Add metadata text embeddings before raw media embeddings.
-- Add audio embeddings only from ethical sources: local owned files, user-supplied files, public previews, or creator-submitted audio.
-- Keep raw copyrighted media out of centralized storage.
+- Add audio embeddings from local owned files, user-supplied files, public previews, creator-submitted audio, or tracks streamed or downloaded through a paid account (tastebase uses Tidal).
+- Never keep or serve raw copyrighted media: delete audio once it is embedded, and store only the vectors.
 - Treat genre as cultural/folk taxonomy, not objective truth; embeddings can complement it but should not delete it from the graph.
 - Add embedding-backed ranking views only after `retrieve_interests` works with explicit graph + scores.
