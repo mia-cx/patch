@@ -7,17 +7,17 @@
   "schema_scope": "Runtime-derived structural JSON Schemas plus the listed permission, Unicode-scalar, source binding, timestamp validity, receipt-ID equality and policy invariants. JSON Schema alone does not grant permission or prove these cross-field invariants.",
   "provenance": {
     "patch": {
-      "commit": "71ac2636c99814edd11e608fb88348f14e249f56",
+      "commit": "4b99cfadae889ac480be9aabdf442964353c62b6",
       "files": {
         "src/actions/memory-tools.ts": "3ffb9f07aebfe4e0c203b36f6c7f167accff16682781c9995a94b49e5debe96a",
         "src/actions/tool-calls.ts": "89c2a4cfc163b62b4ac88171dd0ce81af31301eaa0ce65f2e8de7bf9b5f71c31",
-        "src/actions/action-context.ts": "cb868cec5f3f326f0d029d074b3e003f733209d9d678e564a83d3f434f365d53",
+        "src/actions/action-context.ts": "df0db8c51265b50969b13aad679e69e29f64452887f4fcad94e373a6c3b7b627",
         "src/memory/client.ts": "db24ba79b4004488e510f67fffc4a0ae525517daecc9eeed277f107303c4d9c5",
         "src/memory/save.ts": "bfaea482854b02b41de71e87db8b13d65bcf8f87568e4130ce1221dd98bda3f9",
         "src/memory/tool-contract.ts": "df366901149c93170224ab1f65e26c1950e7649753df4c91a922618eb65cbcbd",
         "src/memory/journal.ts": "c7291848559e34103aaccaa186bba238376bea46ffc34ee75758e32752af8661",
-        "src/tools/turn.ts": "44f71b5af4b8bbbc39b0dc9918074c244857c7389e0283c3b3d205093abd31cf",
-        "src/response/responder.ts": "3040b355ebf610a73a420f870855bc0c455856e9421ec38c75ce22e2a01172fd",
+        "src/tools/turn.ts": "e82e266cf3c5849a1578f97342350e6ef977d4a1a3985c63eb61d5e71092553b",
+        "src/response/responder.ts": "062ba140ce6b17efb873f1b1c5eec4bc145a9517af2c582b045aae5be53e22a7",
         "src/memory/tools.integration.test.ts": "2e94523829943ce9c3afa3e3e5d603339186b89970230c6540e97ad1dab26126"
       }
     },
@@ -44,7 +44,9 @@
         "parameters": {
           "type": "object",
           "additionalProperties": false,
-          "$defs": {}
+          "$defs": {},
+          "properties": {},
+          "required": []
         }
       }
     },
@@ -65,22 +67,16 @@
               "enum": ["fact", "evidence"]
             },
             "id": {
-              "anyOf": [
+              "type": "integer",
+              "allOf": [
                 {
-                  "type": "integer",
-                  "allOf": [
-                    {
-                      "exclusiveMinimum": 0
-                    },
-                    {
-                      "maximum": 9007199254740991
-                    }
-                  ]
+                  "exclusiveMinimum": 0
                 },
                 {
-                  "type": "null"
+                  "maximum": 9007199254740991
                 }
-              ]
+              ],
+              "nullable": true
             }
           },
           "required": ["scope", "kind"],

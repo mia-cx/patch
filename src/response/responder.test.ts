@@ -5,6 +5,7 @@ import type { Message } from "discord.js";
 import pino from "pino";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../config.js";
+import { ConversationContextStore } from "../conversation/store.js";
 import type { ConversationMessage } from "../conversation/types.js";
 import type { DiscordAdapter } from "../discord/adapter.js";
 import type { LlmClient, LlmRequest, LlmResponse } from "../llm/client.js";
@@ -38,10 +39,13 @@ describe("reply link validation", () => {
     expect(requests).toHaveLength(2);
     expect(requests[1]?.messages).toEqual(
       expect.arrayContaining([
-        { role: "assistant", content: "https://clyp.it/does-not-exist" },
+        expect.objectContaining({
+          role: "assistant",
+          content: "https://clyp.it/does-not-exist",
+        }),
         expect.objectContaining({
           role: "user",
-          content: expect.stringMatching(/404[\s\S]*reform/i),
+          content: expect.stringMatching(/404[\s\S]*rewrite/i),
         }),
       ]),
     );
@@ -245,6 +249,7 @@ async function runReply(replies: LlmResponse[]) {
       throw new Error("Unexpected guild reply");
     },
   };
+  const contextStore = new ConversationContextStore(":memory:");
   const llm = {
     async complete(input: LlmRequest) {
       const { signal: _signal, ...saved } = input;
@@ -265,7 +270,11 @@ async function runReply(replies: LlmResponse[]) {
     config: loadConfig({ DISCORD_TOKEN: "test", DISCORD_CLIENT_ID: "test" }),
     llm,
     logger: pino({ enabled: false }),
+    contextStore,
     contextMessages: [context],
+    // Link checks are independent of memory; keep this DM outside Remora.
+    remoraScope: () => undefined,
   });
+  contextStore.close();
   return { sent, requests };
 }
