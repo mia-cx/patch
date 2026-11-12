@@ -251,8 +251,13 @@ export async function respond(options: RespondOptions): Promise<void> {
       availableActionsPrompt,
       remora?.turn?.text,
     );
-    if (observations)
+    if (observations) {
+      const current = transcript.blocks.find(
+        (block) => block.id === message.id,
+      );
+      if (current) observations.noteSpeaker(current);
       promptMessages[promptMessages.length - 1] = observations.currentMessage();
+    }
 
     if (config.llmTraceLogging) {
       log.debug(

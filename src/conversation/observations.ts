@@ -8,6 +8,7 @@ import {
   type ObservationLimits,
   type ObservationReference,
   type ObservationSegment,
+  UNPRINTABLE,
   decodeObservationView,
   validateObservationBatch,
 } from "../llm/evidence.js";
@@ -22,6 +23,7 @@ import { MESSAGE_SPLIT } from "./reserved-tokens.js";
 import type { ConversationMessage, TranscriptBlock } from "./types.js";
 
 type Source = Omit<ObservationInput, "views" | "context">;
+type Actor = NonNullable<ObservationInput["actor"]>;
 type Candidate = {
   source: Source;
   digest: string;
@@ -42,6 +44,9 @@ export class ConversationObservations {
   private readonly namespace: string;
   private readonly sourceRevisions = new Map<string, number>();
   private consumed: readonly ConsumedSource[] = [];
+  /** Request-local speaker names and reply authors for the atomiser; never identity. */
+  private readonly labels = new Map<string, { actor: Actor; label: string }>();
+  private readonly authors = new Map<string, Actor>();
 
   constructor(
     private readonly options: {
@@ -65,6 +70,7 @@ export class ConversationObservations {
 
   /** Only actual new human messages in this destination can supply a human actor. */
   humanSource(block: TranscriptBlock): Source | undefined {
+    this.noteSpeaker(block);
     if (
       block.role === "human" &&
       block.id &&
@@ -82,7 +88,13 @@ export class ConversationObservations {
       !block.source.text.trim()
     )
       return;
-    return this.human(block.id, block.source.revision, block.authorId);
+    return this.human(
+      block.id,
+      block.source.revision,
+      block.authorId,
+      block.timestamp,
+      block.replyTo,
+    );
   }
 
   currentMessage(): LlmMessage {
@@ -100,6 +112,8 @@ export class ConversationObservations {
                   message.id,
                   message.editedTimestamp ?? 0,
                   message.author.id,
+                  message.createdAt,
+                  message.reference?.messageId,
                 ),
                 start: 0,
                 end: message.content.length,
@@ -112,6 +126,7 @@ export class ConversationObservations {
 
   /** Preserve each chunk's actual Discord identity even when transcript rendering merges replies. */
   assistantBody(block: TranscriptBlock): LlmMessage | undefined {
+    this.noteSpeaker(block);
     const pieces = block.displayMessages;
     if (!pieces?.length || pieces.length !== (block.messageIds?.length ?? 1))
       return;
@@ -539,6 +554,14 @@ export class ConversationObservations {
           id: `discord:user:${botUserId}`,
         },
       },
+      ...(limits.max_observation_label_chars && this.labels.size
+        ? {
+            labels: [...this.labels.values()].slice(
+              0,
+              limits.max_observation_labels,
+            ),
+          }
+        : {}),
     };
     validateObservationBatch(observations, messages, limits);
     this.consumed = this.consumedSources(observations);
@@ -596,13 +619,51 @@ export class ConversationObservations {
     );
   }
 
-  private human(id: string, revision: number, authorId: string): Source {
+  private human(
+    id: string,
+    revision: number,
+    authorId: string,
+    at: Date,
+    replyTo: string | undefined,
+  ): Source {
+    const repliedTo =
+      replyTo && this.labelChars ? this.authors.get(replyTo) : undefined;
     return {
       id: `discord:message:${id}`,
       revision,
       origin: "human_input",
       actor: { bank: this.bank, role: "human", id: `discord:user:${authorId}` },
+      at: at.toISOString(),
+      ...(repliedTo ? { replying_to: repliedTo } : {}),
     };
+  }
+
+  private get labelChars() {
+    return this.options.limits.max_observation_label_chars;
+  }
+
+  /** Remember who said each visible message and the name the conversation shows for them. */
+  noteSpeaker(block: TranscriptBlock) {
+    if (!this.labelChars || block.channelId !== this.options.message.channelId)
+      return;
+    if (block.role === "bot") return;
+    const actor: Actor = {
+      bank: this.bank,
+      role: block.role === "self" ? "assistant" : "human",
+      id: `discord:user:${block.role === "self" ? this.options.botUserId : block.authorId}`,
+    };
+    for (const id of [block.id, ...(block.messageIds ?? [])])
+      if (id) this.authors.set(id, actor);
+    const label = Array.from(
+      block.authorName
+        .replace(new RegExp(UNPRINTABLE, "gu"), " ")
+        .replace(/ +/g, " ")
+        .trim(),
+    )
+      .slice(0, this.labelChars)
+      .join("")
+      .trim();
+    if (label) this.labels.set(JSON.stringify(actor), { actor, label });
   }
 }
 

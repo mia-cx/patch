@@ -21,6 +21,8 @@ export const EvidenceIndex = Schema.Int.check(
   Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
 );
 export const EvidenceId = EvidenceIndex.check(Schema.isGreaterThan(0));
+/** Python's `str.isprintable` rejects these: other and separator characters except ASCII space. */
+export const UNPRINTABLE = /(?! )[\p{C}\p{Z}]/u;
 export const EvidenceDigest = Schema.String.check(
   Schema.isPattern(/^[0-9a-f]{64}$/u),
 );
@@ -65,6 +67,10 @@ const Input = Schema.Struct({
   context: Schema.optional(
     Schema.Array(EvidenceIdText).check(Schema.isMaxLength(16)),
   ),
+  /** When the source was said (RFC 3339 with offset); not source identity. */
+  at: Schema.optional(Schema.String),
+  /** Destination actor this message replies to; request-local, never stored. */
+  replying_to: Schema.optional(Actor),
 });
 const Batch = Schema.Struct({
   bank: EvidenceIdText,
@@ -92,6 +98,10 @@ const Batch = Schema.Struct({
     ).check(Schema.isMaxLength(128)),
   ),
   generated: Schema.optional(Schema.Struct({ actor: Actor })),
+  /** Display names the atomiser writes destination actors under; request-local, never identity. */
+  labels: Schema.optional(
+    Schema.Array(Schema.Struct({ actor: Actor, label: Schema.String })),
+  ),
 });
 
 /** Exact advertised values from the independent frozen companion, not legacy defaults. */
@@ -102,6 +112,9 @@ export const ObservationLimitsSchema = Schema.Struct({
   max_observation_contexts: Schema.Literal(16),
   max_observation_total_chars: Schema.Literal(262144),
   max_observation_id_chars: Schema.Literal(256),
+  /** Present only when the backend advertises `observation_labels`. */
+  max_observation_labels: Schema.optional(EvidenceId),
+  max_observation_label_chars: Schema.optional(EvidenceId),
 });
 export type ObservationLimits = typeof ObservationLimitsSchema.Type;
 export type ObservationBatch = typeof Batch.Type;
@@ -355,9 +368,29 @@ export function validateObservationBatch(
       view.encoding,
     );
   };
+  const labelChars = limits.max_observation_label_chars;
+  if (
+    batch.labels &&
+    (labelChars === undefined ||
+      batch.labels.length > (limits.max_observation_labels ?? 0) ||
+      batch.labels.some(
+        ({ actor, label }) =>
+          actor.bank !== batch.bank ||
+          !label.trim() ||
+          label !== label.trim() ||
+          Array.from(label).length > labelChars ||
+          UNPRINTABLE.test(label),
+      ))
+  )
+    throw new Error("Invalid observation labels");
   for (const input of batch.inputs) {
     if (input.actor?.bank !== undefined && input.actor.bank !== batch.bank)
       throw new Error("Observation actor is outside the destination bank");
+    if (
+      input.replying_to &&
+      (labelChars === undefined || input.replying_to.bank !== batch.bank)
+    )
+      throw new Error("Invalid observation reply target");
     if (
       (input.origin === "human_input" &&
         input.actor &&

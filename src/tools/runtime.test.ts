@@ -847,6 +847,78 @@ describe("complete harness with the actual Discord SDK", () => {
     ).toEqual([coffee.id]);
   });
 
+  // Proves the atomiser learns who spoke, whom they answered and when, without labels becoming identity.
+  it("names speakers, reply targets and times when the backend supports labels", async () => {
+    const app = await runtime(false, true);
+    const remora = buildRemoraRequest(app.config, app.message);
+    if (!remora) throw new Error("Missing scope");
+    const mapper = new ConversationObservations({
+      store: app.store,
+      remora,
+      message: app.message,
+      botUserId: BOT,
+      startId: "1000000000000000000",
+      limits: {
+        ...evidenceCapabilities.limits,
+        max_observation_labels: 128,
+        max_observation_label_chars: 128,
+      },
+    });
+    const base = toConversationMessage(app.message, BOT);
+    const question = {
+      ...base,
+      id: "1000000000000000021",
+      authorId: "1000000000000000031",
+      authorName: "Noor\nthe​sister",
+      content: "who has the keys?",
+      source: { text: "who has the keys?", revision: 0 },
+      timestamp: new Date("2026-11-12T20:00:00Z"),
+    };
+    const answer = {
+      ...base,
+      id: "1000000000000000022",
+      content: "i do",
+      source: { text: "i do", revision: 0 },
+      timestamp: new Date("2026-11-12T20:01:00Z"),
+      replyTo: { channelId: base.channelId, messageId: question.id },
+    };
+    const transcript = buildTranscript([question, answer, base], BOT);
+    const rendered = formatTranscriptMessages(
+      transcript,
+      CURRENT,
+      (block) => mapper.humanSource(block),
+      (block) => mapper.assistantBody(block),
+    );
+    const current = transcript.blocks.find((block) => block.id === CURRENT);
+    if (current) mapper.noteSpeaker(current);
+    const batch = mapper.request([
+      ...rendered,
+      mapper.currentMessage(),
+    ]).observations;
+    const noor = {
+      bank: mapper.bank,
+      role: "human",
+      id: "discord:user:1000000000000000031",
+    };
+    const reply = batch?.inputs.find(
+      (input) => input.id === `discord:message:${answer.id}`,
+    );
+    expect(reply?.at).toBe("2026-11-12T20:01:00.000Z");
+    expect(reply?.replying_to).toEqual(noor);
+    expect(batch?.labels).toContainEqual({
+      actor: noor,
+      label: "Noor the sister",
+    });
+    expect(batch?.labels).toContainEqual({
+      actor: {
+        bank: mapper.bank,
+        role: "human",
+        id: `discord:user:${base.authorId}`,
+      },
+      label: base.authorName,
+    });
+  });
+
   // Proves marker text inside Patch's own sent message stays inert in history and claims no generated ancestry.
   it("escapes a sent message split literal and leaves it unattributed", async () => {
     const app = await runtime(false, true);

@@ -187,6 +187,7 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     explicit_memory_save: Schema.optional(Schema.Boolean),
     all_stream_evidence: Schema.optional(Schema.Boolean),
     source_references: Schema.optional(Schema.Boolean),
+    observation_labels: Schema.optional(Schema.Boolean),
     streaming: Schema.Boolean,
     tools: Schema.Boolean,
     thinking: Schema.Boolean,
@@ -255,6 +256,10 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     max_observation_id_chars: Schema.optional(
       ObservationLimitsSchema.fields.max_observation_id_chars,
     ),
+    max_observation_labels:
+      ObservationLimitsSchema.fields.max_observation_labels,
+    max_observation_label_chars:
+      ObservationLimitsSchema.fields.max_observation_label_chars,
   }),
 });
 
@@ -310,6 +315,15 @@ export function parseRemoraCapabilities(value: unknown) {
   )
     throw new Error(
       "Remora explicit save requires evidence support and its limit",
+    );
+  if (
+    capabilities.features.observation_labels &&
+    (!capabilities.features.all_stream_evidence ||
+      capabilities.limits.max_observation_labels === undefined ||
+      capabilities.limits.max_observation_label_chars === undefined)
+  )
+    throw new Error(
+      "Remora observation labels require evidence support and both limits",
     );
   if (
     capabilities.features.memory_search &&

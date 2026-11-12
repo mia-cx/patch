@@ -205,10 +205,17 @@ export class LlmClient {
     );
     this.identityLimits = identityLimits;
     this.harnessNameLimits = harnessNameLimits;
-    if (features.all_stream_evidence)
-      this.evidenceLimits = Schema.decodeUnknownSync(ObservationLimitsSchema)(
-        limits,
-      );
+    if (features.all_stream_evidence) {
+      const {
+        max_observation_labels,
+        max_observation_label_chars,
+        ...evidence
+      } = Schema.decodeUnknownSync(ObservationLimitsSchema)(limits);
+      // Label limits mean label support only when the feature is advertised.
+      this.evidenceLimits = features.observation_labels
+        ? { ...evidence, max_observation_labels, max_observation_label_chars }
+        : evidence;
+    }
     this.supportsSourceReferences = features.source_references === true;
     return capabilities;
   }
