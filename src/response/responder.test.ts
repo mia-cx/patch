@@ -200,6 +200,26 @@ describe("reply link validation", () => {
       expect.any(Function),
     );
   });
+
+  // Proves formatting around a link never changes the destination that is checked.
+  it.each([
+    "**https://example.com/my_song**",
+    "*https://example.com/my_song*.",
+    "__https://example.com/my_song__",
+    "_https://example.com/my_song_",
+    "||https://example.com/my_song||",
+    "~~https://example.com/my_song~~",
+    "||**listen: https://example.com/my_song**||",
+  ])("checks the rendered URL in %s", async (content) => {
+    mockHttp([200]);
+    await runReply([{ content }]);
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith(
+      new URL("https://example.com/my_song"),
+      expect.any(Object),
+      expect.any(Function),
+    );
+  });
 });
 
 function mockHttp(statuses: (number | { status: number; location: string })[]) {

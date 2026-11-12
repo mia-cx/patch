@@ -32,19 +32,25 @@ type BrokenLink = {
   reason: "HTTP 404" | "DNS name does not resolve";
 };
 
-/** Check outgoing HTTP(S) links; only confirmed absence asks the model to retry. */
-export async function findBrokenReplyLinks(
-  content: string,
+/** Check the HTTP(S) links Discord renders in outgoing text. */
+export function findBrokenReplyLinks(content: string, signal: AbortSignal) {
+  return findBrokenLinks(
+    Array.from(
+      content.matchAll(/https?:\/\/[^\s<>"`]+/gi),
+      ({ 0: match, index }) =>
+        trimLinkDelimiters(match, content.slice(0, index)),
+    ),
+    signal,
+  );
+}
+
+/** Check each distinct URL; only confirmed absence counts as broken. */
+export async function findBrokenLinks(
+  links: readonly string[],
   signal: AbortSignal,
 ) {
   signal.throwIfAborted();
-  const urls = [
-    ...new Set(
-      Array.from(content.matchAll(/https?:\/\/[^\s<>"`]+/gi), ([match]) =>
-        trimLinkPunctuation(match),
-      ),
-    ),
-  ];
+  const urls = [...new Set(links)];
   const broken: BrokenLink[] = [];
   for (let offset = 0; offset < urls.length; offset += LINK_CONCURRENCY) {
     const results = await Promise.all(
@@ -58,6 +64,23 @@ export async function findBrokenReplyLinks(
     for (const result of results) if (result) broken.push(result);
   }
   return broken;
+}
+
+/**
+ * Return the URL Discord renders: bold, italic, strikethrough and spoiler
+ * delimiters close around it rather than extend it. Underscores are common in
+ * paths, so only those opened directly before the URL are removed.
+ */
+function trimLinkDelimiters(text: string, before: string) {
+  let underscores = (/[*_~|]*$/.exec(before)?.[0].match(/_/g) ?? []).length;
+  let link = text;
+  for (;;) {
+    link = trimLinkPunctuation(link);
+    const last = link.at(-1);
+    if (last === "_" && underscores > 0) underscores--;
+    else if (last !== "*" && last !== "~" && last !== "|") return link;
+    link = link.slice(0, -1);
+  }
 }
 
 function trimLinkPunctuation(text: string) {

@@ -1,3 +1,4 @@
+import { lookup } from "node:dns/promises";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,6 +45,20 @@ import { toolResultMessage } from "./observations.js";
 import { HarnessStore } from "./store.js";
 import { runToolTurn } from "./turn.js";
 import { WebClient } from "./web.js";
+
+// Fixture URLs are fictional. An unavailable resolver keeps reply link checks
+// inconclusive and offline; responder.test.ts proves their outcomes.
+vi.mock("node:dns/promises", () => ({
+  lookup: vi.fn(async () => {
+    throw Object.assign(new Error("No test resolver"), { code: "EAI_AGAIN" });
+  }),
+}));
+const missingHost = () =>
+  vi
+    .mocked(lookup)
+    .mockRejectedValueOnce(
+      Object.assign(new Error("Missing host"), { code: "ENOTFOUND" }),
+    );
 
 const CHANNEL = "1000000000000000001";
 const BOT = "1000000000000000002";
@@ -1995,6 +2010,51 @@ describe("complete harness with the actual Discord SDK", () => {
     expect(
       app.rest.post.mock.calls.filter(([route]) => route.endsWith("/messages")),
     ).toHaveLength(0);
+  });
+
+  // Proves text after an action passes the link check, and its rewrite never repeats the action.
+  it("withholds a dead link after a reaction and rewrites without reacting again", async () => {
+    const app = await runtime();
+    missingHost();
+    app.complete
+      .mockResolvedValueOnce({
+        content: `${call("react", { message_id: CURRENT, emoji: "😂" })}here: https://dead.example/song`,
+      })
+      .mockResolvedValueOnce({ content: "can't find that song" });
+    await app.run();
+    expect(app.rest.put).toHaveBeenCalledTimes(1);
+    expect(
+      app.rest.post.mock.calls
+        .filter(([route]) => route.endsWith("/messages"))
+        .map(
+          ([, options]) => JSON.parse(JSON.stringify(options?.body)).content,
+        ),
+    ).toEqual(["can't find that song"]);
+    expect(JSON.stringify(app.complete.mock.calls[1]?.[0].messages)).toContain(
+      "https://dead.example/song",
+    );
+  });
+
+  // Proves a source rejected in the model's draft is not re-attached to its rewrite.
+  it("does not append a rejected source after the rewrite removes it", async () => {
+    const app = await runtime();
+    const url = "https://fictional-release.example/aurora";
+    app.complete
+      .mockResolvedValueOnce({ content: call("web_fetch", { url }) })
+      .mockImplementationOnce(async () => {
+        missingHost();
+        return { content: `read it here: ${url}` };
+      })
+      .mockResolvedValueOnce({ content: "that page has gone missing" });
+    await app.run();
+    expect(app.complete).toHaveBeenCalledTimes(3);
+    expect(
+      app.rest.post.mock.calls
+        .filter(([route]) => route.endsWith("/messages"))
+        .map(
+          ([, options]) => JSON.parse(JSON.stringify(options?.body)).content,
+        ),
+    ).toEqual(["that page has gone missing"]);
   });
 
   // Proves authorship protection remains in force even when a model requests an edit.

@@ -5,6 +5,14 @@ import { auditFullCaller } from "./audit.js";
 import { BASE, MODEL } from "./fixture.js";
 import { CallerHttpGuard } from "./guard.js";
 
+// Fixture URLs are fictional. An unavailable resolver keeps reply link checks
+// inconclusive and offline; src/response/responder.test.ts proves their outcomes.
+vi.mock("node:dns/promises", () => ({
+  lookup: async () => {
+    throw Object.assign(new Error("No test resolver"), { code: "EAI_AGAIN" });
+  },
+}));
+
 describe("prepared full caller qualification", () => {
   // Proves the complete persona, all three tagged rounds, repair and display re-entry bind every nonblank scalar without real HTTP.
   it("audits complete real caller branches with invented responses", async () => {

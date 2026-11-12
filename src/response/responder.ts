@@ -59,7 +59,7 @@ import {
   WEB_TURN_INSTRUCTIONS,
 } from "../tools/output.js";
 import { runToolTurn } from "../tools/turn.js";
-import { findBrokenReplyLinks } from "./reply-links.js";
+import { findBrokenLinks, findBrokenReplyLinks } from "./reply-links.js";
 
 const FAILURE_MESSAGE =
   "sorry, brain fog. couldn't get my thoughts into a usable shape. try that again?";
@@ -274,6 +274,7 @@ export async function respond(options: RespondOptions): Promise<void> {
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.llmTimeoutMs);
+    const rejectedLinks = new Set<string>();
 
     try {
       const generated = await runToolTurn({
@@ -306,15 +307,53 @@ export async function respond(options: RespondOptions): Promise<void> {
         native: !tagged,
         signal: controller.signal,
         maxDraftRetries: MAX_LINK_REGENERATIONS,
-        // A plausible URL is not a page: confirmed 404s and missing DNS names never reach Discord.
-        reviewDraft: async (content) => {
-          const broken = await findBrokenReplyLinks(content, controller.signal);
-          if (!broken.length) return undefined;
-          log.debug(
-            { brokenLinkCount: broken.length },
-            "withholding reply with broken links",
+        // Check the exact text Discord will show. A plausible URL is not a page:
+        // confirmed 404s and missing DNS names never reach Discord.
+        present: async ({ content, sources, generatedSource }) => {
+          const repaired = await repairMissingSplitHints({
+            llm,
+            content: stripUnicodeEmoji(content.trim()),
+            signal: controller.signal,
+            log,
+            ...(observations ? { observations } : {}),
+            ...(generatedSource ? { source: generatedSource } : {}),
+          });
+          observations?.assertCurrent();
+          const broken = await findBrokenReplyLinks(
+            repaired.content,
+            controller.signal,
           );
-          return `The harness checked links in your unsent draft and found missing destinations: ${JSON.stringify(broken)}. The draft was not sent. Rewrite your reply to the original message: remove the broken links or use a source from the conversation or your tools. Do not guess replacement URLs.`;
+          if (broken.length) {
+            for (const { url } of broken) rejectedLinks.add(url);
+            log.debug(
+              { brokenLinkCount: broken.length },
+              "withholding reply with broken links",
+            );
+            return {
+              feedback: `The harness checked links in your unsent draft and found missing destinations: ${JSON.stringify(broken)}. The draft was not sent. Rewrite your reply to the original message: remove the broken links or use a source from the conversation or your tools. Do not guess replacement URLs.`,
+            };
+          }
+          // Sources the model did not write are appended by the harness; drop dead ones silently.
+          const appended = sources.filter(
+            ({ url }) =>
+              !repaired.content.includes(url) && !rejectedLinks.has(url),
+          );
+          const missing = new Set(
+            (
+              await findBrokenLinks(
+                appended.map(({ url }) => url),
+                controller.signal,
+              )
+            ).map(({ url }) => url),
+          );
+          return {
+            content: withSources(
+              repaired.content,
+              appended.filter(({ url }) => !missing.has(url)),
+            ),
+            sources,
+            generatedSource: repaired.source,
+          };
         },
         ...(observations
           ? { assertCurrent: () => observations.assertCurrent() }
@@ -387,21 +426,11 @@ export async function respond(options: RespondOptions): Promise<void> {
         return;
       }
 
-      const repaired = await repairMissingSplitHints({
-        llm,
-        content: stripUnicodeEmoji(generated.content.trim()),
-        signal: controller.signal,
-        log,
-        ...(observations ? { observations } : {}),
-        ...(generated.generatedSource
-          ? { source: generated.generatedSource }
-          : {}),
-      });
-      observations?.assertCurrent();
-      const content = repaired.content;
-
       if (config.llmTraceLogging) {
-        log.debug({ sanitizedContent: content }, "llm response trace");
+        log.debug(
+          { sanitizedContent: generated.content },
+          "llm response trace",
+        );
       } else {
         log.debug(
           { sourceCount: generated.sources.length },
@@ -409,11 +438,11 @@ export async function respond(options: RespondOptions): Promise<void> {
         );
       }
 
-      const displayedParent = repaired.source;
+      const displayedParent = generated.generatedSource;
       await sendChunks(
         adapter,
         message,
-        withSources(content, generated.sources),
+        generated.content,
         [...transcript.participantUserIds],
         log,
         generated.replyTo,
@@ -544,9 +573,8 @@ function withSources(
   content: string,
   sources: Array<{ title: string; url: string; kind: string }>,
 ) {
-  const missing = sources.filter((source) => !content.includes(source.url));
-  if (!missing.length) return content;
-  const links = missing.map(
+  if (!sources.length) return content;
+  const links = sources.map(
     (source) =>
       `[${source.title.replaceAll(/[\[\]\\\r\n]/g, " ").slice(0, 90)}](${source.url.replaceAll("(", "%28").replaceAll(")", "%29")})${source.kind === "search" ? " (search)" : ""}`,
   );
