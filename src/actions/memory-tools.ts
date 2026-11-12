@@ -35,6 +35,9 @@ export const MemoryForgetArgs = Schema.Struct({
 });
 const digest = (value: unknown) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const MAX_CANDIDATES = 20;
+const CANDIDATE_EXCERPT_CHARS = 120;
+const DISCORD_MESSAGE_CHARS = 2_000;
 const REQUEST_PREFIX =
   /^(?:please\s+)?(?:(?:can|could|would) you\s+)?(remember|forget)\b[\s,:]+([\s\S]+)$/iu;
 
@@ -189,16 +192,31 @@ export function registerMemoryTools(registry: ActionRegistry) {
           input.kind === "evidence"
             ? await context.memory.listEvidence(bank.bank)
             : await context.memory.list(bank.bank);
-        const candidates = page.data
-          .slice(0, 20)
-          .map(({ id, text }) => ({ id, kind: input.kind, text }));
+        if (!page.data.length)
+          return {
+            memory_control: true,
+            status: "clarification_required",
+            candidates: [],
+            content: "no memories were found in that scope. nothing forgotten.",
+          };
+        // The responder sends this as one Discord message; list only the candidates that fit.
+        let content = `which memory should I forget? reply with "forget ${input.kind} #ID".`;
+        const candidates: {
+          id: number;
+          kind: typeof input.kind;
+          text: string;
+        }[] = [];
+        for (const { id, text } of page.data.slice(0, MAX_CANDIDATES)) {
+          const line = `\n${input.kind} #${id}: ${text.slice(0, CANDIDATE_EXCERPT_CHARS)}`;
+          if (content.length + line.length > DISCORD_MESSAGE_CHARS) break;
+          content += line;
+          candidates.push({ id, kind: input.kind, text });
+        }
         return {
           memory_control: true,
           status: "clarification_required",
           candidates,
-          content: candidates.length
-            ? `which memory should I forget? reply with "forget ${input.kind} #ID".\n${candidates.map(({ id, text }) => `${input.kind} #${id}: ${text.slice(0, 120)}`).join("\n")}`
-            : "no memories were found in that scope. nothing forgotten.",
+          content,
         };
       }
       if (input.id === undefined)
@@ -236,28 +254,35 @@ export function registerMemoryTools(registry: ActionRegistry) {
             snapshot.revision,
           );
         }
-        context.toolScope?.signal.throwIfAborted();
-        context.harness?.store.invalidateConversationData();
-        context.harness?.web.invalidate();
-        context.contextStore.resetMemoryContexts(
-          [
-            message.channelId,
-            ...(context.config.discordTrialDmChannelId
-              ? [context.config.discordTrialDmChannelId]
-              : []),
-          ],
-          message.id,
-        );
         const mutation = {
           bank: bank.bank,
           request_id: requestId,
           expected_revision: revision,
           ids: [input.id],
         };
-        const receipt =
-          input.kind === "evidence"
-            ? await context.memory.forgetEvidence(mutation)
-            : await context.memory.forget(mutation);
+        // Like /memory forget: other channels' generations finish first, and none
+        // start until the backend deletion settles, so none can recall this memory.
+        const receipt = await context.queue.add(
+          async () => {
+            context.toolScope?.signal.throwIfAborted();
+            context.harness?.store.invalidateConversationData();
+            context.harness?.web.invalidate();
+            context.contextStore.resetMemoryContexts(
+              [
+                message.channelId,
+                ...(context.config.discordTrialDmChannelId
+                  ? [context.config.discordTrialDmChannelId]
+                  : []),
+              ],
+              message.id,
+            );
+            return input.kind === "evidence"
+              ? await context.memory.forgetEvidence(mutation)
+              : await context.memory.forget(mutation);
+          },
+          { exclusive: true },
+        );
+        if (!receipt) throw new Error("Memory deletion did not run");
         return {
           memory_control: true,
           status: "forgotten",

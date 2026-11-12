@@ -38,6 +38,7 @@ import { runToolTurn } from "../tools/turn.js";
 import { WebClient } from "../tools/web.js";
 import { RemoraMemoryClient } from "./client.js";
 import { MemorySaveReceiptSchema, MemorySaveRequestSchema } from "./save.js";
+import { MemoryToolOutcomeSchema } from "./tool-contract.js";
 
 const CHANNEL = "1000000000000000001";
 const HUMAN = "1000000000000000002";
@@ -311,6 +312,120 @@ it("presents confirmed outcomes only and isolates memory controls from other too
       }),
     }),
   ).rejects.toThrow("privacy fence");
+});
+
+// Proves a long candidate list still reaches Discord as one valid message naming the IDs it offers.
+it("fits forget clarifications within Discord's message limit", async () => {
+  const app = await fixture();
+  app.message.content = "forget my cat's name";
+  vi.spyOn(app.memory, "list").mockResolvedValue({
+    object: "remora.memory.list",
+    version: 1,
+    bank: BANK,
+    revision: "a".repeat(64),
+    data: Array.from({ length: 20 }, (_, index) => ({
+      id: index + 1,
+      text: `Sam's cat is Pepper ${"and very fluffy ".repeat(10)}`,
+      kind: "fact" as const,
+      source: "user" as const,
+      subjects: {},
+    })),
+    next_cursor: null,
+  });
+  const outcome = Schema.decodeUnknownSync(MemoryToolOutcomeSchema)(
+    (await app.dispatch("memory_forget", { scope: "personal", kind: "fact" }))
+      .output,
+  );
+  const candidates = "candidates" in outcome ? (outcome.candidates ?? []) : [];
+  expect(outcome.content.length).toBeLessThanOrEqual(2_000);
+  expect(candidates.length).toBeGreaterThan(0);
+  expect(outcome.content.match(/fact #\d+/g)).toEqual(
+    candidates.map(({ id }) => `fact #${id}`),
+  );
+});
+
+// Proves no other channel generates between a tool forget's fence and Remora's deletion receipt.
+it("holds cross-channel generations until a tool forget settles", async () => {
+  const app = await fixture();
+  const queue = new GenerationQueue(2);
+  app.context.queue = queue;
+  app.message.content = "forget fact #1";
+  const revision = "a".repeat(64);
+  vi.spyOn(app.memory, "listAll").mockResolvedValue({
+    object: "remora.memory.list",
+    version: 1,
+    bank: BANK,
+    revision,
+    data: [
+      {
+        id: 1,
+        text: "Sam's cat is Pepper",
+        kind: "fact",
+        source: "user",
+        subjects: {},
+      },
+    ],
+    next_cursor: null,
+  });
+  const gate = () => {
+    let open!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return { promise, open };
+  };
+  const deletion = gate();
+  const forget = vi
+    .spyOn(app.memory, "forget")
+    .mockImplementation(async (request) => {
+      await deletion.promise;
+      return {
+        object: "remora.memory.mutation",
+        version: 1,
+        bank: BANK,
+        request_id: request.request_id,
+        operation: "forget",
+        replayed: false,
+        deleted_ids: [1],
+        deleted_count: 1,
+        dependent_suppression: { bank: BANK, visible_active_count: 0 },
+        revision,
+        cache_invalidated: true,
+        reset_required: true,
+      };
+    });
+  const tick = () => new Promise((resolve) => setTimeout(resolve));
+  const order: string[] = [];
+  const earlier = gate();
+  const running = queue.add(
+    async () => {
+      order.push("earlier");
+      await earlier.promise;
+    },
+    { bucketKey: "other" },
+  );
+  const forgetting = queue.add(
+    () =>
+      app.dispatch("memory_forget", { scope: "personal", kind: "fact", id: 1 }),
+    { bucketKey: CHANNEL },
+  );
+  await vi.waitFor(() => expect(app.memory.listAll).toHaveBeenCalled());
+  await tick();
+  const epoch = app.store.privacyEpoch();
+  expect(forget).not.toHaveBeenCalled();
+  earlier.open();
+  await running;
+  await vi.waitFor(() => expect(forget).toHaveBeenCalled());
+  expect(app.store.privacyEpoch()).not.toBe(epoch);
+  const later = queue.add(async () => order.push("later"), {
+    bucketKey: "late",
+  });
+  await tick();
+  expect(order).toEqual(["earlier"]);
+  deletion.open();
+  expect((await forgetting)?.output).toMatchObject({ status: "forgotten" });
+  await later;
+  expect(order).toEqual(["earlier", "later"]);
 });
 
 // Proves the real Python HTTP server and TypeScript client agree on source attribution, receipts, erasure and restart retries.
