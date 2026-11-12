@@ -220,6 +220,21 @@ describe("reply link validation", () => {
       expect.any(Function),
     );
   });
+
+  // Proves explicit destinations keep literal characters that bare-URL formatting would strip.
+  it.each([
+    ["**[backup](https://example.com/song~)**", "https://example.com/song~"],
+    ["<https://example.com/search?q=*>", "https://example.com/search?q=*"],
+  ])("checks the explicit destination in %s", async (content, url) => {
+    mockHttp([200]);
+    await runReply([{ content }]);
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith(
+      new URL(url),
+      expect.any(Object),
+      expect.any(Function),
+    );
+  });
 });
 
 function mockHttp(statuses: (number | { status: number; location: string })[]) {

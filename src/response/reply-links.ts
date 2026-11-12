@@ -68,10 +68,22 @@ export async function findBrokenLinks(
 
 /**
  * Return the URL Discord renders: bold, italic, strikethrough and spoiler
- * delimiters close around it rather than extend it. Underscores are common in
- * paths, so only those opened directly before the URL are removed.
+ * delimiters close around a bare URL rather than extend it. Underscores are
+ * common in paths, so only those opened directly before the URL are removed.
+ * Masked-link and `<autolink>` destinations are explicit and keep every character.
  */
 function trimLinkDelimiters(text: string, before: string) {
+  if (before.endsWith("<")) return text;
+  if (before.endsWith("](")) {
+    // The destination ends at the parenthesis closing the masked link.
+    let depth = 0;
+    for (let index = 0; index < text.length; index++) {
+      if (text[index] === "(") depth++;
+      else if (text[index] === ")" && depth-- === 0)
+        return text.slice(0, index);
+    }
+    return text;
+  }
   let underscores = (/[*_~|]*$/.exec(before)?.[0].match(/_/g) ?? []).length;
   let link = text;
   for (;;) {
