@@ -1,0 +1,3625 @@
+{
+  "object": "protocord.memory_tool_contract",
+  "version": 1,
+  "status": "implemented_and_synthetic_http_tested",
+  "deployed": false,
+  "proposed": false,
+  "schema_scope": "Runtime-derived structural JSON Schemas plus the listed permission, Unicode-scalar, source binding, timestamp validity, receipt-ID equality and policy invariants. JSON Schema alone does not grant permission or prove these cross-field invariants.",
+  "provenance": {
+    "patch": {
+      "commit": "71ac2636c99814edd11e608fb88348f14e249f56",
+      "files": {
+        "src/actions/memory-tools.ts": "3ffb9f07aebfe4e0c203b36f6c7f167accff16682781c9995a94b49e5debe96a",
+        "src/actions/tool-calls.ts": "89c2a4cfc163b62b4ac88171dd0ce81af31301eaa0ce65f2e8de7bf9b5f71c31",
+        "src/actions/action-context.ts": "cb868cec5f3f326f0d029d074b3e003f733209d9d678e564a83d3f434f365d53",
+        "src/memory/client.ts": "db24ba79b4004488e510f67fffc4a0ae525517daecc9eeed277f107303c4d9c5",
+        "src/memory/save.ts": "bfaea482854b02b41de71e87db8b13d65bcf8f87568e4130ce1221dd98bda3f9",
+        "src/memory/tool-contract.ts": "df366901149c93170224ab1f65e26c1950e7649753df4c91a922618eb65cbcbd",
+        "src/memory/journal.ts": "c7291848559e34103aaccaa186bba238376bea46ffc34ee75758e32752af8661",
+        "src/tools/turn.ts": "44f71b5af4b8bbbc39b0dc9918074c244857c7389e0283c3b3d205093abd31cf",
+        "src/response/responder.ts": "3040b355ebf610a73a420f870855bc0c455856e9421ec38c75ce22e2a01172fd",
+        "src/memory/tools.integration.test.ts": "2e94523829943ce9c3afa3e3e5d603339186b89970230c6540e97ad1dab26126"
+      }
+    },
+    "remora": {
+      "commit": "8bd14c950115ffcd55022181145702939ec9ccec",
+      "files": {
+        "src/ardm/explicit_save.py": "640ebac630f9f5b55c867754043cd81733644ab82780eeacdd53981c15bdfba1",
+        "src/ardm/evidence_memory.py": "66450a8bf55556d3bd899331404f16fac47c5fc169a0d5cfc482dd290e3d49ec",
+        "src/ardm/evidence_parents.py": "0078007382ad4a96be184aeb913d50c3d43b8a9cec309205b0044cfbcbf13bfc",
+        "src/ardm/api.py": "9fcc121285f15476609b6d524793156f8c9412b2a7e3ea49e99e990f46b3f3cf",
+        "tests/test_explicit_save.py": "8aacaa8ea249eccd734b050148c3eeb455602c6e2e8d3063503a592856979363"
+      }
+    },
+    "fixture_test": "src/memory/tools.integration.test.ts",
+    "verification": "REMORA_TEST_SOURCE=<backend checkout> pnpm exec vitest run src/memory/tools.integration.test.ts",
+    "synthetic_only": true
+  },
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "memory_save",
+        "description": "Save the current human's literal remember request. No paraphrases or other authors. Confirm only the returned receipt.",
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "$defs": {}
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "memory_forget",
+        "description": "Forget an exact authorized ID from a direct forget request. Omit id to list candidates for clarification; ambiguous requests delete nothing.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "string",
+              "enum": ["personal", "channel", "server"]
+            },
+            "kind": {
+              "type": "string",
+              "enum": ["fact", "evidence"]
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "allOf": [
+                    {
+                      "exclusiveMinimum": 0
+                    },
+                    {
+                      "maximum": 9007199254740991
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": ["scope", "kind"],
+          "additionalProperties": false,
+          "$defs": {}
+        }
+      }
+    }
+  ],
+  "parser_schemas": {
+    "memory_save": {
+      "type": "object",
+      "additionalProperties": false,
+      "$defs": {}
+    },
+    "memory_forget": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": ["personal", "channel", "server"]
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["fact", "evidence"]
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "allOf": [
+                {
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": ["scope", "kind"],
+      "additionalProperties": false,
+      "$defs": {}
+    }
+  },
+  "declaration_boundary": "tools contains model-visible declarations from toLlmTools; parser_schemas contains strict registry validators. Generic model projection may change declarations independently of parser authorization.",
+  "schemas": {
+    "backend_save_request": {
+      "type": "object",
+      "properties": {
+        "bank": {
+          "type": "string",
+          "allOf": [
+            {
+              "pattern": "\\S"
+            },
+            {
+              "maxLength": 256
+            }
+          ]
+        },
+        "request_id": {
+          "type": "string",
+          "allOf": [
+            {
+              "pattern": "\\S"
+            },
+            {
+              "maxLength": 256
+            }
+          ]
+        },
+        "source": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "\\S"
+                },
+                {
+                  "maxLength": 256
+                }
+              ]
+            },
+            "revision": {
+              "type": "integer",
+              "allOf": [
+                {
+                  "minimum": 0
+                },
+                {
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "actor_id": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "\\S"
+                },
+                {
+                  "maxLength": 256
+                }
+              ]
+            },
+            "text": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "\\S"
+                }
+              ]
+            },
+            "observed_at": {
+              "type": "string",
+              "allOf": [
+                {
+                  "maxLength": 64
+                },
+                {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?(?:Z|[+-]\\d{2}:\\d{2})$"
+                }
+              ]
+            }
+          },
+          "required": ["id", "revision", "actor_id", "text", "observed_at"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["bank", "request_id", "source"],
+      "additionalProperties": false,
+      "$defs": {}
+    },
+    "backend_save_receipt": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "type": "string",
+          "enum": ["remora.memory.save"]
+        },
+        "version": {
+          "type": "number",
+          "enum": [1]
+        },
+        "bank": {
+          "type": "string",
+          "allOf": [
+            {
+              "pattern": "\\S"
+            },
+            {
+              "maxLength": 256
+            }
+          ]
+        },
+        "request_id": {
+          "type": "string",
+          "allOf": [
+            {
+              "pattern": "\\S"
+            },
+            {
+              "maxLength": 256
+            }
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["evidence"]
+        },
+        "source": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                }
+              ]
+            },
+            "revision": {
+              "type": "integer",
+              "allOf": [
+                {
+                  "minimum": 0
+                },
+                {
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "origin": {
+              "type": "string",
+              "enum": [
+                "human_input",
+                "external_observation",
+                "assistant_reasoning",
+                "assistant_output",
+                "system_input",
+                "unattributed_input"
+              ]
+            },
+            "actor": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "principal": {
+                      "type": "string",
+                      "allOf": [
+                        {
+                          "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                        }
+                      ]
+                    },
+                    "actor": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "bank": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                }
+                              ]
+                            },
+                            "role": {
+                              "type": "string",
+                              "enum": ["human", "assistant"]
+                            },
+                            "id": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["bank", "role", "id"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "entity": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "allOf": [
+                            {
+                              "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "unknown": {
+                      "type": "null"
+                    },
+                    "description": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "principal",
+                    "actor",
+                    "entity",
+                    "unknown",
+                    "description"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "tool": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "allOf": [
+                    {
+                      "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "url": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "allOf": [
+                    {
+                      "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": ["id", "revision", "origin", "actor", "tool", "url"],
+          "additionalProperties": false
+        },
+        "subjects": {
+          "type": "null"
+        },
+        "saved_ids": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "allOf": [
+              {
+                "exclusiveMinimum": 0
+              },
+              {
+                "maximum": 9007199254740991
+              }
+            ]
+          },
+          "allOf": [
+            {
+              "minItems": 1
+            },
+            {
+              "maxItems": 1
+            }
+          ]
+        },
+        "active_ids": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "allOf": [
+              {
+                "exclusiveMinimum": 0
+              },
+              {
+                "maximum": 9007199254740991
+              }
+            ]
+          },
+          "allOf": [
+            {
+              "maxItems": 1
+            }
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["saved", "forgotten"]
+        },
+        "replayed": {
+          "type": "boolean"
+        },
+        "admission_identity": {
+          "type": "string",
+          "enum": [
+            "1dacde7bd5520553dd14ee06fb7a251c7b8e2a08eda85d42fa568b0e65b82097"
+          ]
+        }
+      },
+      "required": [
+        "object",
+        "version",
+        "bank",
+        "request_id",
+        "kind",
+        "source",
+        "subjects",
+        "saved_ids",
+        "active_ids",
+        "status",
+        "replayed",
+        "admission_identity"
+      ],
+      "additionalProperties": false,
+      "$defs": {}
+    },
+    "backend_error": {
+      "type": "object",
+      "properties": {
+        "http_status": {
+          "type": "integer"
+        },
+        "body": {
+          "type": "object",
+          "properties": {
+            "error": {
+              "type": "object",
+              "properties": {
+                "message": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "param": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "code": {
+                  "type": "string"
+                }
+              },
+              "required": ["message", "type", "param", "code"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["error"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["http_status", "body"],
+      "additionalProperties": false,
+      "$defs": {}
+    },
+    "action_output": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "memory_control": {
+              "type": "boolean",
+              "enum": [true]
+            },
+            "content": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": ["saved", "forgotten"]
+            },
+            "receipt": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "enum": ["remora.memory.save"]
+                    },
+                    "version": {
+                      "type": "number",
+                      "enum": [1]
+                    },
+                    "bank": {
+                      "type": "string",
+                      "allOf": [
+                        {
+                          "pattern": "\\S"
+                        },
+                        {
+                          "maxLength": 256
+                        }
+                      ]
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "allOf": [
+                        {
+                          "pattern": "\\S"
+                        },
+                        {
+                          "maxLength": 256
+                        }
+                      ]
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": ["evidence"]
+                    },
+                    "source": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "allOf": [
+                            {
+                              "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                            }
+                          ]
+                        },
+                        "revision": {
+                          "type": "integer",
+                          "allOf": [
+                            {
+                              "minimum": 0
+                            },
+                            {
+                              "maximum": 9007199254740991
+                            }
+                          ]
+                        },
+                        "origin": {
+                          "type": "string",
+                          "enum": [
+                            "human_input",
+                            "external_observation",
+                            "assistant_reasoning",
+                            "assistant_output",
+                            "system_input",
+                            "unattributed_input"
+                          ]
+                        },
+                        "actor": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "principal": {
+                                  "type": "string",
+                                  "allOf": [
+                                    {
+                                      "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                    }
+                                  ]
+                                },
+                                "actor": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "bank": {
+                                          "type": "string",
+                                          "allOf": [
+                                            {
+                                              "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                            }
+                                          ]
+                                        },
+                                        "role": {
+                                          "type": "string",
+                                          "enum": ["human", "assistant"]
+                                        },
+                                        "id": {
+                                          "type": "string",
+                                          "allOf": [
+                                            {
+                                              "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": ["bank", "role", "id"],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "entity": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "allOf": [
+                                        {
+                                          "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "unknown": {
+                                  "type": "null"
+                                },
+                                "description": {
+                                  "type": "null"
+                                }
+                              },
+                              "required": [
+                                "principal",
+                                "actor",
+                                "entity",
+                                "unknown",
+                                "description"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "tool": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "url": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "revision",
+                        "origin",
+                        "actor",
+                        "tool",
+                        "url"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "subjects": {
+                      "type": "null"
+                    },
+                    "saved_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "allOf": [
+                          {
+                            "exclusiveMinimum": 0
+                          },
+                          {
+                            "maximum": 9007199254740991
+                          }
+                        ]
+                      },
+                      "allOf": [
+                        {
+                          "minItems": 1
+                        },
+                        {
+                          "maxItems": 1
+                        }
+                      ]
+                    },
+                    "active_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "allOf": [
+                          {
+                            "exclusiveMinimum": 0
+                          },
+                          {
+                            "maximum": 9007199254740991
+                          }
+                        ]
+                      },
+                      "allOf": [
+                        {
+                          "maxItems": 1
+                        }
+                      ]
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": ["saved", "forgotten"]
+                    },
+                    "replayed": {
+                      "type": "boolean"
+                    },
+                    "admission_identity": {
+                      "type": "string",
+                      "enum": [
+                        "1dacde7bd5520553dd14ee06fb7a251c7b8e2a08eda85d42fa568b0e65b82097"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "object",
+                    "version",
+                    "bank",
+                    "request_id",
+                    "kind",
+                    "source",
+                    "subjects",
+                    "saved_ids",
+                    "active_ids",
+                    "status",
+                    "replayed",
+                    "admission_identity"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "enum": ["remora.memory.mutation"]
+                    },
+                    "version": {
+                      "type": "number",
+                      "enum": [1]
+                    },
+                    "bank": {
+                      "type": "string",
+                      "allOf": [
+                        {
+                          "pattern": "\\S"
+                        }
+                      ]
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "allOf": [
+                        {
+                          "pattern": "\\S"
+                        }
+                      ]
+                    },
+                    "operation": {
+                      "type": "string",
+                      "enum": ["forget", "clear"]
+                    },
+                    "replayed": {
+                      "type": "boolean"
+                    },
+                    "deleted_ids": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "integer",
+                            "allOf": [
+                              {
+                                "minimum": 0
+                              },
+                              {
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "exclusiveMinimum": 0
+                              }
+                            ]
+                          },
+                          "allOf": [
+                            {
+                              "minItems": 1
+                            },
+                            {
+                              "maxItems": 100
+                            },
+                            {
+                              "uniqueItems": true
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "deleted_count": {
+                      "type": "integer",
+                      "allOf": [
+                        {
+                          "minimum": 0
+                        },
+                        {
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    },
+                    "dependent_suppression": {
+                      "type": "object",
+                      "properties": {
+                        "bank": {
+                          "type": "string",
+                          "allOf": [
+                            {
+                              "pattern": "\\S"
+                            }
+                          ]
+                        },
+                        "visible_active_count": {
+                          "type": "integer",
+                          "allOf": [
+                            {
+                              "minimum": 0
+                            },
+                            {
+                              "maximum": 9007199254740991
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["bank", "visible_active_count"],
+                      "additionalProperties": false
+                    },
+                    "revision": {
+                      "type": "string",
+                      "allOf": [
+                        {
+                          "pattern": "^[0-9a-f]{64}$"
+                        }
+                      ]
+                    },
+                    "cache_invalidated": {
+                      "type": "boolean",
+                      "enum": [true]
+                    },
+                    "reset_required": {
+                      "type": "boolean",
+                      "enum": [true]
+                    }
+                  },
+                  "required": [
+                    "object",
+                    "version",
+                    "bank",
+                    "request_id",
+                    "operation",
+                    "replayed",
+                    "deleted_ids",
+                    "deleted_count",
+                    "dependent_suppression",
+                    "revision",
+                    "cache_invalidated",
+                    "reset_required"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "enum": ["remora.evidence.mutation"]
+                    },
+                    "version": {
+                      "type": "number",
+                      "enum": [1]
+                    },
+                    "bank": {
+                      "type": "string",
+                      "allOf": [
+                        {
+                          "pattern": "\\S"
+                        }
+                      ]
+                    },
+                    "operation": {
+                      "type": "string",
+                      "enum": ["forget", "forget_source"]
+                    },
+                    "request_id": {
+                      "type": "string",
+                      "allOf": [
+                        {
+                          "pattern": "\\S"
+                        }
+                      ]
+                    },
+                    "deleted_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "allOf": [
+                          {
+                            "minimum": 0
+                          },
+                          {
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "exclusiveMinimum": 0
+                          }
+                        ]
+                      },
+                      "allOf": [
+                        {
+                          "minItems": 1
+                        },
+                        {
+                          "maxItems": 4096
+                        },
+                        {
+                          "uniqueItems": true
+                        }
+                      ]
+                    },
+                    "deleted_count": {
+                      "type": "integer",
+                      "allOf": [
+                        {
+                          "minimum": 0
+                        },
+                        {
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "exclusiveMinimum": 0
+                        },
+                        {
+                          "maximum": 4096
+                        }
+                      ]
+                    },
+                    "dependent_suppression": {
+                      "type": "object",
+                      "properties": {
+                        "bank": {
+                          "type": "string",
+                          "allOf": [
+                            {
+                              "pattern": "\\S"
+                            }
+                          ]
+                        },
+                        "visible_active_count": {
+                          "type": "integer",
+                          "allOf": [
+                            {
+                              "minimum": 0
+                            },
+                            {
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "maximum": 4096
+                            }
+                          ]
+                        },
+                        "ids": {
+                          "anyOf": [
+                            {
+                              "type": "array",
+                              "items": {
+                                "type": "integer",
+                                "allOf": [
+                                  {
+                                    "minimum": 0
+                                  },
+                                  {
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "exclusiveMinimum": 0
+                                  }
+                                ]
+                              },
+                              "allOf": [
+                                {
+                                  "maxItems": 4096
+                                },
+                                {
+                                  "uniqueItems": true
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["bank", "visible_active_count"],
+                      "additionalProperties": false
+                    },
+                    "revision": {
+                      "type": "string",
+                      "allOf": [
+                        {
+                          "pattern": "^[0-9a-f]{64}$"
+                        }
+                      ]
+                    },
+                    "replayed": {
+                      "type": "boolean"
+                    },
+                    "cache_invalidated": {
+                      "type": "boolean",
+                      "enum": [true]
+                    },
+                    "reset_required": {
+                      "type": "boolean",
+                      "enum": [true]
+                    }
+                  },
+                  "required": [
+                    "object",
+                    "version",
+                    "bank",
+                    "operation",
+                    "request_id",
+                    "deleted_ids",
+                    "deleted_count",
+                    "dependent_suppression",
+                    "revision",
+                    "replayed",
+                    "cache_invalidated",
+                    "reset_required"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": ["memory_control", "content", "status", "receipt"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "memory_control": {
+              "type": "boolean",
+              "enum": [true]
+            },
+            "content": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": ["clarification_required"]
+            },
+            "candidates": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "integer"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": ["fact", "evidence"]
+                      },
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["id", "kind", "text"],
+                    "additionalProperties": false
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": ["memory_control", "content", "status"],
+          "additionalProperties": false
+        }
+      ],
+      "$defs": {}
+    },
+    "dispatcher": {
+      "type": "object",
+      "properties": {
+        "output": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "memory_control": {
+                  "type": "boolean",
+                  "enum": [true]
+                },
+                "content": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": ["saved", "forgotten"]
+                },
+                "receipt": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "object": {
+                          "type": "string",
+                          "enum": ["remora.memory.save"]
+                        },
+                        "version": {
+                          "type": "number",
+                          "enum": [1]
+                        },
+                        "bank": {
+                          "type": "string",
+                          "allOf": [
+                            {
+                              "pattern": "\\S"
+                            },
+                            {
+                              "maxLength": 256
+                            }
+                          ]
+                        },
+                        "request_id": {
+                          "type": "string",
+                          "allOf": [
+                            {
+                              "pattern": "\\S"
+                            },
+                            {
+                              "maxLength": 256
+                            }
+                          ]
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": ["evidence"]
+                        },
+                        "source": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                }
+                              ]
+                            },
+                            "revision": {
+                              "type": "integer",
+                              "allOf": [
+                                {
+                                  "minimum": 0
+                                },
+                                {
+                                  "maximum": 9007199254740991
+                                }
+                              ]
+                            },
+                            "origin": {
+                              "type": "string",
+                              "enum": [
+                                "human_input",
+                                "external_observation",
+                                "assistant_reasoning",
+                                "assistant_output",
+                                "system_input",
+                                "unattributed_input"
+                              ]
+                            },
+                            "actor": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "principal": {
+                                      "type": "string",
+                                      "allOf": [
+                                        {
+                                          "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                        }
+                                      ]
+                                    },
+                                    "actor": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "bank": {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                                }
+                                              ]
+                                            },
+                                            "role": {
+                                              "type": "string",
+                                              "enum": ["human", "assistant"]
+                                            },
+                                            "id": {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "required": ["bank", "role", "id"],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "entity": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "allOf": [
+                                            {
+                                              "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "unknown": {
+                                      "type": "null"
+                                    },
+                                    "description": {
+                                      "type": "null"
+                                    }
+                                  },
+                                  "required": [
+                                    "principal",
+                                    "actor",
+                                    "entity",
+                                    "unknown",
+                                    "description"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "tool": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "allOf": [
+                                    {
+                                      "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "url": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "allOf": [
+                                    {
+                                      "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "revision",
+                            "origin",
+                            "actor",
+                            "tool",
+                            "url"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "subjects": {
+                          "type": "null"
+                        },
+                        "saved_ids": {
+                          "type": "array",
+                          "items": {
+                            "type": "integer",
+                            "allOf": [
+                              {
+                                "exclusiveMinimum": 0
+                              },
+                              {
+                                "maximum": 9007199254740991
+                              }
+                            ]
+                          },
+                          "allOf": [
+                            {
+                              "minItems": 1
+                            },
+                            {
+                              "maxItems": 1
+                            }
+                          ]
+                        },
+                        "active_ids": {
+                          "type": "array",
+                          "items": {
+                            "type": "integer",
+                            "allOf": [
+                              {
+                                "exclusiveMinimum": 0
+                              },
+                              {
+                                "maximum": 9007199254740991
+                              }
+                            ]
+                          },
+                          "allOf": [
+                            {
+                              "maxItems": 1
+                            }
+                          ]
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": ["saved", "forgotten"]
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "admission_identity": {
+                          "type": "string",
+                          "enum": [
+                            "1dacde7bd5520553dd14ee06fb7a251c7b8e2a08eda85d42fa568b0e65b82097"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "object",
+                        "version",
+                        "bank",
+                        "request_id",
+                        "kind",
+                        "source",
+                        "subjects",
+                        "saved_ids",
+                        "active_ids",
+                        "status",
+                        "replayed",
+                        "admission_identity"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "object": {
+                          "type": "string",
+                          "enum": ["remora.memory.mutation"]
+                        },
+                        "version": {
+                          "type": "number",
+                          "enum": [1]
+                        },
+                        "bank": {
+                          "type": "string",
+                          "allOf": [
+                            {
+                              "pattern": "\\S"
+                            }
+                          ]
+                        },
+                        "request_id": {
+                          "type": "string",
+                          "allOf": [
+                            {
+                              "pattern": "\\S"
+                            }
+                          ]
+                        },
+                        "operation": {
+                          "type": "string",
+                          "enum": ["forget", "clear"]
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "deleted_ids": {
+                          "anyOf": [
+                            {
+                              "type": "array",
+                              "items": {
+                                "type": "integer",
+                                "allOf": [
+                                  {
+                                    "minimum": 0
+                                  },
+                                  {
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "exclusiveMinimum": 0
+                                  }
+                                ]
+                              },
+                              "allOf": [
+                                {
+                                  "minItems": 1
+                                },
+                                {
+                                  "maxItems": 100
+                                },
+                                {
+                                  "uniqueItems": true
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "deleted_count": {
+                          "type": "integer",
+                          "allOf": [
+                            {
+                              "minimum": 0
+                            },
+                            {
+                              "maximum": 9007199254740991
+                            }
+                          ]
+                        },
+                        "dependent_suppression": {
+                          "type": "object",
+                          "properties": {
+                            "bank": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "\\S"
+                                }
+                              ]
+                            },
+                            "visible_active_count": {
+                              "type": "integer",
+                              "allOf": [
+                                {
+                                  "minimum": 0
+                                },
+                                {
+                                  "maximum": 9007199254740991
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["bank", "visible_active_count"],
+                          "additionalProperties": false
+                        },
+                        "revision": {
+                          "type": "string",
+                          "allOf": [
+                            {
+                              "pattern": "^[0-9a-f]{64}$"
+                            }
+                          ]
+                        },
+                        "cache_invalidated": {
+                          "type": "boolean",
+                          "enum": [true]
+                        },
+                        "reset_required": {
+                          "type": "boolean",
+                          "enum": [true]
+                        }
+                      },
+                      "required": [
+                        "object",
+                        "version",
+                        "bank",
+                        "request_id",
+                        "operation",
+                        "replayed",
+                        "deleted_ids",
+                        "deleted_count",
+                        "dependent_suppression",
+                        "revision",
+                        "cache_invalidated",
+                        "reset_required"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "object": {
+                          "type": "string",
+                          "enum": ["remora.evidence.mutation"]
+                        },
+                        "version": {
+                          "type": "number",
+                          "enum": [1]
+                        },
+                        "bank": {
+                          "type": "string",
+                          "allOf": [
+                            {
+                              "pattern": "\\S"
+                            }
+                          ]
+                        },
+                        "operation": {
+                          "type": "string",
+                          "enum": ["forget", "forget_source"]
+                        },
+                        "request_id": {
+                          "type": "string",
+                          "allOf": [
+                            {
+                              "pattern": "\\S"
+                            }
+                          ]
+                        },
+                        "deleted_ids": {
+                          "type": "array",
+                          "items": {
+                            "type": "integer",
+                            "allOf": [
+                              {
+                                "minimum": 0
+                              },
+                              {
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "exclusiveMinimum": 0
+                              }
+                            ]
+                          },
+                          "allOf": [
+                            {
+                              "minItems": 1
+                            },
+                            {
+                              "maxItems": 4096
+                            },
+                            {
+                              "uniqueItems": true
+                            }
+                          ]
+                        },
+                        "deleted_count": {
+                          "type": "integer",
+                          "allOf": [
+                            {
+                              "minimum": 0
+                            },
+                            {
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "exclusiveMinimum": 0
+                            },
+                            {
+                              "maximum": 4096
+                            }
+                          ]
+                        },
+                        "dependent_suppression": {
+                          "type": "object",
+                          "properties": {
+                            "bank": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "\\S"
+                                }
+                              ]
+                            },
+                            "visible_active_count": {
+                              "type": "integer",
+                              "allOf": [
+                                {
+                                  "minimum": 0
+                                },
+                                {
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "maximum": 4096
+                                }
+                              ]
+                            },
+                            "ids": {
+                              "anyOf": [
+                                {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "integer",
+                                    "allOf": [
+                                      {
+                                        "minimum": 0
+                                      },
+                                      {
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "exclusiveMinimum": 0
+                                      }
+                                    ]
+                                  },
+                                  "allOf": [
+                                    {
+                                      "maxItems": 4096
+                                    },
+                                    {
+                                      "uniqueItems": true
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["bank", "visible_active_count"],
+                          "additionalProperties": false
+                        },
+                        "revision": {
+                          "type": "string",
+                          "allOf": [
+                            {
+                              "pattern": "^[0-9a-f]{64}$"
+                            }
+                          ]
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        },
+                        "cache_invalidated": {
+                          "type": "boolean",
+                          "enum": [true]
+                        },
+                        "reset_required": {
+                          "type": "boolean",
+                          "enum": [true]
+                        }
+                      },
+                      "required": [
+                        "object",
+                        "version",
+                        "bank",
+                        "operation",
+                        "request_id",
+                        "deleted_ids",
+                        "deleted_count",
+                        "dependent_suppression",
+                        "revision",
+                        "replayed",
+                        "cache_invalidated",
+                        "reset_required"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": ["memory_control", "content", "status", "receipt"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "memory_control": {
+                  "type": "boolean",
+                  "enum": [true]
+                },
+                "content": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": ["clarification_required"]
+                },
+                "candidates": {
+                  "anyOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": ["fact", "evidence"]
+                          },
+                          "text": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["id", "kind", "text"],
+                        "additionalProperties": false
+                      }
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": ["memory_control", "content", "status"],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "continueAfter": {
+          "type": "boolean",
+          "enum": [false]
+        }
+      },
+      "required": ["output", "continueAfter"],
+      "additionalProperties": false,
+      "$defs": {}
+    },
+    "tool_result": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "enum": ["memory_save", "memory_forget"]
+            },
+            "output": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "memory_control": {
+                      "type": "boolean",
+                      "enum": [true]
+                    },
+                    "content": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": ["saved", "forgotten"]
+                    },
+                    "receipt": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "object": {
+                              "type": "string",
+                              "enum": ["remora.memory.save"]
+                            },
+                            "version": {
+                              "type": "number",
+                              "enum": [1]
+                            },
+                            "bank": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "\\S"
+                                },
+                                {
+                                  "maxLength": 256
+                                }
+                              ]
+                            },
+                            "request_id": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "\\S"
+                                },
+                                {
+                                  "maxLength": 256
+                                }
+                              ]
+                            },
+                            "kind": {
+                              "type": "string",
+                              "enum": ["evidence"]
+                            },
+                            "source": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "allOf": [
+                                    {
+                                      "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                    }
+                                  ]
+                                },
+                                "revision": {
+                                  "type": "integer",
+                                  "allOf": [
+                                    {
+                                      "minimum": 0
+                                    },
+                                    {
+                                      "maximum": 9007199254740991
+                                    }
+                                  ]
+                                },
+                                "origin": {
+                                  "type": "string",
+                                  "enum": [
+                                    "human_input",
+                                    "external_observation",
+                                    "assistant_reasoning",
+                                    "assistant_output",
+                                    "system_input",
+                                    "unattributed_input"
+                                  ]
+                                },
+                                "actor": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "principal": {
+                                          "type": "string",
+                                          "allOf": [
+                                            {
+                                              "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                            }
+                                          ]
+                                        },
+                                        "actor": {
+                                          "anyOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "bank": {
+                                                  "type": "string",
+                                                  "allOf": [
+                                                    {
+                                                      "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                                    }
+                                                  ]
+                                                },
+                                                "role": {
+                                                  "type": "string",
+                                                  "enum": ["human", "assistant"]
+                                                },
+                                                "id": {
+                                                  "type": "string",
+                                                  "allOf": [
+                                                    {
+                                                      "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "required": [
+                                                "bank",
+                                                "role",
+                                                "id"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "entity": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "unknown": {
+                                          "type": "null"
+                                        },
+                                        "description": {
+                                          "type": "null"
+                                        }
+                                      },
+                                      "required": [
+                                        "principal",
+                                        "actor",
+                                        "entity",
+                                        "unknown",
+                                        "description"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "tool": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "allOf": [
+                                        {
+                                          "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "url": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "allOf": [
+                                        {
+                                          "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "revision",
+                                "origin",
+                                "actor",
+                                "tool",
+                                "url"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "subjects": {
+                              "type": "null"
+                            },
+                            "saved_ids": {
+                              "type": "array",
+                              "items": {
+                                "type": "integer",
+                                "allOf": [
+                                  {
+                                    "exclusiveMinimum": 0
+                                  },
+                                  {
+                                    "maximum": 9007199254740991
+                                  }
+                                ]
+                              },
+                              "allOf": [
+                                {
+                                  "minItems": 1
+                                },
+                                {
+                                  "maxItems": 1
+                                }
+                              ]
+                            },
+                            "active_ids": {
+                              "type": "array",
+                              "items": {
+                                "type": "integer",
+                                "allOf": [
+                                  {
+                                    "exclusiveMinimum": 0
+                                  },
+                                  {
+                                    "maximum": 9007199254740991
+                                  }
+                                ]
+                              },
+                              "allOf": [
+                                {
+                                  "maxItems": 1
+                                }
+                              ]
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": ["saved", "forgotten"]
+                            },
+                            "replayed": {
+                              "type": "boolean"
+                            },
+                            "admission_identity": {
+                              "type": "string",
+                              "enum": [
+                                "1dacde7bd5520553dd14ee06fb7a251c7b8e2a08eda85d42fa568b0e65b82097"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "object",
+                            "version",
+                            "bank",
+                            "request_id",
+                            "kind",
+                            "source",
+                            "subjects",
+                            "saved_ids",
+                            "active_ids",
+                            "status",
+                            "replayed",
+                            "admission_identity"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "object": {
+                              "type": "string",
+                              "enum": ["remora.memory.mutation"]
+                            },
+                            "version": {
+                              "type": "number",
+                              "enum": [1]
+                            },
+                            "bank": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "\\S"
+                                }
+                              ]
+                            },
+                            "request_id": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "\\S"
+                                }
+                              ]
+                            },
+                            "operation": {
+                              "type": "string",
+                              "enum": ["forget", "clear"]
+                            },
+                            "replayed": {
+                              "type": "boolean"
+                            },
+                            "deleted_ids": {
+                              "anyOf": [
+                                {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "integer",
+                                    "allOf": [
+                                      {
+                                        "minimum": 0
+                                      },
+                                      {
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "exclusiveMinimum": 0
+                                      }
+                                    ]
+                                  },
+                                  "allOf": [
+                                    {
+                                      "minItems": 1
+                                    },
+                                    {
+                                      "maxItems": 100
+                                    },
+                                    {
+                                      "uniqueItems": true
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "deleted_count": {
+                              "type": "integer",
+                              "allOf": [
+                                {
+                                  "minimum": 0
+                                },
+                                {
+                                  "maximum": 9007199254740991
+                                }
+                              ]
+                            },
+                            "dependent_suppression": {
+                              "type": "object",
+                              "properties": {
+                                "bank": {
+                                  "type": "string",
+                                  "allOf": [
+                                    {
+                                      "pattern": "\\S"
+                                    }
+                                  ]
+                                },
+                                "visible_active_count": {
+                                  "type": "integer",
+                                  "allOf": [
+                                    {
+                                      "minimum": 0
+                                    },
+                                    {
+                                      "maximum": 9007199254740991
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": ["bank", "visible_active_count"],
+                              "additionalProperties": false
+                            },
+                            "revision": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "^[0-9a-f]{64}$"
+                                }
+                              ]
+                            },
+                            "cache_invalidated": {
+                              "type": "boolean",
+                              "enum": [true]
+                            },
+                            "reset_required": {
+                              "type": "boolean",
+                              "enum": [true]
+                            }
+                          },
+                          "required": [
+                            "object",
+                            "version",
+                            "bank",
+                            "request_id",
+                            "operation",
+                            "replayed",
+                            "deleted_ids",
+                            "deleted_count",
+                            "dependent_suppression",
+                            "revision",
+                            "cache_invalidated",
+                            "reset_required"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "object": {
+                              "type": "string",
+                              "enum": ["remora.evidence.mutation"]
+                            },
+                            "version": {
+                              "type": "number",
+                              "enum": [1]
+                            },
+                            "bank": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "\\S"
+                                }
+                              ]
+                            },
+                            "operation": {
+                              "type": "string",
+                              "enum": ["forget", "forget_source"]
+                            },
+                            "request_id": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "\\S"
+                                }
+                              ]
+                            },
+                            "deleted_ids": {
+                              "type": "array",
+                              "items": {
+                                "type": "integer",
+                                "allOf": [
+                                  {
+                                    "minimum": 0
+                                  },
+                                  {
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "exclusiveMinimum": 0
+                                  }
+                                ]
+                              },
+                              "allOf": [
+                                {
+                                  "minItems": 1
+                                },
+                                {
+                                  "maxItems": 4096
+                                },
+                                {
+                                  "uniqueItems": true
+                                }
+                              ]
+                            },
+                            "deleted_count": {
+                              "type": "integer",
+                              "allOf": [
+                                {
+                                  "minimum": 0
+                                },
+                                {
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "exclusiveMinimum": 0
+                                },
+                                {
+                                  "maximum": 4096
+                                }
+                              ]
+                            },
+                            "dependent_suppression": {
+                              "type": "object",
+                              "properties": {
+                                "bank": {
+                                  "type": "string",
+                                  "allOf": [
+                                    {
+                                      "pattern": "\\S"
+                                    }
+                                  ]
+                                },
+                                "visible_active_count": {
+                                  "type": "integer",
+                                  "allOf": [
+                                    {
+                                      "minimum": 0
+                                    },
+                                    {
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "maximum": 4096
+                                    }
+                                  ]
+                                },
+                                "ids": {
+                                  "anyOf": [
+                                    {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "integer",
+                                        "allOf": [
+                                          {
+                                            "minimum": 0
+                                          },
+                                          {
+                                            "maximum": 9007199254740991
+                                          },
+                                          {
+                                            "exclusiveMinimum": 0
+                                          }
+                                        ]
+                                      },
+                                      "allOf": [
+                                        {
+                                          "maxItems": 4096
+                                        },
+                                        {
+                                          "uniqueItems": true
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": ["bank", "visible_active_count"],
+                              "additionalProperties": false
+                            },
+                            "revision": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "^[0-9a-f]{64}$"
+                                }
+                              ]
+                            },
+                            "replayed": {
+                              "type": "boolean"
+                            },
+                            "cache_invalidated": {
+                              "type": "boolean",
+                              "enum": [true]
+                            },
+                            "reset_required": {
+                              "type": "boolean",
+                              "enum": [true]
+                            }
+                          },
+                          "required": [
+                            "object",
+                            "version",
+                            "bank",
+                            "operation",
+                            "request_id",
+                            "deleted_ids",
+                            "deleted_count",
+                            "dependent_suppression",
+                            "revision",
+                            "replayed",
+                            "cache_invalidated",
+                            "reset_required"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "memory_control",
+                    "content",
+                    "status",
+                    "receipt"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "memory_control": {
+                      "type": "boolean",
+                      "enum": [true]
+                    },
+                    "content": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": ["clarification_required"]
+                    },
+                    "candidates": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": ["fact", "evidence"]
+                              },
+                              "text": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["id", "kind", "text"],
+                            "additionalProperties": false
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["memory_control", "content", "status"],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "completed": {
+              "type": "boolean",
+              "enum": [true]
+            }
+          },
+          "required": ["name", "output", "completed"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "enum": ["memory_save", "memory_forget"]
+            },
+            "output": {
+              "type": "object",
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              },
+              "required": ["error"],
+              "additionalProperties": false
+            },
+            "completed": {
+              "type": "boolean",
+              "enum": [false]
+            },
+            "error": {
+              "type": "string"
+            }
+          },
+          "required": ["name", "output", "completed", "error"],
+          "additionalProperties": false
+        }
+      ],
+      "$defs": {}
+    },
+    "terminal_turn": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "not": {}
+          }
+        },
+        "memoryControl": {
+          "type": "boolean",
+          "enum": [true]
+        },
+        "memoryToolResult": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "enum": ["memory_save", "memory_forget"]
+                },
+                "output": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "memory_control": {
+                          "type": "boolean",
+                          "enum": [true]
+                        },
+                        "content": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": ["saved", "forgotten"]
+                        },
+                        "receipt": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "object": {
+                                  "type": "string",
+                                  "enum": ["remora.memory.save"]
+                                },
+                                "version": {
+                                  "type": "number",
+                                  "enum": [1]
+                                },
+                                "bank": {
+                                  "type": "string",
+                                  "allOf": [
+                                    {
+                                      "pattern": "\\S"
+                                    },
+                                    {
+                                      "maxLength": 256
+                                    }
+                                  ]
+                                },
+                                "request_id": {
+                                  "type": "string",
+                                  "allOf": [
+                                    {
+                                      "pattern": "\\S"
+                                    },
+                                    {
+                                      "maxLength": 256
+                                    }
+                                  ]
+                                },
+                                "kind": {
+                                  "type": "string",
+                                  "enum": ["evidence"]
+                                },
+                                "source": {
+                                  "type": "object",
+                                  "properties": {
+                                    "id": {
+                                      "type": "string",
+                                      "allOf": [
+                                        {
+                                          "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                        }
+                                      ]
+                                    },
+                                    "revision": {
+                                      "type": "integer",
+                                      "allOf": [
+                                        {
+                                          "minimum": 0
+                                        },
+                                        {
+                                          "maximum": 9007199254740991
+                                        }
+                                      ]
+                                    },
+                                    "origin": {
+                                      "type": "string",
+                                      "enum": [
+                                        "human_input",
+                                        "external_observation",
+                                        "assistant_reasoning",
+                                        "assistant_output",
+                                        "system_input",
+                                        "unattributed_input"
+                                      ]
+                                    },
+                                    "actor": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "principal": {
+                                              "type": "string",
+                                              "allOf": [
+                                                {
+                                                  "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                                }
+                                              ]
+                                            },
+                                            "actor": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "bank": {
+                                                      "type": "string",
+                                                      "allOf": [
+                                                        {
+                                                          "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "role": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "human",
+                                                        "assistant"
+                                                      ]
+                                                    },
+                                                    "id": {
+                                                      "type": "string",
+                                                      "allOf": [
+                                                        {
+                                                          "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                                        }
+                                                      ]
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "bank",
+                                                    "role",
+                                                    "id"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "entity": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string",
+                                                  "allOf": [
+                                                    {
+                                                      "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                                    }
+                                                  ]
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "unknown": {
+                                              "type": "null"
+                                            },
+                                            "description": {
+                                              "type": "null"
+                                            }
+                                          },
+                                          "required": [
+                                            "principal",
+                                            "actor",
+                                            "entity",
+                                            "unknown",
+                                            "description"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "tool": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "allOf": [
+                                            {
+                                              "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "url": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "allOf": [
+                                            {
+                                              "pattern": "[^\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "revision",
+                                    "origin",
+                                    "actor",
+                                    "tool",
+                                    "url"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "subjects": {
+                                  "type": "null"
+                                },
+                                "saved_ids": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "integer",
+                                    "allOf": [
+                                      {
+                                        "exclusiveMinimum": 0
+                                      },
+                                      {
+                                        "maximum": 9007199254740991
+                                      }
+                                    ]
+                                  },
+                                  "allOf": [
+                                    {
+                                      "minItems": 1
+                                    },
+                                    {
+                                      "maxItems": 1
+                                    }
+                                  ]
+                                },
+                                "active_ids": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "integer",
+                                    "allOf": [
+                                      {
+                                        "exclusiveMinimum": 0
+                                      },
+                                      {
+                                        "maximum": 9007199254740991
+                                      }
+                                    ]
+                                  },
+                                  "allOf": [
+                                    {
+                                      "maxItems": 1
+                                    }
+                                  ]
+                                },
+                                "status": {
+                                  "type": "string",
+                                  "enum": ["saved", "forgotten"]
+                                },
+                                "replayed": {
+                                  "type": "boolean"
+                                },
+                                "admission_identity": {
+                                  "type": "string",
+                                  "enum": [
+                                    "1dacde7bd5520553dd14ee06fb7a251c7b8e2a08eda85d42fa568b0e65b82097"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "object",
+                                "version",
+                                "bank",
+                                "request_id",
+                                "kind",
+                                "source",
+                                "subjects",
+                                "saved_ids",
+                                "active_ids",
+                                "status",
+                                "replayed",
+                                "admission_identity"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "object": {
+                                  "type": "string",
+                                  "enum": ["remora.memory.mutation"]
+                                },
+                                "version": {
+                                  "type": "number",
+                                  "enum": [1]
+                                },
+                                "bank": {
+                                  "type": "string",
+                                  "allOf": [
+                                    {
+                                      "pattern": "\\S"
+                                    }
+                                  ]
+                                },
+                                "request_id": {
+                                  "type": "string",
+                                  "allOf": [
+                                    {
+                                      "pattern": "\\S"
+                                    }
+                                  ]
+                                },
+                                "operation": {
+                                  "type": "string",
+                                  "enum": ["forget", "clear"]
+                                },
+                                "replayed": {
+                                  "type": "boolean"
+                                },
+                                "deleted_ids": {
+                                  "anyOf": [
+                                    {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "integer",
+                                        "allOf": [
+                                          {
+                                            "minimum": 0
+                                          },
+                                          {
+                                            "maximum": 9007199254740991
+                                          },
+                                          {
+                                            "exclusiveMinimum": 0
+                                          }
+                                        ]
+                                      },
+                                      "allOf": [
+                                        {
+                                          "minItems": 1
+                                        },
+                                        {
+                                          "maxItems": 100
+                                        },
+                                        {
+                                          "uniqueItems": true
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "deleted_count": {
+                                  "type": "integer",
+                                  "allOf": [
+                                    {
+                                      "minimum": 0
+                                    },
+                                    {
+                                      "maximum": 9007199254740991
+                                    }
+                                  ]
+                                },
+                                "dependent_suppression": {
+                                  "type": "object",
+                                  "properties": {
+                                    "bank": {
+                                      "type": "string",
+                                      "allOf": [
+                                        {
+                                          "pattern": "\\S"
+                                        }
+                                      ]
+                                    },
+                                    "visible_active_count": {
+                                      "type": "integer",
+                                      "allOf": [
+                                        {
+                                          "minimum": 0
+                                        },
+                                        {
+                                          "maximum": 9007199254740991
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": ["bank", "visible_active_count"],
+                                  "additionalProperties": false
+                                },
+                                "revision": {
+                                  "type": "string",
+                                  "allOf": [
+                                    {
+                                      "pattern": "^[0-9a-f]{64}$"
+                                    }
+                                  ]
+                                },
+                                "cache_invalidated": {
+                                  "type": "boolean",
+                                  "enum": [true]
+                                },
+                                "reset_required": {
+                                  "type": "boolean",
+                                  "enum": [true]
+                                }
+                              },
+                              "required": [
+                                "object",
+                                "version",
+                                "bank",
+                                "request_id",
+                                "operation",
+                                "replayed",
+                                "deleted_ids",
+                                "deleted_count",
+                                "dependent_suppression",
+                                "revision",
+                                "cache_invalidated",
+                                "reset_required"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "object": {
+                                  "type": "string",
+                                  "enum": ["remora.evidence.mutation"]
+                                },
+                                "version": {
+                                  "type": "number",
+                                  "enum": [1]
+                                },
+                                "bank": {
+                                  "type": "string",
+                                  "allOf": [
+                                    {
+                                      "pattern": "\\S"
+                                    }
+                                  ]
+                                },
+                                "operation": {
+                                  "type": "string",
+                                  "enum": ["forget", "forget_source"]
+                                },
+                                "request_id": {
+                                  "type": "string",
+                                  "allOf": [
+                                    {
+                                      "pattern": "\\S"
+                                    }
+                                  ]
+                                },
+                                "deleted_ids": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "integer",
+                                    "allOf": [
+                                      {
+                                        "minimum": 0
+                                      },
+                                      {
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "exclusiveMinimum": 0
+                                      }
+                                    ]
+                                  },
+                                  "allOf": [
+                                    {
+                                      "minItems": 1
+                                    },
+                                    {
+                                      "maxItems": 4096
+                                    },
+                                    {
+                                      "uniqueItems": true
+                                    }
+                                  ]
+                                },
+                                "deleted_count": {
+                                  "type": "integer",
+                                  "allOf": [
+                                    {
+                                      "minimum": 0
+                                    },
+                                    {
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "exclusiveMinimum": 0
+                                    },
+                                    {
+                                      "maximum": 4096
+                                    }
+                                  ]
+                                },
+                                "dependent_suppression": {
+                                  "type": "object",
+                                  "properties": {
+                                    "bank": {
+                                      "type": "string",
+                                      "allOf": [
+                                        {
+                                          "pattern": "\\S"
+                                        }
+                                      ]
+                                    },
+                                    "visible_active_count": {
+                                      "type": "integer",
+                                      "allOf": [
+                                        {
+                                          "minimum": 0
+                                        },
+                                        {
+                                          "maximum": 9007199254740991
+                                        },
+                                        {
+                                          "maximum": 4096
+                                        }
+                                      ]
+                                    },
+                                    "ids": {
+                                      "anyOf": [
+                                        {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "integer",
+                                            "allOf": [
+                                              {
+                                                "minimum": 0
+                                              },
+                                              {
+                                                "maximum": 9007199254740991
+                                              },
+                                              {
+                                                "exclusiveMinimum": 0
+                                              }
+                                            ]
+                                          },
+                                          "allOf": [
+                                            {
+                                              "maxItems": 4096
+                                            },
+                                            {
+                                              "uniqueItems": true
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": ["bank", "visible_active_count"],
+                                  "additionalProperties": false
+                                },
+                                "revision": {
+                                  "type": "string",
+                                  "allOf": [
+                                    {
+                                      "pattern": "^[0-9a-f]{64}$"
+                                    }
+                                  ]
+                                },
+                                "replayed": {
+                                  "type": "boolean"
+                                },
+                                "cache_invalidated": {
+                                  "type": "boolean",
+                                  "enum": [true]
+                                },
+                                "reset_required": {
+                                  "type": "boolean",
+                                  "enum": [true]
+                                }
+                              },
+                              "required": [
+                                "object",
+                                "version",
+                                "bank",
+                                "operation",
+                                "request_id",
+                                "deleted_ids",
+                                "deleted_count",
+                                "dependent_suppression",
+                                "revision",
+                                "replayed",
+                                "cache_invalidated",
+                                "reset_required"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "memory_control",
+                        "content",
+                        "status",
+                        "receipt"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "memory_control": {
+                          "type": "boolean",
+                          "enum": [true]
+                        },
+                        "content": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": ["clarification_required"]
+                        },
+                        "candidates": {
+                          "anyOf": [
+                            {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "id": {
+                                    "type": "integer"
+                                  },
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["fact", "evidence"]
+                                  },
+                                  "text": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["id", "kind", "text"],
+                                "additionalProperties": false
+                              }
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["memory_control", "content", "status"],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "completed": {
+                  "type": "boolean",
+                  "enum": [true]
+                }
+              },
+              "required": ["name", "output", "completed"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "enum": ["memory_save", "memory_forget"]
+                },
+                "output": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                },
+                "completed": {
+                  "type": "boolean",
+                  "enum": [false]
+                },
+                "error": {
+                  "type": "string"
+                }
+              },
+              "required": ["name", "output", "completed", "error"],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "memoryEpoch": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "allOf": [
+                {
+                  "minimum": 0
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": ["content", "sources", "memoryControl", "memoryToolResult"],
+      "additionalProperties": false,
+      "$defs": {}
+    }
+  },
+  "gating": {
+    "memory_save": {
+      "capabilities": [
+        "features.explicit_memory_save=true",
+        "features.all_stream_evidence=true",
+        "features.memory_management=true",
+        "limits.max_explicit_memory_chars in 1..4096",
+        "all six valid observation limits and three management limits"
+      ],
+      "caller": [
+        "harness present",
+        "selected read banks",
+        "caller-selected writeBank equals buildRemoraRequest destination",
+        "raw non-bot, non-webhook human in approved Discord scope",
+        "direct current remember request with literal content"
+      ],
+      "backend": [
+        "authenticated bearer principal",
+        "full-bank read grant",
+        "existing bank write grant",
+        "unchanged policy at commit"
+      ],
+      "arguments": "Empty object only. Model cannot supply actor, bank, source, text, time, provenance or subjects."
+    },
+    "memory_forget": {
+      "capabilities": [
+        "features.memory_management=true with all three valid limits",
+        "features.all_stream_evidence=true additionally required for kind=evidence"
+      ],
+      "caller": [
+        "harness and selected read banks",
+        "personal only in the requesting human's DM",
+        "channel requires ViewChannel, ReadMessageHistory, ManageMessages",
+        "server requires ViewChannel, ReadMessageHistory, ManageGuild",
+        "bank derived from signed Discord event and included in caller read banks",
+        "raw current request selects exact namespace and ID: forget evidence #ID or forget fact #ID; optional in/from my/this/the personal/channel/server",
+        "other requests return clarification candidates and delete nothing"
+      ],
+      "backend": [
+        "authenticated bearer principal",
+        "independent read and forget grants",
+        "evidence requires full-bank read and forget authority",
+        "exact ID and frozen revision",
+        "policy checked again at commit"
+      ]
+    }
+  },
+  "semantics": {
+    "evidence": "Saves entire literal current request as human_input. Source author remains distinct from semantic subjects; subjects=null means unresolved. No assistant paraphrase, atomisation or surprise admission.",
+    "idempotence": "Independent explicit source-revision receipt and fingerprinted request ID survive retries. Forgotten saves return status=forgotten and active_ids=[]; replay cannot restore plaintext. Caller freezes forget revision in a durable digest-only journal.",
+    "outcomes": "Memory controls execute alone. runToolTurn returns terminal_turn with memoryToolResult. The responder presents its deterministic content and performs no further model call. No native role=tool or tagged continuation message is emitted for these terminal controls.",
+    "failure": "dispatchToolCall throws on failed authorization, validation or HTTP. runToolTurn converts that failure to completed=false and an unconfirmed terminal message. completed=true with clarification_required is a completed read, not proof of a save or deletion.",
+    "transport": "dispatcher is the actual dispatchToolCall return. tool_result is memoryToolResult within the terminal turn, not a serialized model tool message.",
+    "scope": "No clear, source-wide erasure, arbitrary actor or arbitrary bank model argument exists. Existing slash and search behavior is retained."
+  },
+  "examples": {
+    "save_dispatch": {
+      "output": {
+        "memory_control": true,
+        "content": "saved as evidence #1.",
+        "status": "saved",
+        "receipt": {
+          "object": "remora.memory.save",
+          "version": 1,
+          "bank": "discord:dm:1000000000000000001",
+          "request_id": "aaf6d36a573bf3ed68b80d798947e8531e7f99f846786b699dd2ad87e2b88ad5",
+          "kind": "evidence",
+          "source": {
+            "id": "discord:message:1000000000000000004",
+            "revision": 0,
+            "origin": "human_input",
+            "actor": {
+              "principal": "caller",
+              "actor": {
+                "bank": "discord:dm:1000000000000000001",
+                "role": "human",
+                "id": "discord:user:1000000000000000002"
+              },
+              "entity": null,
+              "unknown": null,
+              "description": null
+            },
+            "tool": null,
+            "url": null
+          },
+          "subjects": null,
+          "saved_ids": [1],
+          "active_ids": [1],
+          "status": "saved",
+          "replayed": false,
+          "admission_identity": "1dacde7bd5520553dd14ee06fb7a251c7b8e2a08eda85d42fa568b0e65b82097"
+        }
+      },
+      "continueAfter": false
+    },
+    "save_replay_dispatch": {
+      "output": {
+        "memory_control": true,
+        "content": "already saved as evidence #1.",
+        "status": "saved",
+        "receipt": {
+          "object": "remora.memory.save",
+          "version": 1,
+          "bank": "discord:dm:1000000000000000001",
+          "request_id": "aaf6d36a573bf3ed68b80d798947e8531e7f99f846786b699dd2ad87e2b88ad5",
+          "kind": "evidence",
+          "source": {
+            "id": "discord:message:1000000000000000004",
+            "revision": 0,
+            "origin": "human_input",
+            "actor": {
+              "principal": "caller",
+              "actor": {
+                "bank": "discord:dm:1000000000000000001",
+                "role": "human",
+                "id": "discord:user:1000000000000000002"
+              },
+              "entity": null,
+              "unknown": null,
+              "description": null
+            },
+            "tool": null,
+            "url": null
+          },
+          "subjects": null,
+          "saved_ids": [1],
+          "active_ids": [1],
+          "status": "saved",
+          "replayed": true,
+          "admission_identity": "1dacde7bd5520553dd14ee06fb7a251c7b8e2a08eda85d42fa568b0e65b82097"
+        }
+      },
+      "continueAfter": false
+    },
+    "clarification_dispatch": {
+      "output": {
+        "memory_control": true,
+        "content": "which memory should I forget? reply with \"forget evidence #ID\".\nevidence #1: remember that Sam's cat is Pepper 😀",
+        "status": "clarification_required",
+        "candidates": [
+          {
+            "id": 1,
+            "kind": "evidence",
+            "text": "remember that Sam's cat is Pepper 😀"
+          }
+        ]
+      },
+      "continueAfter": false
+    },
+    "forget_terminal_turn": {
+      "content": "forgot evidence #1. memory-backed conversations restarted.",
+      "sources": [],
+      "memoryControl": true,
+      "memoryToolResult": {
+        "name": "memory_forget",
+        "output": {
+          "memory_control": true,
+          "content": "forgot evidence #1. memory-backed conversations restarted.",
+          "status": "forgotten",
+          "receipt": {
+            "object": "remora.evidence.mutation",
+            "version": 1,
+            "bank": "discord:dm:1000000000000000001",
+            "operation": "forget",
+            "request_id": "6933e111fe0be52804dba9e5d6d5d6a04dfab553198c4ccc050259a4765b7853",
+            "deleted_ids": [1],
+            "deleted_count": 1,
+            "dependent_suppression": {
+              "bank": "discord:dm:1000000000000000001",
+              "visible_active_count": 0
+            },
+            "revision": "c861f75bdd79c1c78cde6327cc7bb2f06b59ad7e186688c341d22bdd13133844",
+            "replayed": false,
+            "cache_invalidated": true,
+            "reset_required": true
+          }
+        },
+        "completed": true
+      },
+      "memoryEpoch": 1
+    },
+    "forget_replay_dispatch": {
+      "output": {
+        "memory_control": true,
+        "content": "already forgotten evidence #1. memory-backed conversations restarted.",
+        "status": "forgotten",
+        "receipt": {
+          "object": "remora.evidence.mutation",
+          "version": 1,
+          "bank": "discord:dm:1000000000000000001",
+          "operation": "forget",
+          "request_id": "6933e111fe0be52804dba9e5d6d5d6a04dfab553198c4ccc050259a4765b7853",
+          "deleted_ids": [1],
+          "deleted_count": 1,
+          "dependent_suppression": {
+            "bank": "discord:dm:1000000000000000001",
+            "visible_active_count": 0
+          },
+          "revision": "c861f75bdd79c1c78cde6327cc7bb2f06b59ad7e186688c341d22bdd13133844",
+          "replayed": true,
+          "cache_invalidated": true,
+          "reset_required": true
+        }
+      },
+      "continueAfter": false
+    },
+    "save_after_forget_dispatch": {
+      "output": {
+        "memory_control": true,
+        "content": "that save was completed earlier, but its memory has since been forgotten.",
+        "status": "forgotten",
+        "receipt": {
+          "object": "remora.memory.save",
+          "version": 1,
+          "bank": "discord:dm:1000000000000000001",
+          "request_id": "aaf6d36a573bf3ed68b80d798947e8531e7f99f846786b699dd2ad87e2b88ad5",
+          "kind": "evidence",
+          "source": {
+            "id": "discord:message:1000000000000000004",
+            "revision": 0,
+            "origin": "human_input",
+            "actor": {
+              "principal": "caller",
+              "actor": {
+                "bank": "discord:dm:1000000000000000001",
+                "role": "human",
+                "id": "discord:user:1000000000000000002"
+              },
+              "entity": null,
+              "unknown": null,
+              "description": null
+            },
+            "tool": null,
+            "url": null
+          },
+          "subjects": null,
+          "saved_ids": [1],
+          "active_ids": [],
+          "status": "forgotten",
+          "replayed": true,
+          "admission_identity": "1dacde7bd5520553dd14ee06fb7a251c7b8e2a08eda85d42fa568b0e65b82097"
+        }
+      },
+      "continueAfter": false
+    },
+    "backend_save_request": {
+      "bank": "room",
+      "request_id": "save",
+      "source": {
+        "id": "message-1",
+        "revision": 0,
+        "actor_id": "alex",
+        "text": "remember that Sam's cat is Pepper 😀",
+        "observed_at": "2026-11-01T12:00:00Z"
+      }
+    },
+    "backend_save_receipt": {
+      "object": "remora.memory.save",
+      "version": 1,
+      "bank": "room",
+      "request_id": "save",
+      "kind": "evidence",
+      "source": {
+        "id": "message-1",
+        "revision": 0,
+        "origin": "human_input",
+        "actor": {
+          "principal": "caller",
+          "actor": {
+            "bank": "room",
+            "role": "human",
+            "id": "alex"
+          },
+          "entity": null,
+          "unknown": null,
+          "description": null
+        },
+        "tool": null,
+        "url": null
+      },
+      "subjects": null,
+      "saved_ids": [1],
+      "active_ids": [1],
+      "status": "saved",
+      "replayed": false,
+      "admission_identity": "1dacde7bd5520553dd14ee06fb7a251c7b8e2a08eda85d42fa568b0e65b82097"
+    },
+    "failure_terminal_turn": {
+      "content": "couldn't confirm the memory operation. use /memory list to check before trying again.",
+      "sources": [],
+      "memoryControl": true,
+      "memoryToolResult": {
+        "name": "memory_save",
+        "output": {
+          "error": "couldn't confirm the memory operation. use /memory list to check before trying again."
+        },
+        "completed": false,
+        "error": "couldn't confirm the memory operation. use /memory list to check before trying again."
+      },
+      "memoryEpoch": 2
+    },
+    "backend_forbidden": {
+      "http_status": 403,
+      "body": {
+        "error": {
+          "message": "Observation scope is no longer authorized",
+          "type": "permission_error",
+          "param": "remora.observations",
+          "code": "bank_forbidden"
+        }
+      }
+    },
+    "backend_invalid_input": {
+      "http_status": 400,
+      "body": {
+        "error": {
+          "message": "Invalid explicit human source",
+          "type": "invalid_request_error",
+          "param": null,
+          "code": "invalid_parameter"
+        }
+      }
+    }
+  }
+}

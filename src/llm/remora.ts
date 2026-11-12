@@ -184,6 +184,7 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     harness_names: Schema.optional(Schema.Boolean),
     memory_management: Schema.optional(Schema.Boolean),
     memory_search: Schema.optional(Schema.Boolean),
+    explicit_memory_save: Schema.optional(Schema.Boolean),
     all_stream_evidence: Schema.optional(Schema.Boolean),
     source_references: Schema.optional(Schema.Boolean),
     streaming: Schema.Boolean,
@@ -194,6 +195,9 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     context_tokens: PositiveInteger,
     max_output_tokens: PositiveInteger,
     max_read_banks: Schema.Literal(8),
+    max_explicit_memory_chars: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(4096)),
+    ),
     max_identity_bindings: Schema.optional(
       PositiveInteger.check(Schema.isLessThanOrEqualTo(16)),
     ),
@@ -299,6 +303,14 @@ export function parseRemoraCapabilities(value: unknown) {
       capabilities.limits.max_memory_request_id_chars === undefined)
   )
     throw new Error("Remora memory management requires all three limits");
+  if (
+    capabilities.features.explicit_memory_save &&
+    (!capabilities.features.all_stream_evidence ||
+      capabilities.limits.max_explicit_memory_chars === undefined)
+  )
+    throw new Error(
+      "Remora explicit save requires evidence support and its limit",
+    );
   if (
     capabilities.features.memory_search &&
     (capabilities.limits.max_search_results === undefined ||

@@ -138,7 +138,11 @@ export async function respond(options: RespondOptions): Promise<void> {
     }
     observationAttempt = observations;
     const scopedActionContext = actionContext
-      ? { ...actionContext, readBanks: remora?.read_banks ?? [] }
+      ? {
+          ...actionContext,
+          readBanks: remora?.read_banks ?? [],
+          writeBank: remora?.write_bank,
+        }
       : undefined;
     const availableActions = await buildAvailableActions({
       message,
@@ -354,6 +358,16 @@ export async function respond(options: RespondOptions): Promise<void> {
         },
       });
       if (!generated.content) return;
+      if ("memoryControl" in generated && generated.memoryControl) {
+        if (
+          generated.memoryEpoch !== actionContext?.harness?.store.privacyEpoch()
+        )
+          return;
+        await adapter.sendMessage(message.channelId, generated.content, {
+          allowedMentionUsers: [],
+        });
+        return;
+      }
 
       const repaired = await repairMissingSplitHints({
         llm,
