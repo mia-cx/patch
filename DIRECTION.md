@@ -3,6 +3,10 @@ Patch is a Discord persona and conversation partner with her own voice, taste,
 boundaries, and timing. Build the simplest useful conversation path before
 expanding the assistant features in the versioned specs.
 
+The voice LoRA carries how Patch talks, so the system prompt holds no style guide:
+only role, identity, transcript reading, output, safety, helpfulness, splitting,
+mentions and tools (about 4k tokens). Long rule lists made her rigid.
+
 Patch's runtime stays JavaScript/TypeScript. Remora provides an OpenAI-compatible
 inference API with optional memory-bank selection and fact-level recall controls.
 Remora can keep its Python core; Patch consumes the API and remains independent

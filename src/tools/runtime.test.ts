@@ -2214,11 +2214,12 @@ describe("complete harness with the actual Discord SDK", () => {
     expect(app.rest.put).not.toHaveBeenCalled();
   });
 
-  // Proves long native tool arguments cannot accumulate beyond the advertised context budget.
+  // Proves long native tool arguments cannot accumulate beyond the conversation plus tool budget.
   it("prunes completed native exchanges before their arguments overflow context", async () => {
     const app = await runtime();
     app.config.llmToolMode = "native";
-    app.config.llmContextTokens = 16_384;
+    app.config.llmContextTokens = 12_288;
+    app.config.llmToolContextTokens = 512;
     app.config.llmMaxTokens = 2048;
     const sizes: number[] = [];
     const callIds: string[][] = [];
@@ -2265,7 +2266,7 @@ describe("complete harness with the actual Discord SDK", () => {
     });
     await app.run();
     expect(app.complete).toHaveBeenCalledTimes(4);
-    expect(Math.max(...sizes)).toBeLessThanOrEqual(16_384);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(12_288 + 512);
     expect(callIds[3]?.length).toBeLessThan(3);
     expect(app.store.listNotes(CHANNEL)).toHaveLength(3);
   });
@@ -2368,7 +2369,7 @@ describe("complete harness with the actual Discord SDK", () => {
   // Proves classifier-supplied history still reserves space for the actual tool catalogue and results.
   it("rolls supplied history forward when tool instructions fill its budget", async () => {
     const app = await runtime(false, true);
-    app.config.llmContextTokens = 12_288;
+    app.config.llmContextTokens = 8_192;
     app.config.llmMaxTokens = 256;
     const current = toConversationMessage(app.message, BOT);
     app.complete.mockResolvedValue({ content: "hey" });

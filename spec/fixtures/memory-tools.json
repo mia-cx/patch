@@ -7,7 +7,7 @@
   "schema_scope": "Runtime-derived structural JSON Schemas plus the listed permission, Unicode-scalar, source binding, timestamp validity, receipt-ID equality and policy invariants. JSON Schema alone does not grant permission or prove these cross-field invariants.",
   "provenance": {
     "patch": {
-      "commit": "5b818c90682c6e28972040865ee1fe6c2793c345",
+      "commit": "fe3818e7678ded480a2b85cd567ff645e63ca68b",
       "files": {
         "src/actions/memory-tools.ts": "94846889a40886297c601cb8a1c69cfc088dcbf09d525f3f76e41a22f7d6eaa6",
         "src/actions/tool-calls.ts": "89c2a4cfc163b62b4ac88171dd0ce81af31301eaa0ce65f2e8de7bf9b5f71c31",
@@ -17,8 +17,8 @@
         "src/memory/tool-contract.ts": "df366901149c93170224ab1f65e26c1950e7649753df4c91a922618eb65cbcbd",
         "src/memory/journal.ts": "c7291848559e34103aaccaa186bba238376bea46ffc34ee75758e32752af8661",
         "src/tools/turn.ts": "5b90deb63931af4327bd661fec637f20246205f879a50a4a597e12799acda313",
-        "src/response/responder.ts": "41fe006039d7e9bc74022cec8249b86a1eed61f64402e10381a87137ae425ad6",
-        "src/memory/tools.integration.test.ts": "c1dd282c76f6a843dfb7fafc2cdee04baa13f5e5370484e143b852046b61dd82"
+        "src/response/responder.ts": "c62316f88f92f72f81c0c4784e72ec601153bf0c579d23e54d6382d2c592e875",
+        "src/memory/tools.integration.test.ts": "b1ef81293b02dbfa234b6640e16db227a5dd34f09d5e437b39eb831c153da854"
       }
     },
     "remora": {
