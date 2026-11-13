@@ -67,6 +67,16 @@ const RemoraResponseSchema = Schema.Struct({
   read_banks: Schema.Array(Schema.String),
   selected: Schema.Array(FactRef),
   observations: Schema.optional(Schema.NullOr(ObservationResponseSchema)),
+  /** What the current message was saved as, so a model that renders its own prompt needs no memory_save. */
+  saved_now: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        bank: Schema.String,
+        record_id: PositiveInteger,
+        atoms: Schema.Array(Schema.String),
+      }),
+    ),
+  ),
   writes: Schema.NullOr(
     Schema.Struct({
       bank: Schema.String,

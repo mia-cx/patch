@@ -28,6 +28,7 @@ import {
   DiscordJsAdapter,
   toConversationMessage,
 } from "../discord/discord-js-adapter.js";
+import { getBotIdentity } from "../identity.js";
 import { LlmClient, type LlmMessage } from "../llm/client.js";
 import {
   type ObservationBatch,
@@ -956,6 +957,15 @@ describe("complete harness with the actual Discord SDK", () => {
         id: `discord:user:${base.authorId}`,
       },
       label: base.authorName,
+    });
+    // Patch's own name is sent even though none of her messages are in view.
+    expect(batch?.labels).toContainEqual({
+      actor: {
+        bank: mapper.bank,
+        role: "assistant",
+        id: `discord:user:${BOT}`,
+      },
+      label: getBotIdentity().name,
     });
   });
 

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Message } from "discord.js";
+import { getBotIdentity } from "../identity.js";
 import type { LlmMessage, LlmResponse } from "../llm/client.js";
 import {
   type CompletedGeneration,
@@ -66,6 +67,16 @@ export class ConversationObservations {
     this.namespace = options.namespace ?? "";
     this.cutoff = options.store.observationCutoff(bank, options.startId);
     this.epoch = options.store.privacyEpoch();
+    // Patch's own name, even with none of her messages in view, so recalled facts
+    // about her read as "you ...". Her visible messages may refine it.
+    const self: Actor = {
+      bank,
+      role: "assistant",
+      id: `discord:user:${options.botUserId}`,
+    };
+    const name = this.displayLabel(getBotIdentity().name);
+    if (this.labelChars && name)
+      this.labels.set(JSON.stringify(self), { actor: self, label: name });
   }
 
   /** Only actual new human messages in this destination can supply a human actor. */
@@ -657,8 +668,14 @@ export class ConversationObservations {
     };
     for (const id of [block.id, ...(block.messageIds ?? [])])
       if (id) this.authors.set(id, actor);
-    const label = Array.from(
-      block.authorName
+    const label = this.displayLabel(block.authorName);
+    if (label) this.labels.set(JSON.stringify(actor), { actor, label });
+  }
+
+  /** A name as one printable line within Remora's label limit. */
+  private displayLabel(name: string) {
+    return Array.from(
+      name
         .replace(new RegExp(UNPRINTABLE, "gu"), " ")
         .replace(/ +/g, " ")
         .trim(),
@@ -666,7 +683,6 @@ export class ConversationObservations {
       .slice(0, this.labelChars)
       .join("")
       .trim();
-    if (label) this.labels.set(JSON.stringify(actor), { actor, label });
   }
 }
 
