@@ -390,24 +390,18 @@ async function presentMemories(
         `${evidence === undefined ? "" : "fact "}#${memory.id} ${escapeMarkdown(memory.text)}`,
     )
     .join("\n\n");
+  // The saved facts (or the quote when Remora kept no atoms) and a web page's URL; the file has the rest.
   const quotations = evidence
-    ?.map((record) => {
-      const provenance = (source: EvidenceRecord["source"]) => {
-        const voice = source.actor?.actor
-          ? `${source.actor.actor.role} ${source.actor.actor.id}`
-          : (source.actor?.entity ?? "unknown");
-        return [
-          source.origin,
-          `actor ${voice}`,
-          ...(source.tool ? [`tool ${source.tool}`] : []),
-          ...(source.url ? [source.url] : []),
-        ]
-          .map((value) => escapeMarkdown(value))
-          .join("; ");
-      };
-      return `evidence #${record.id} (${provenance(record.source)}; subjects unresolved)\n${escapeMarkdown(record.text)}${record.context.map((item, index) => `\ncontext ${index} (${provenance(item.source)}): ${escapeMarkdown(item.text)}`).join("")}`;
-    })
-    .join("\n\n");
+    ?.map(({ id, atoms, text, source }) =>
+      [
+        `#${id}`,
+        atoms?.length
+          ? atoms.map((atom) => escapeMarkdown(atom)).join(" ")
+          : `"${escapeMarkdown(text)}"`,
+        ...(source.url ? [`<${source.url}>`] : []),
+      ].join(" "),
+    )
+    .join("\n");
   const content = `${label}\n\n${[listing, quotations].filter(Boolean).join("\n\n")}`;
   if (content.length <= MAX_INLINE_LENGTH && !evidence?.length) {
     await interaction.editReply({ content, allowedMentions: NO_MENTIONS });

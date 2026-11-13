@@ -365,10 +365,7 @@ describe("Patch's Protocord integration", () => {
       allowed_mentions: { parse: [], replied_user: false },
     });
     expect(body).toMatchObject({
-      content: expect.stringContaining("evidence #1"),
-    });
-    expect(body).toMatchObject({
-      content: expect.stringContaining("subjects unresolved"),
+      content: expect.stringContaining('#1 "my dog"'),
     });
     expect(app.rest.post.mock.calls[0]?.[1]?.body).toMatchObject({
       data: { flags: MessageFlags.Ephemeral },
@@ -376,8 +373,8 @@ describe("Patch's Protocord integration", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  // Proves short external quotations expose both main/context provenance and a complete source export.
-  it("preserves external provenance even when the evidence fits inline", async () => {
+  // Proves a web memory shows its page URL inline while the attached file keeps every source and context.
+  it("lists a web memory with its URL and exports its full provenance", async () => {
     const app = await runtime(false);
     const bank = `discord:guild:${GUILD}`;
     await app.context.memory.initialize(
@@ -452,14 +449,6 @@ describe("Patch's Protocord integration", () => {
       content: expect.stringContaining("https://page.test/release"),
       allowed_mentions: { parse: [], replied_user: false },
     });
-    for (const field of [
-      "web\\_fetch",
-      "web\\_search",
-      "https://search.test/source",
-    ])
-      expect(response?.body).toMatchObject({
-        content: expect.stringContaining(field),
-      });
     expect(response?.files).toHaveLength(1);
     const file = response?.files?.[0];
     expect(file?.name).toBe("memories.json");
