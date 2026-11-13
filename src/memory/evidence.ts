@@ -89,6 +89,12 @@ export const EvidenceRecordSchema = Schema.Struct({
   span: Span,
   text: Quotation,
   context: Schema.Array(Context).check(Schema.isMaxLength(16)),
+  /** The record's standalone statements, when Remora's atomiser ran. */
+  atoms: Schema.optional(
+    Schema.Array(Schema.String.check(Schema.isMinLength(1))).check(
+      Schema.isMaxLength(256),
+    ),
+  ),
 }).check(
   Schema.makeFilter(
     (value) =>

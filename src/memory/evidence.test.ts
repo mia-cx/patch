@@ -73,6 +73,21 @@ describe("evidence memory management transport", () => {
     expect(first.reset_required).toBe(true);
   });
 
+  // Proves a listed record keeps its atoms; strict decoding once rejected every atomised record.
+  it("lists evidence records with their atoms", async () => {
+    const record = {
+      ...makeEvidenceRecord("room-a", 1),
+      atoms: ["Mia's sister is named Noor.", "Noor moved to Lisbon."],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ ...page(), data: [record] })),
+    );
+    const client = new RemoraMemoryClient(config);
+    await client.initialize(parseRemoraCapabilities(evidenceCapabilities));
+    expect((await client.listEvidence("room-a")).data).toEqual([record]);
+  });
+
   // Proves source erasure selects a listed context anchor without inventing principal or source identity.
   it("forgets a supporting source through its exact anchor and validates dependent IDs", async () => {
     const request = {
