@@ -5,12 +5,14 @@ import {
   type APIChatInputApplicationCommandInteraction,
   ApplicationCommandOptionType,
   ApplicationCommandType,
+  ApplicationIntegrationType,
   AutocompleteInteraction,
   ChannelType,
   ChatInputCommandInteraction,
   Client,
   ClientApplication,
   ClientUser,
+  InteractionContextType,
   InteractionResponseType,
   InteractionType,
   Locale,
@@ -1297,16 +1299,21 @@ describe("Patch's self memory", () => {
     return { ...app, requests, add };
   }
 
-  // Proves /self is hidden by default: guild-only and visible to Administrators alone until the team uses it.
-  it("registers /self hidden from members and out of DMs", async () => {
+  // Proves /self is a user-install command: server admins never see it, and it works in DMs and servers.
+  it("registers /self as a user-installed command everywhere", async () => {
     const app = await runtime();
     const command = getDiscordCommandRegistration(app.registry).find(
       (item) => item.name === "self",
     );
     expect(command).toMatchObject({
-      dmPermission: false,
-      defaultMemberPermissions: 0n,
+      integrationTypes: [ApplicationIntegrationType.UserInstall],
+      contexts: [
+        InteractionContextType.Guild,
+        InteractionContextType.BotDM,
+        InteractionContextType.PrivateChannel,
+      ],
     });
+    expect(command).not.toHaveProperty("defaultMemberPermissions");
   });
 
   // Proves a server administrator who is not on the app's team is refused before anything reaches Remora.

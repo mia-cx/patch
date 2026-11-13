@@ -199,7 +199,11 @@ client.on(Events.InteractionCreate, (interaction) => {
       channelId: interaction.channelId ?? "",
       guildId: interaction.guildId,
     }) &&
-    !(interaction.isChatInputCommand() && interaction.commandName === "memory")
+    // Memory and self controls carry their own access checks and work anywhere.
+    !(
+      interaction.isChatInputCommand() &&
+      ["memory", "self"].includes(interaction.commandName)
+    )
   )
     return;
   void dispatchInteraction({

@@ -1,6 +1,8 @@
 import {
   ApplicationCommandOptionType,
+  ApplicationIntegrationType,
   type ChatInputCommandInteraction,
+  InteractionContextType,
 } from "discord.js";
 import { Schema } from "effect";
 import { slashCommand } from "protocord";
@@ -27,8 +29,9 @@ const MAX_REPLY = 1900;
 /**
  * Patch's self: facts about her alone, kept in one global bank that every
  * conversation reads and none writes. Only the Discord application's team can add or
- * forget them; everyone else never sees the command (guild-only, Administrator by
- * default) and is refused by the handler anyway.
+ * forget them. The command is user-installed, so it appears only for people who added
+ * Patch to their own account (never to server admins), in servers and DMs alike; the
+ * handler refuses anyone outside the team anyway.
  */
 export const selfAction: Action<typeof SelfArgs.Type, string> = {
   name: "self",
@@ -39,7 +42,14 @@ export const selfAction: Action<typeof SelfArgs.Type, string> = {
       name: "self",
       description: `Facts about ${getBotIdentity().name} herself (app team only)`,
       usage: "/self add statement:<about Patch> | list | forget id:<ID>",
-      registration: { dmPermission: false, defaultMemberPermissions: 0n },
+      registration: {
+        integrationTypes: [ApplicationIntegrationType.UserInstall],
+        contexts: [
+          InteractionContextType.Guild,
+          InteractionContextType.BotDM,
+          InteractionContextType.PrivateChannel,
+        ],
+      },
       options: [
         {
           type: ApplicationCommandOptionType.Subcommand,
