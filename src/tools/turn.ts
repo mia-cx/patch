@@ -30,6 +30,8 @@ const READ_ONLY = new Set([
 ]);
 const RESULT_BUDGET = 6_000;
 const ERROR_RECEIPT_CHARS = 80;
+const BUDGET_SPENT =
+  "Your tool calls for this message are used up; further calls will not run. Answer the original human request now from the results above. If they failed, say so briefly.";
 
 /** Replay a generated turn verbatim, referencing its captured source when one exists. */
 function observedAssistant(
@@ -299,8 +301,27 @@ export async function runToolTurn(options: {
       exchanges.push({ start: results.length, count: 0, assistant });
       continue;
     }
-    if (finalOnly || count + calls.length > options.maxCalls)
-      throw new Error("Tool-call budget exhausted");
+    if (finalOnly || count + calls.length > options.maxCalls) {
+      // Out of calls: ask once for an answer from the results so far, then accept any text.
+      if (finalOnly) {
+        if (!parsed.content) throw new Error("Tool-call budget exhausted");
+        const finished = await finish(parsed.content, generatedSource, {
+          start: results.length,
+          count: 0,
+          assistant: observedAssistant(response.content, generatedSource),
+        });
+        if (finished) return finished;
+        continue;
+      }
+      finalOnly = true;
+      exchanges.push({
+        start: results.length,
+        count: 0,
+        assistant: observedAssistant(response.content, generatedSource),
+        feedback: BUDGET_SPENT,
+      });
+      continue;
+    }
     for (const [index, call] of calls.entries())
       if (!READ_ONLY.has(call.name)) attemptedMutations.add(keys[index] ?? "");
     let continueAfter = false;

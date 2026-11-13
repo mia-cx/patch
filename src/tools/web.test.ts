@@ -207,6 +207,30 @@ describe("public web reading", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  // Proves news feeds read as headlines with links, so a gated site's RSS still answers "what's new".
+  it.each([
+    [
+      "application/rss+xml",
+      "<rss><channel><title>NU - Algemeen</title><item><title>Zorgpremie stijgt</title><link>https://www.nu.nl/a</link><pubDate>Fri, 13 Nov 2026 00:10:00 +0100</pubDate></item></channel></rss>",
+      "- Zorgpremie stijgt (https://www.nu.nl/a) — Fri, 13 Nov 2026 00:10:00 +0100",
+    ],
+    [
+      "application/atom+xml",
+      '<feed><title>Atom news</title><entry><title>Tram stops</title><link href="https://example.com/t"/><updated>2026-11-13T00:00:00Z</updated></entry></feed>',
+      "- Tram stops (https://example.com/t) — 2026-11-13T00:00:00Z",
+    ],
+  ])("reads %s feeds as headlines", async (type, body, line) => {
+    const request = vi.fn(async () => ({
+      status: 200,
+      headers: { "content-type": `${type}; charset=utf-8` },
+      body,
+    }));
+    const web = new WebClient({ resolve: publicDNS, request });
+    const page = await web.fetch("https://example.com/rss");
+    expect(page.text).toBe(line);
+    expect(page.title).not.toBe("https://example.com/rss");
+  });
+
   // Proves a site that redirects to its cookie gate reports that instead of the gate's text.
   it("reports a consent-wall redirect as unavailable content", async () => {
     const request = vi.fn(async () => ({
@@ -218,7 +242,7 @@ describe("public web reading", () => {
     }));
     const web = new WebClient({ resolve: publicDNS, request });
     await expect(web.fetch("https://nu.nl/")).rejects.toThrow(
-      "nu.nl redirects to a cookie consent page (myprivacy.dpgmedia.nl)",
+      "nu.nl redirects to a cookie consent page (myprivacy.dpgmedia.nl), so its content is unavailable. Try the site's RSS feed",
     );
     expect(request).toHaveBeenCalledTimes(1);
   });

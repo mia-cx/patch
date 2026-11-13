@@ -3,12 +3,41 @@ import { request } from "node:https";
 import { isIP } from "node:net";
 import { createBrotliDecompress, createUnzip } from "node:zlib";
 import ipaddr from "ipaddr.js";
-import { parseHTML } from "linkedom";
+import { DOMParser, parseHTML } from "linkedom";
 
 const MAX_BYTES = 2_000_000;
 const PAGE_CHARS = 4_000;
 /** Redirect targets that are cookie/privacy gates rather than the requested page. */
 const CONSENT_WALL = /consent|privacy-gate|cookie-?wall|gdpr/i;
+const FEED_TYPES = new Set([
+  "application/rss+xml",
+  "application/atom+xml",
+  "application/xml",
+  "text/xml",
+]);
+
+/** An RSS or Atom feed as one headline per line, or undefined when the XML is not a feed. */
+function feedText(xml: string) {
+  const document = new DOMParser().parseFromString(xml, "text/xml");
+  const items = [...document.querySelectorAll("item, entry")];
+  if (!items.length) return undefined;
+  type Scope = NonNullable<ReturnType<typeof document.querySelector>>;
+  const text = (node: Scope, selector: string) =>
+    node.querySelector(selector)?.textContent?.trim() ?? "";
+  return {
+    title: text(document.documentElement, "title"),
+    text: items
+      .map((item) => {
+        const link =
+          text(item, "link") ||
+          item.querySelector("link")?.getAttribute("href") ||
+          "";
+        const date = text(item, "pubDate") || text(item, "updated");
+        return `- ${text(item, "title")}${link ? ` (${link})` : ""}${date ? ` — ${date}` : ""}`;
+      })
+      .join("\n"),
+  };
+}
 const IDENTITY =
   "Patch/0.0.0 (Protocord; Node.js https; +https://github.com/mia-cx/patch)";
 export const WEB_AGENTS = [
@@ -159,6 +188,11 @@ export class WebClient {
           }
         }
         text = main.innerText;
+      } else if (FEED_TYPES.has(type ?? "")) {
+        const feed = feedText(text);
+        if (!feed) throw new Error(`Unsupported page format: ${type}`);
+        title = feed.title || title;
+        text = feed.text;
       } else if (!type?.startsWith("text/plain") && type !== "text/markdown")
         throw new Error(`Unsupported page format: ${type || "unknown"}`);
       text = text
@@ -282,7 +316,7 @@ export class WebClient {
           // A consent gate holds no page content; say so instead of returning the gate.
           if (CONSENT_WALL.test(`${next.hostname}${next.pathname}`))
             throw new Error(
-              `${initial.hostname} redirects to a cookie consent page (${next.hostname}), so its content is unavailable. Try another source.`,
+              `${initial.hostname} redirects to a cookie consent page (${next.hostname}), so its content is unavailable. Try the site's RSS feed (often /rss) or another source.`,
             );
           url = next;
           continue;

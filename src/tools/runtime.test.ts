@@ -576,6 +576,29 @@ describe("complete harness with the actual Discord SDK", () => {
     expect(app.complete).toHaveBeenCalledTimes(2);
   });
 
+  // Proves running out of tool calls asks for an answer instead of failing the whole reply.
+  it("answers from the results when the tool budget runs out", async () => {
+    const app = await runtime();
+    for (const host of ["one", "two", "three", "four"])
+      app.complete.mockResolvedValueOnce({
+        content: call("web_fetch", { url: `https://${host}.test/` }),
+      });
+    app.complete.mockResolvedValueOnce({
+      content: "none of those pages loaded",
+    });
+    await app.run();
+    expect(JSON.stringify(app.complete.mock.calls.at(-1))).toContain(
+      "tool calls for this message are used up",
+    );
+    expect(
+      JSON.stringify(
+        app.rest.post.mock.calls.filter(([route]) =>
+          route.endsWith("/messages"),
+        ),
+      ),
+    ).toContain("none of those pages loaded");
+  });
+
   // Proves retrying the same source cannot schedule another side effect when the model omits an earlier read.
   it("retains mutation identity across reordered generation retries", async () => {
     const app = await runtime();
