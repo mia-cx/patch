@@ -22,6 +22,8 @@ export type ActionPermission =
   | "owner"
   | "delete_messages"
   | "manage_server"
+  /** Members of the Discord application's Developer Portal team. */
+  | "team"
   | {
       kind: "memory";
       scope: MemoryScope;
@@ -41,6 +43,8 @@ export type ActionContext = {
   config: Config;
   llm: LlmClient;
   memory: RemoraMemoryClient;
+  /** The only client allowed to write or forget Patch's self bank; set with REMORA_SELF_API_KEY. */
+  selfMemory?: RemoraMemoryClient;
   logger: Logger;
   queue: GenerationQueue;
   modelCatalog: ModelCatalog;

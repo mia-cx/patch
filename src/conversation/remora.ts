@@ -7,6 +7,12 @@ import type { RemoraRequest } from "../llm/remora.js";
 export const userBank = (userId: string) => `discord:user:${userId}`;
 
 /**
+ * Patch's own self: facts about her alone, set by the app's team through `/self`.
+ * Read everywhere (it holds nothing about users) and never written by a conversation.
+ */
+export const SELF_BANK = "patch:self";
+
+/**
  * Layered memory: a server-channel message is written to its channel, its server
  * and its speaker's user bank, but reads only the channel and server, so nothing
  * said in a DM surfaces in public. A DM reads and writes the speaker's user bank;
@@ -28,6 +34,7 @@ export function buildRemoraRequest(
     config.discordTrialGuild.channelIds.includes(message.channelId);
   if (!personal && !shared) return;
   const user = userBank(message.author.id);
+  const self = config.remoraSelfApiKey ? [SELF_BANK] : [];
   const turn = {
     id: `discord:message:${message.id}`,
     revision: message.editedTimestamp ?? 0,
@@ -40,7 +47,9 @@ export function buildRemoraRequest(
         ? [`discord:dm:${message.channelId}`]
         : [];
     return {
-      read_banks: [...new Set([user, ...legacy, ...config.remoraReadBanks])],
+      read_banks: [
+        ...new Set([user, ...legacy, ...config.remoraReadBanks, ...self]),
+      ],
       write_bank: user,
       turn,
     };
@@ -48,7 +57,7 @@ export function buildRemoraRequest(
   const channel = `discord:channel:${message.channelId}`;
   const guild = `discord:guild:${message.guildId}`;
   return {
-    read_banks: [channel, guild],
+    read_banks: [channel, guild, ...self],
     write_bank: channel,
     also_banks: [
       // Only what the whole server can see reaches the server bank.

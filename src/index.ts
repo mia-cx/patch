@@ -62,6 +62,10 @@ const settings = new SettingsStore(config.settingsDbPath, {
 const contextStore = new ConversationContextStore(config.settingsDbPath);
 const llm = new LlmClient(config, settings);
 const memory = new RemoraMemoryClient(config);
+// Patch's self bank has its own token: conversations can only read it.
+const selfMemory = config.remoraSelfApiKey
+  ? new RemoraMemoryClient({ ...config, llmApiKey: config.remoraSelfApiKey })
+  : undefined;
 if (config.remoraDmEnabled || config.discordTrialGuild) {
   const capabilities = await llm.initializeRemora();
   if (llm.observationLimits && !config.remoraObservationStartId)
@@ -109,6 +113,7 @@ const actionContext = {
   config,
   llm,
   memory,
+  ...(selfMemory ? { selfMemory } : {}),
   logger,
   queue,
   modelCatalog,

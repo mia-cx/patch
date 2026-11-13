@@ -89,6 +89,12 @@ export const EvidenceRecordSchema = Schema.Struct({
   span: Span,
   text: Quotation,
   context: Schema.Array(Context).check(Schema.isMaxLength(16)),
+  /** Name-free identity digests of the entities its atoms are about (e.g. Patch's self). */
+  atom_subjects: Schema.optional(
+    Schema.Array(
+      Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/u)),
+    ).check(Schema.isMaxLength(16)),
+  ),
   /** The record's standalone statements, when Remora's atomiser ran. */
   atoms: Schema.optional(
     Schema.Array(Schema.String.check(Schema.isMinLength(1))).check(

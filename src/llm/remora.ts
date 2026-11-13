@@ -191,6 +191,7 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     memory_search: Schema.optional(Schema.Boolean),
     explicit_memory_save: Schema.optional(Schema.Boolean),
     also_banks: Schema.optional(Schema.Boolean),
+    assistant_statements: Schema.optional(Schema.Boolean),
     all_stream_evidence: Schema.optional(Schema.Boolean),
     source_references: Schema.optional(Schema.Boolean),
     observation_labels: Schema.optional(Schema.Boolean),
@@ -202,6 +203,15 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     context_tokens: PositiveInteger,
     max_output_tokens: PositiveInteger,
     max_read_banks: Schema.Literal(8),
+    max_assistant_statement_chars: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(4096)),
+    ),
+    max_assistant_aliases: Schema.optional(
+      Schema.Int.check(
+        Schema.isGreaterThanOrEqualTo(0),
+        Schema.isLessThanOrEqualTo(8),
+      ),
+    ),
     max_also_banks: Schema.optional(
       PositiveInteger.check(Schema.isLessThanOrEqualTo(4)),
     ),

@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import { evidenceCapabilities } from "../../test/fixtures/evidence.js";
 import type { Config } from "../config.js";
 import { validateObservationBatch } from "../llm/evidence.js";
-import { buildRemoraRequest } from "./remora.js";
+import { memoryScopes, resolveMemoryBank } from "../memory/scope.js";
+import { SELF_BANK, buildRemoraRequest } from "./remora.js";
 
 const GUILD = "1559060271404945512";
 const CHANNEL = "1561529690953490442";
@@ -171,5 +172,41 @@ describe("layered memory banks", () => {
       expect(() =>
         validateObservationBatch(batch(layers), [], layered),
       ).toThrow("Invalid observation layers");
+  });
+
+  // Proves Patch's self bank is read in every place yet is never a destination of any conversation or /memory scope.
+  it("reads Patch's self bank everywhere and never writes it from a conversation", async () => {
+    const withSelf = { ...config, remoraSelfApiKey: "self-token" } as Config;
+    const places = [
+      message({ guildId: GUILD, channelId: CHANNEL }),
+      message({ guildId: GUILD, channelId: CHANNEL }, []),
+      message({ guildId: null, channelId: TRIAL_DM }),
+    ];
+    for (const place of places) {
+      const request = buildRemoraRequest(withSelf, place);
+      expect(request?.read_banks).toContain(SELF_BANK);
+      expect(request?.write_bank).not.toBe(SELF_BANK);
+      expect(
+        (request?.also_banks ?? []).map((layer) =>
+          typeof layer === "string" ? layer : layer.bank,
+        ),
+      ).not.toContain(SELF_BANK);
+    }
+    expect(
+      buildRemoraRequest(config, places[0] as Message)?.read_banks,
+    ).not.toContain(SELF_BANK);
+    for (const scope of memoryScopes)
+      for (const guildId of [GUILD, null])
+        if (scope === "personal" || guildId)
+          expect(
+            (
+              await resolveMemoryBank(scope, {
+                guildId,
+                channelId: CHANNEL,
+                channel: { type: ChannelType.GuildText },
+                user: { id: MIA, createDM: async () => ({ id: TRIAL_DM }) },
+              })
+            ).bank,
+          ).not.toBe(SELF_BANK);
   });
 });

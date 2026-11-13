@@ -24,6 +24,8 @@ export type Config = {
   maxToolCalls: number;
   remoraDmEnabled: boolean;
   remoraReadBanks: readonly string[];
+  /** Token for Patch's self bank, used only by team-only `/self`; set to enable self memory. */
+  remoraSelfApiKey: string;
   remoraObservationStartId?: string;
   botOwnerUserIds: ReadonlySet<string>;
   debugLogging: boolean;
@@ -81,6 +83,7 @@ const ConfigSchema = Schema.Struct({
   maxToolCalls: PositiveInteger,
   remoraDmEnabled: Schema.Boolean,
   remoraReadBanks: Schema.Array(Schema.String),
+  remoraSelfApiKey: Schema.String,
   remoraObservationStartId: Schema.String.check(
     Schema.isPattern(/^(?:|\d{1,20})$/),
   ),
@@ -142,6 +145,7 @@ export function loadConfigEffect(env: NodeJS.ProcessEnv = process.env) {
       maxToolCalls: Math.min(integer(env.MAX_TOOL_CALLS, 3), 8),
       remoraDmEnabled: boolean(env.REMORA_DM_ENABLED, false),
       remoraReadBanks: splitCsv(env.REMORA_READ_BANKS),
+      remoraSelfApiKey: env.REMORA_SELF_API_KEY?.trim() ?? "",
       remoraObservationStartId: env.REMORA_OBSERVATION_START_ID?.trim() ?? "",
       botOwnerUserIds: new Set(splitCsv(env.BOT_OWNER_USER_IDS)),
       debugLogging: boolean(env.DEBUG_LOGGING, false),

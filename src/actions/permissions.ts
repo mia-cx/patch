@@ -5,6 +5,7 @@ import {
 import type { Authorize } from "protocord";
 import type { Config } from "../config.js";
 import { memoryPermissionFailure } from "../memory/scope.js";
+import { isApplicationTeamMember } from "../memory/self.js";
 import type { ActionContext, ActionPermission } from "./context.js";
 
 type OwnerConfig = Pick<Config, "botOwnerUserIds">;
@@ -31,11 +32,10 @@ export function canDeleteBotMessages(
 }
 
 /** Apply Patch's owner and moderation policies during Protocord dispatch. */
-export const authorizeAction: Authorize<ActionContext, ActionPermission> = (
-  permission,
-  invocation,
-  context,
-) => {
+export const authorizeAction: Authorize<
+  ActionContext,
+  ActionPermission
+> = async (permission, invocation, context) => {
   if (typeof permission !== "string") {
     const interaction = invocation.rawEvent;
     if (!isSlashInteraction(interaction))
@@ -54,6 +54,12 @@ export const authorizeAction: Authorize<ActionContext, ActionPermission> = (
       : { authorized: false, reason: "nope, owner-only." };
   }
   const interaction = invocation.rawEvent;
+  if (permission === "team")
+    return userId &&
+      isSlashInteraction(interaction) &&
+      (await isApplicationTeamMember(interaction.client, userId))
+      ? { authorized: true }
+      : { authorized: false, reason: "nope, that's for Patch's team only." };
   if (permission === "manage_server")
     return isSlashInteraction(interaction) &&
       interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)
