@@ -206,4 +206,20 @@ describe("public web reading", () => {
     );
     expect(request).toHaveBeenCalledTimes(1);
   });
+
+  // Proves a site that redirects to its cookie gate reports that instead of the gate's text.
+  it("reports a consent-wall redirect as unavailable content", async () => {
+    const request = vi.fn(async () => ({
+      status: 302,
+      headers: {
+        location: "https://myprivacy.dpgmedia.nl/consent?siteKey=x",
+      },
+      body: "",
+    }));
+    const web = new WebClient({ resolve: publicDNS, request });
+    await expect(web.fetch("https://nu.nl/")).rejects.toThrow(
+      "nu.nl redirects to a cookie consent page (myprivacy.dpgmedia.nl)",
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+  });
 });

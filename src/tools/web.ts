@@ -7,6 +7,8 @@ import { parseHTML } from "linkedom";
 
 const MAX_BYTES = 2_000_000;
 const PAGE_CHARS = 4_000;
+/** Redirect targets that are cookie/privacy gates rather than the requested page. */
+const CONSENT_WALL = /consent|privacy-gate|cookie-?wall|gdpr/i;
 const IDENTITY =
   "Patch/0.0.0 (Protocord; Node.js https; +https://github.com/mia-cx/patch)";
 export const WEB_AGENTS = [
@@ -276,7 +278,13 @@ export class WebClient {
           const location = response.headers.location;
           if (typeof location !== "string")
             throw new Error("Redirect has no location");
-          url = this.validateURL(new URL(location, url).href);
+          const next = this.validateURL(new URL(location, url).href);
+          // A consent gate holds no page content; say so instead of returning the gate.
+          if (CONSENT_WALL.test(`${next.hostname}${next.pathname}`))
+            throw new Error(
+              `${initial.hostname} redirects to a cookie consent page (${next.hostname}), so its content is unavailable. Try another source.`,
+            );
+          url = next;
           continue;
         }
         if (response.status === 403 || response.status === 406) break;

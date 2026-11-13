@@ -7,7 +7,7 @@
   "schema_scope": "Runtime-derived structural JSON Schemas plus the listed permission, Unicode-scalar, source binding, timestamp validity, receipt-ID equality and policy invariants. JSON Schema alone does not grant permission or prove these cross-field invariants.",
   "provenance": {
     "patch": {
-      "commit": "06e94599dbc9d4ace93cfa964c5e3f6a61f9a825",
+      "commit": "e172d359a361443b95dbaac7601ded92d78b2380",
       "files": {
         "src/actions/memory-tools.ts": "94846889a40886297c601cb8a1c69cfc088dcbf09d525f3f76e41a22f7d6eaa6",
         "src/actions/tool-calls.ts": "89c2a4cfc163b62b4ac88171dd0ce81af31301eaa0ce65f2e8de7bf9b5f71c31",
