@@ -17,15 +17,33 @@ const config = {
   discordTrialGuild: { guildId: GUILD, channelIds: [CHANNEL] },
 } as unknown as Config;
 
-function message(place: { guildId: string | null; channelId: string }) {
+const MEMBERS = "1559060271404945599";
+
+/** A message whose channel each listed role can view; `type` picks a thread kind. */
+function message(
+  place: { guildId: string | null; channelId: string },
+  visibleTo: readonly string[] = [GUILD],
+  type: ChannelType = ChannelType.GuildText,
+) {
+  const view = {
+    permissionsFor: (role: { id: string }) => ({
+      has: () => visibleTo.includes(role.id),
+    }),
+  };
+  const thread =
+    type === ChannelType.PublicThread || type === ChannelType.PrivateThread;
+  const roles = new Map([GUILD, MEMBERS].map((id) => [id, { id }]));
   return {
     id: "1570576607872024600",
     content: "my sister noor moved to lisbon",
     editedTimestamp: null,
     author: { id: MIA },
-    channel: {
-      type: place.guildId ? ChannelType.GuildText : ChannelType.DM,
-    },
+    channel: place.guildId
+      ? { type, isThread: () => thread, ...(thread ? { parent: view } : view) }
+      : { type: ChannelType.DM },
+    guild: place.guildId
+      ? { id: GUILD, roles: { cache: roles, everyone: roles.get(GUILD) } }
+      : null,
     ...place,
   } as unknown as Message;
 }
@@ -55,6 +73,43 @@ describe("layered memory banks", () => {
     expect(
       request?.read_banks.some((bank) => bank.startsWith("discord:user:")),
     ).toBe(false);
+  });
+
+  // Proves only channels the server's members can see feed the server bank; private places keep channel and speaker layers.
+  it("keeps private channels and private threads out of the server bank", () => {
+    const place = { guildId: GUILD, channelId: CHANNEL };
+    const layers = (request: ReturnType<typeof buildRemoraRequest>) =>
+      request?.also_banks?.map((bank) =>
+        typeof bank === "string" ? bank : bank.bank,
+      );
+    const user = `discord:user:${MIA}`;
+    const guild = `discord:guild:${GUILD}`;
+    expect(layers(buildRemoraRequest(config, message(place, [])))).toEqual([
+      user,
+    ]);
+    expect(
+      layers(
+        buildRemoraRequest(
+          config,
+          message(place, [GUILD], ChannelType.PrivateThread),
+        ),
+      ),
+    ).toEqual([user]);
+    expect(
+      layers(
+        buildRemoraRequest(
+          config,
+          message(place, [GUILD], ChannelType.PublicThread),
+        ),
+      ),
+    ).toEqual([guild, user]);
+    // With a members role, a channel hidden from @everyone but open to members is public.
+    expect(
+      layers(buildRemoraRequest(config, message(place, [MEMBERS]), MEMBERS)),
+    ).toEqual([guild, user]);
+    expect(
+      layers(buildRemoraRequest(config, message(place, [GUILD]), MEMBERS)),
+    ).toEqual([user]);
   });
 
   // Proves a DM uses the person's own bank, and only the trial DM also reads its earlier per-channel bank.

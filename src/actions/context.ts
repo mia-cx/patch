@@ -21,6 +21,7 @@ import type { WebClient } from "../tools/web.js";
 export type ActionPermission =
   | "owner"
   | "delete_messages"
+  | "manage_server"
   | {
       kind: "memory";
       scope: MemoryScope;

@@ -119,7 +119,13 @@ export async function respond(options: RespondOptions): Promise<void> {
     );
     const remora = options.remoraScope
       ? options.remoraScope(message)
-      : buildRemoraRequest(config, message);
+      : buildRemoraRequest(
+          config,
+          message,
+          message.guildId
+            ? actionContext?.settings.getMemberRole(message.guildId)
+            : undefined,
+        );
     let observations: ConversationObservations | undefined;
     if (remora && llm.observationLimits) {
       const store = actionContext?.harness?.store;

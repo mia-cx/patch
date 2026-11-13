@@ -1,4 +1,4 @@
-import { ChannelType, type Message } from "discord.js";
+import { ChannelType, type Message, PermissionsBitField } from "discord.js";
 import type { Config } from "../config.js";
 import { allowsConversation } from "../discord/scope.js";
 import type { RemoraRequest } from "../llm/remora.js";
@@ -15,6 +15,7 @@ export const userBank = (userId: string) => `discord:user:${userId}`;
 export function buildRemoraRequest(
   config: Config,
   message: Message,
+  memberRoleId?: string,
 ): RemoraRequest | undefined {
   if (!message.content.trim() || !allowsConversation(config, message)) return;
 
@@ -50,10 +51,25 @@ export function buildRemoraRequest(
     read_banks: [channel, guild],
     write_bank: channel,
     also_banks: [
-      guild,
+      // Only what the whole server can see reaches the server bank.
+      ...(isPublic(message, memberRoleId) ? [guild] : []),
       // The speaker's layer takes only their own words, never the channel's.
       { bank: user, actor: { bank: channel, role: "human", id: user } },
     ],
     turn,
   };
+}
+
+/**
+ * A channel is public when the server's member role (default @everyone) can view it.
+ * Private threads never are; other threads follow their parent channel.
+ */
+function isPublic(message: Message, memberRoleId: string | undefined) {
+  const { channel, guild } = message;
+  if (!guild || channel.type === ChannelType.PrivateThread) return false;
+  const place = channel.isThread() ? channel.parent : channel;
+  if (!place || !("permissionsFor" in place)) return false;
+  const role =
+    guild.roles.cache.get(memberRoleId ?? guild.id) ?? guild.roles.everyone;
+  return place.permissionsFor(role).has(PermissionsBitField.Flags.ViewChannel);
 }

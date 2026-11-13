@@ -44,10 +44,13 @@ Preserve all old Discord/history records and bank data, without re-extraction or
 Caller mechanics pass 360 tests; full-persona E4B qualification supports bounded recall/correction/erasure/isolation and fetched-page meaning.
 Immutable caller `209603b`/`51eb418` is live with the existing durable cutoffs and principal-wide context boundary.
 Assistant history stays literal; tagged web calls pass the actual E4B caller journey. The earlier E2B search-only failure remains recorded in the [diagnosis](spec/quotes-and-web-diagnosis.md).
-Causal tool exchanges and completed-read reuse keep the three-call ceiling; games remain deferred. See [v2](spec/v2.md).
+A turn allows up to `MAX_TOOL_CALLS` (6) calls in its own `LLM_TOOL_CONTEXT_TOKENS` budget; running out asks for an answer instead of failing. Games remain deferred. See [v2](spec/v2.md).
 
-Mia added only guild `1559060271404945512`, channel `1561529690953490442`, alongside the owner DM.
-Read channel/server banks and write only the channel; the approved DM and exact shared scope are enabled.
+Patch runs in the owner DM and the listed channels of guild `1559060271404945512`.
+Memory is layered. A server message is written to its channel, the speaker's user bank and, only when the
+channel is public, the server bank. Public means the server's member role (default @everyone, set by admins
+with `/member-role`) can view it; private threads never are. Channels read channel + server banks; DMs read
+the speaker's user bank, so DM facts never surface in public. Forgetting a source erases every copy.
 
 Patch's Remora client supports the approved DM and shared scope. Caller-owned history uses real
 user/assistant roles. Incoming turns keep their exact text after a

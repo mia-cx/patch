@@ -108,7 +108,13 @@ export function registerMemoryTools(registry: ActionRegistry) {
           content:
             "please say what you want me to remember in a direct remember request.",
         };
-      const bound = buildRemoraRequest(context.config, message);
+      const bound = buildRemoraRequest(
+        context.config,
+        message,
+        message.guildId
+          ? context.settings.getMemberRole(message.guildId)
+          : undefined,
+      );
       if (
         !bound?.write_bank ||
         bound.write_bank !== context.writeBank ||

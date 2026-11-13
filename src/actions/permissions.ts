@@ -54,6 +54,11 @@ export const authorizeAction: Authorize<ActionContext, ActionPermission> = (
       : { authorized: false, reason: "nope, owner-only." };
   }
   const interaction = invocation.rawEvent;
+  if (permission === "manage_server")
+    return isSlashInteraction(interaction) &&
+      interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)
+      ? { authorized: true }
+      : { authorized: false, reason: "nope, you need Manage Server here." };
   const allowed =
     userId &&
     isSlashInteraction(interaction) &&
