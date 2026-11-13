@@ -10,7 +10,7 @@ export async function deliverFollowups(context: ActionContext) {
     if (
       isScopedTrial(context.config) &&
       job.scope !== context.config.discordTrialDmChannelId &&
-      job.scope !== context.config.discordTrialGuild?.channelId
+      !context.config.discordTrialGuild?.channelIds.includes(job.scope)
     )
       continue;
     await context.queue.add(

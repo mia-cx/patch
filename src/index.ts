@@ -75,8 +75,8 @@ if (config.remoraDmEnabled || config.discordTrialGuild) {
   await memory.initialize(capabilities);
   if (config.discordTrialDmChannelId)
     contextStore.recordMemoryContext(config.discordTrialDmChannelId);
-  if (config.discordTrialGuild)
-    contextStore.recordMemoryContext(config.discordTrialGuild.channelId);
+  for (const channelId of config.discordTrialGuild?.channelIds ?? [])
+    contextStore.recordMemoryContext(channelId);
   const budget = buildResponseContextBudget(
     config,
     config.discordTrialGuild ? "global" : "dm",
@@ -125,9 +125,9 @@ if (llm.observationLimits) {
     ...(config.discordTrialDmChannelId && config.remoraDmEnabled
       ? [`discord:dm:${config.discordTrialDmChannelId}`]
       : []),
-    ...(config.discordTrialGuild
-      ? [`discord:channel:${config.discordTrialGuild.channelId}`]
-      : []),
+    ...(config.discordTrialGuild?.channelIds ?? []).map(
+      (channelId) => `discord:channel:${channelId}`,
+    ),
   ];
   for (const bank of banks)
     actionContext.harness.store.observationCutoff(

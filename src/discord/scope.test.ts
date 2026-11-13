@@ -7,20 +7,22 @@ const env = {
   DISCORD_CLIENT_ID: "1000000000000000001",
   DISCORD_TRIAL_DM_CHANNEL_ID: "1000000000000000002",
   DISCORD_TRIAL_GUILD_ID: "1000000000000000003",
-  DISCORD_TRIAL_GUILD_CHANNEL_ID: "1000000000000000004",
+  DISCORD_TRIAL_GUILD_CHANNEL_ID: "1000000000000000004, 1000000000000000008",
 };
+const [FIRST, SECOND] = ["1000000000000000004", "1000000000000000008"];
 
 describe("scoped Discord conversations", () => {
   // Proves adding a guild channel keeps both places available and every other guild, channel and DM closed.
-  it("opens only the configured DM and exact guild/channel pair", () => {
+  it("opens only the configured DM and listed guild channels", () => {
     const config = loadConfig(env);
     expect(isScopedTrial(config)).toBe(true);
     for (const [channelId, guildId, allowed] of [
       [env.DISCORD_TRIAL_DM_CHANNEL_ID, null, true],
-      [env.DISCORD_TRIAL_GUILD_CHANNEL_ID, env.DISCORD_TRIAL_GUILD_ID, true],
+      [FIRST, env.DISCORD_TRIAL_GUILD_ID, true],
+      [SECOND, env.DISCORD_TRIAL_GUILD_ID, true],
       ["1000000000000000005", env.DISCORD_TRIAL_GUILD_ID, false],
-      [env.DISCORD_TRIAL_GUILD_CHANNEL_ID, "1000000000000000006", false],
-      [env.DISCORD_TRIAL_GUILD_CHANNEL_ID, null, false],
+      [SECOND, "1000000000000000006", false],
+      [FIRST, null, false],
       [env.DISCORD_TRIAL_DM_CHANNEL_ID, env.DISCORD_TRIAL_GUILD_ID, false],
       ["1000000000000000007", null, false],
     ] as const)
@@ -31,6 +33,10 @@ describe("scoped Discord conversations", () => {
   it.each([
     { DISCORD_TRIAL_GUILD_ID: "", DISCORD_TRIAL_GUILD_CHANNEL_ID: "123" },
     { DISCORD_TRIAL_GUILD_ID: "123", DISCORD_TRIAL_GUILD_CHANNEL_ID: "" },
+    {
+      DISCORD_TRIAL_GUILD_ID: "123",
+      DISCORD_TRIAL_GUILD_CHANNEL_ID: "123,,456",
+    },
     {
       DISCORD_TRIAL_GUILD_ID: "not-an-id",
       DISCORD_TRIAL_GUILD_CHANNEL_ID: "123",

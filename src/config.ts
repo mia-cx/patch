@@ -4,7 +4,9 @@ export type Config = {
   discordToken: string;
   discordClientId: string;
   discordTrialDmChannelId: string;
-  discordTrialGuild: { guildId: string; channelId: string } | undefined;
+  discordTrialGuild:
+    | { guildId: string; channelIds: readonly string[] }
+    | undefined;
   llmBaseUrl: string;
   llmModel: string;
   llmApiKey: string;
@@ -55,7 +57,10 @@ const ConfigSchema = Schema.Struct({
   discordTrialGuild: Schema.UndefinedOr(
     Schema.Struct({
       guildId: Schema.String.check(Schema.isPattern(/^\d{1,20}$/)),
-      channelId: Schema.String.check(Schema.isPattern(/^\d{1,20}$/)),
+      /** Opted-in channels, from a comma-separated DISCORD_TRIAL_GUILD_CHANNEL_ID. */
+      channelIds: Schema.Array(
+        Schema.String.check(Schema.isPattern(/^\d{1,20}$/)),
+      ).check(Schema.isMinLength(1)),
     }),
   ),
   llmBaseUrl: Schema.String.check(Schema.isMinLength(1)),
@@ -111,7 +116,9 @@ export function loadConfigEffect(env: NodeJS.ProcessEnv = process.env) {
         env.DISCORD_TRIAL_GUILD_CHANNEL_ID?.trim()
           ? {
               guildId: env.DISCORD_TRIAL_GUILD_ID?.trim() ?? "",
-              channelId: env.DISCORD_TRIAL_GUILD_CHANNEL_ID?.trim() ?? "",
+              channelIds: (env.DISCORD_TRIAL_GUILD_CHANNEL_ID ?? "")
+                .split(",")
+                .map((id) => id.trim()),
             }
           : undefined,
       llmBaseUrl: trimTrailingSlash(

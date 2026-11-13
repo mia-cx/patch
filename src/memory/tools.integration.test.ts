@@ -233,7 +233,10 @@ it("clarifies ambiguous targets and enforces shared-bank management permissions"
     configurable: true,
   });
   app.message.content = "forget evidence #1";
-  app.context.config.discordTrialGuild = { guildId: "123", channelId: CHANNEL };
+  app.context.config.discordTrialGuild = {
+    guildId: "123",
+    channelIds: [CHANNEL],
+  };
   app.context.readBanks = [`discord:channel:${CHANNEL}`, "discord:guild:123"];
   await expect(
     app.dispatch("memory_forget", {

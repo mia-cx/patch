@@ -16,7 +16,7 @@ export function buildRemoraRequest(
     message.guildId &&
     config.discordTrialGuild &&
     message.guildId === config.discordTrialGuild.guildId &&
-    message.channelId === config.discordTrialGuild.channelId;
+    config.discordTrialGuild.channelIds.includes(message.channelId);
   if (!personal && !shared) return;
   const bank = `discord:${personal ? "dm" : "channel"}:${message.channelId}`;
   return {

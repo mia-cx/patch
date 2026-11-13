@@ -1790,7 +1790,7 @@ describe("complete harness with the actual Discord SDK", () => {
   it("uses shared banks and preserves speakers in the configured guild channel", async () => {
     const app = await runtime(true, true);
     app.config.discordTrialDmChannelId = "1000000000000000090";
-    app.config.discordTrialGuild = { guildId: GUILD, channelId: CHANNEL };
+    app.config.discordTrialGuild = { guildId: GUILD, channelIds: [CHANNEL] };
     app.config.remoraReadBanks = ["discord:dm:private"];
     app.complete
       .mockResolvedValueOnce({
@@ -2573,7 +2573,7 @@ describe("complete harness with the actual Discord SDK", () => {
         : CHANNEL;
       app.config.discordTrialGuild = {
         guildId: GUILD,
-        channelId: guild ? CHANNEL : "1000000000000000091",
+        channelIds: [guild ? CHANNEL : "1000000000000000091"],
       };
       app.store.schedule(CHANNEL, 2000, "checking in", 1000);
       app.store.schedule("1000000000000000092", 2000, "out of scope", 1000);
