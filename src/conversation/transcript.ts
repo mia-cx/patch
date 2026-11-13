@@ -52,6 +52,7 @@ export function buildTranscript(
  * Render history in the voice LoRA's chat format: each human or bot message is a
  * `user` turn `DisplayName [username]: text`, and Patch's messages are plain
  * `assistant` turns. The current message goes last, after `beforeCurrent` notes.
+ * A reply Patch already gave appears only once.
  *
  * With source callbacks, human text keeps an exact literal span for memory
  * evidence; the speaker prefix and attachment lines are unattributed frame text.
@@ -74,10 +75,27 @@ export function formatTranscriptMessages(
     (block) => block.id === currentMessageId,
   );
   return [
-    ...transcript.blocks.filter((block) => block !== current).map(render),
+    ...withoutRepeatedReplies(transcript.blocks)
+      .filter((block) => block !== current)
+      .map(render),
     ...beforeCurrent.map((content) => ({ role: "user" as const, content })),
     ...(current ? [render(current)] : []),
   ];
+}
+
+/**
+ * Drop Patch's replies that repeat an earlier one word for word. The voice model
+ * copies a reply it sees repeated, so two copies in history turn into a loop.
+ */
+function withoutRepeatedReplies(blocks: TranscriptBlock[]) {
+  const said = new Set<string>();
+  return blocks.filter((block) => {
+    if (block.kind !== "response") return true;
+    const text = block.content.trim().toLowerCase();
+    if (said.has(text)) return false;
+    said.add(text);
+    return true;
+  });
 }
 
 function formatMessage(

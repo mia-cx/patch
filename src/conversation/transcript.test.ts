@@ -133,6 +133,34 @@ describe("formatTranscriptMessages", () => {
       },
     ]);
   });
+  // Proves a reply Patch already gave stays in history once: the voice model copies repeated replies into a loop.
+  it("keeps only the first of Patch's identical replies", () => {
+    const patch = { authorId: "patch", authorIsBot: true } as const;
+    const mia = { authorId: "mia", authorName: "Mia" } as const;
+    const transcript = buildTranscript(
+      [
+        message({ id: "1", ...mia, content: "who is your favourite artist?" }),
+        message({ id: "2", ...patch, content: "i love underscores" }),
+        message({ id: "3", ...mia, content: "does she make house music?" }),
+        message({ id: "4", ...patch, content: "I love underscores " }),
+        message({
+          id: "5",
+          ...mia,
+          content: "does underscores make house music?",
+        }),
+      ],
+      "patch",
+    );
+
+    expect(
+      formatTranscriptMessages(transcript, "5").map(({ content }) => content),
+    ).toEqual([
+      "Mia [mia]: who is your favourite artist?",
+      "i love underscores",
+      "Mia [mia]: does she make house music?",
+      "Mia [mia]: does underscores make house music?",
+    ]);
+  });
 });
 
 function message(
