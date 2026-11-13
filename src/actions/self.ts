@@ -174,11 +174,8 @@ async function add(
   const lines = [
     `saved #${receipt.saved_ids.join(", #")}${receipt.replayed ? " (already saved)" : ""}:`,
     ...receipt.atoms.map((atom) => `- ${atom}`),
-    ...(receipt.dropped.length
-      ? [
-          "not about her, so not kept:",
-          ...receipt.dropped.map((atom) => `- ${atom}`),
-        ]
+    ...(receipt.context.length
+      ? ["context:", ...receipt.context.map((atom) => `- ${atom}`)]
       : []),
   ];
   return clip(lines.join("\n"));

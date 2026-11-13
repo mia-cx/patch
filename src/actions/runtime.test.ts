@@ -1268,7 +1268,7 @@ describe("Patch's self memory", () => {
           active_ids: [7],
           status: "saved",
           atoms: ["Patch likes teal."],
-          dropped: [],
+          context: ["Teal is a blue-green colour."],
           subject: "c".repeat(64),
           linked: [],
           replayed: false,
@@ -1371,7 +1371,8 @@ describe("Patch's self memory", () => {
       expect.anything(),
       expect.objectContaining({
         body: expect.objectContaining({
-          content: "saved #7:\n- Patch likes teal.",
+          content:
+            "saved #7:\n- Patch likes teal.\ncontext:\n- Teal is a blue-green colour.",
         }),
       }),
     );

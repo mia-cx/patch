@@ -48,7 +48,7 @@ export const SelfStatementReceiptSchema = Schema.Struct({
   /** The standalone statements stored about Patch. */
   atoms: Schema.Array(Schema.String),
   /** Atoms that did not name Patch, and so were not kept. */
-  dropped: Schema.Array(Schema.String),
+  context: Schema.Array(Schema.String),
   /** The self entity's identity digest every kept atom is bound to. */
   subject: Digest,
   linked: Schema.Array(Id),
