@@ -115,8 +115,15 @@ export function registerMemoryTools(registry: ActionRegistry) {
         !context.readBanks?.includes(bound.write_bank)
       )
         throw new Error("No authorized memory write destination");
+      // The same layers as an ordinary turn: a server save also reaches the server and the speaker.
+      const layers = (bound.also_banks ?? []).map((layer) =>
+        typeof layer === "string" ? layer : layer.bank,
+      );
       const receipt = await context.memory.save({
         bank: bound.write_bank,
+        ...(layers.length && context.memory.maxLayers >= layers.length
+          ? { also_banks: layers }
+          : {}),
         request_id: digest([
           "memory_save",
           message.id,

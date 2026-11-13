@@ -7,28 +7,28 @@
   "schema_scope": "Runtime-derived structural JSON Schemas plus the listed permission, Unicode-scalar, source binding, timestamp validity, receipt-ID equality and policy invariants. JSON Schema alone does not grant permission or prove these cross-field invariants.",
   "provenance": {
     "patch": {
-      "commit": "fe3818e7678ded480a2b85cd567ff645e63ca68b",
+      "commit": "b90abd612f07dbdb039f62817b021f7a6ef818c3",
       "files": {
-        "src/actions/memory-tools.ts": "94846889a40886297c601cb8a1c69cfc088dcbf09d525f3f76e41a22f7d6eaa6",
+        "src/actions/memory-tools.ts": "1f34df89ee80b984ec9fb0a6b0beaa6af2c560714d7f76a5f6135696141e173c",
         "src/actions/tool-calls.ts": "89c2a4cfc163b62b4ac88171dd0ce81af31301eaa0ce65f2e8de7bf9b5f71c31",
         "src/actions/action-context.ts": "df0db8c51265b50969b13aad679e69e29f64452887f4fcad94e373a6c3b7b627",
-        "src/memory/client.ts": "db24ba79b4004488e510f67fffc4a0ae525517daecc9eeed277f107303c4d9c5",
-        "src/memory/save.ts": "bfaea482854b02b41de71e87db8b13d65bcf8f87568e4130ce1221dd98bda3f9",
+        "src/memory/client.ts": "45f4ffec568283cbe10d50dd859250a466d4575bca15f506fffbfd0060ef1a7d",
+        "src/memory/save.ts": "e4fb87daf5cf3aef301754c2e2f712b4813a2f6356df23a46da3c37e9173d1bf",
         "src/memory/tool-contract.ts": "df366901149c93170224ab1f65e26c1950e7649753df4c91a922618eb65cbcbd",
         "src/memory/journal.ts": "c7291848559e34103aaccaa186bba238376bea46ffc34ee75758e32752af8661",
         "src/tools/turn.ts": "5b90deb63931af4327bd661fec637f20246205f879a50a4a597e12799acda313",
-        "src/response/responder.ts": "c62316f88f92f72f81c0c4784e72ec601153bf0c579d23e54d6382d2c592e875",
-        "src/memory/tools.integration.test.ts": "b1ef81293b02dbfa234b6640e16db227a5dd34f09d5e437b39eb831c153da854"
+        "src/response/responder.ts": "d35ca5dab2f5cc159541c90fdfc62010c5e7547c491580c601deeb39b2bf0ee4",
+        "src/memory/tools.integration.test.ts": "89218d7a21002bc0ea138b31c8424d23c84736275918b3ccc5acb5e6ee359d6a"
       }
     },
     "remora": {
-      "commit": "8bd14c950115ffcd55022181145702939ec9ccec",
+      "commit": "16403ee1512db28ac2d46432026edc8331066a49",
       "files": {
-        "src/ardm/explicit_save.py": "640ebac630f9f5b55c867754043cd81733644ab82780eeacdd53981c15bdfba1",
+        "src/ardm/explicit_save.py": "57a7f768f5b9833ab52503e62ca98cf120ef846a941bfba765011d30eabc2c42",
         "src/ardm/evidence_memory.py": "66450a8bf55556d3bd899331404f16fac47c5fc169a0d5cfc482dd290e3d49ec",
         "src/ardm/evidence_parents.py": "0078007382ad4a96be184aeb913d50c3d43b8a9cec309205b0044cfbcbf13bfc",
-        "src/ardm/api.py": "9fcc121285f15476609b6d524793156f8c9412b2a7e3ea49e99e990f46b3f3cf",
-        "tests/test_explicit_save.py": "8aacaa8ea249eccd734b050148c3eeb455602c6e2e8d3063503a592856979363"
+        "src/ardm/api.py": "5c97a200cd9ca9ee1c06609c9ae03938878a2a22a2b90f562b952e236a37a9d9",
+        "tests/test_explicit_save.py": "b921c8bd10a1519a48f185cccb4cb752a92538671499e7b7d516ae8b4ebe24d3"
       }
     },
     "fixture_test": "src/memory/tools.integration.test.ts",
@@ -140,6 +140,32 @@
             },
             {
               "maxLength": 256
+            }
+          ]
+        },
+        "also_banks": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "\\S"
+                  },
+                  {
+                    "maxLength": 256
+                  }
+                ]
+              },
+              "allOf": [
+                {
+                  "maxItems": 4
+                }
+              ]
+            },
+            {
+              "type": "null"
             }
           ]
         },
@@ -455,6 +481,77 @@
         },
         "replayed": {
           "type": "boolean"
+        },
+        "copies": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "bank": {
+                    "type": "string",
+                    "allOf": [
+                      {
+                        "pattern": "\\S"
+                      },
+                      {
+                        "maxLength": 256
+                      }
+                    ]
+                  },
+                  "saved_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "allOf": [
+                        {
+                          "exclusiveMinimum": 0
+                        },
+                        {
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    },
+                    "allOf": [
+                      {
+                        "maxItems": 1
+                      }
+                    ]
+                  },
+                  "active_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "allOf": [
+                        {
+                          "exclusiveMinimum": 0
+                        },
+                        {
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    },
+                    "allOf": [
+                      {
+                        "maxItems": 1
+                      }
+                    ]
+                  }
+                },
+                "required": ["bank", "saved_ids", "active_ids"],
+                "additionalProperties": false
+              },
+              "allOf": [
+                {
+                  "maxItems": 4
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "admission_identity": {
           "type": "string",
@@ -786,6 +883,77 @@
                     },
                     "replayed": {
                       "type": "boolean"
+                    },
+                    "copies": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "bank": {
+                                "type": "string",
+                                "allOf": [
+                                  {
+                                    "pattern": "\\S"
+                                  },
+                                  {
+                                    "maxLength": 256
+                                  }
+                                ]
+                              },
+                              "saved_ids": {
+                                "type": "array",
+                                "items": {
+                                  "type": "integer",
+                                  "allOf": [
+                                    {
+                                      "exclusiveMinimum": 0
+                                    },
+                                    {
+                                      "maximum": 9007199254740991
+                                    }
+                                  ]
+                                },
+                                "allOf": [
+                                  {
+                                    "maxItems": 1
+                                  }
+                                ]
+                              },
+                              "active_ids": {
+                                "type": "array",
+                                "items": {
+                                  "type": "integer",
+                                  "allOf": [
+                                    {
+                                      "exclusiveMinimum": 0
+                                    },
+                                    {
+                                      "maximum": 9007199254740991
+                                    }
+                                  ]
+                                },
+                                "allOf": [
+                                  {
+                                    "maxItems": 1
+                                  }
+                                ]
+                              }
+                            },
+                            "required": ["bank", "saved_ids", "active_ids"],
+                            "additionalProperties": false
+                          },
+                          "allOf": [
+                            {
+                              "maxItems": 4
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "admission_identity": {
                       "type": "string",
@@ -1441,6 +1609,77 @@
                         },
                         "replayed": {
                           "type": "boolean"
+                        },
+                        "copies": {
+                          "anyOf": [
+                            {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "bank": {
+                                    "type": "string",
+                                    "allOf": [
+                                      {
+                                        "pattern": "\\S"
+                                      },
+                                      {
+                                        "maxLength": 256
+                                      }
+                                    ]
+                                  },
+                                  "saved_ids": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "integer",
+                                      "allOf": [
+                                        {
+                                          "exclusiveMinimum": 0
+                                        },
+                                        {
+                                          "maximum": 9007199254740991
+                                        }
+                                      ]
+                                    },
+                                    "allOf": [
+                                      {
+                                        "maxItems": 1
+                                      }
+                                    ]
+                                  },
+                                  "active_ids": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "integer",
+                                      "allOf": [
+                                        {
+                                          "exclusiveMinimum": 0
+                                        },
+                                        {
+                                          "maximum": 9007199254740991
+                                        }
+                                      ]
+                                    },
+                                    "allOf": [
+                                      {
+                                        "maxItems": 1
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": ["bank", "saved_ids", "active_ids"],
+                                "additionalProperties": false
+                              },
+                              "allOf": [
+                                {
+                                  "maxItems": 4
+                                }
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "admission_identity": {
                           "type": "string",
@@ -2114,6 +2353,81 @@
                             },
                             "replayed": {
                               "type": "boolean"
+                            },
+                            "copies": {
+                              "anyOf": [
+                                {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "bank": {
+                                        "type": "string",
+                                        "allOf": [
+                                          {
+                                            "pattern": "\\S"
+                                          },
+                                          {
+                                            "maxLength": 256
+                                          }
+                                        ]
+                                      },
+                                      "saved_ids": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "integer",
+                                          "allOf": [
+                                            {
+                                              "exclusiveMinimum": 0
+                                            },
+                                            {
+                                              "maximum": 9007199254740991
+                                            }
+                                          ]
+                                        },
+                                        "allOf": [
+                                          {
+                                            "maxItems": 1
+                                          }
+                                        ]
+                                      },
+                                      "active_ids": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "integer",
+                                          "allOf": [
+                                            {
+                                              "exclusiveMinimum": 0
+                                            },
+                                            {
+                                              "maximum": 9007199254740991
+                                            }
+                                          ]
+                                        },
+                                        "allOf": [
+                                          {
+                                            "maxItems": 1
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "bank",
+                                      "saved_ids",
+                                      "active_ids"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "allOf": [
+                                    {
+                                      "maxItems": 4
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             },
                             "admission_identity": {
                               "type": "string",
@@ -2842,6 +3156,81 @@
                                 "replayed": {
                                   "type": "boolean"
                                 },
+                                "copies": {
+                                  "anyOf": [
+                                    {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "bank": {
+                                            "type": "string",
+                                            "allOf": [
+                                              {
+                                                "pattern": "\\S"
+                                              },
+                                              {
+                                                "maxLength": 256
+                                              }
+                                            ]
+                                          },
+                                          "saved_ids": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "integer",
+                                              "allOf": [
+                                                {
+                                                  "exclusiveMinimum": 0
+                                                },
+                                                {
+                                                  "maximum": 9007199254740991
+                                                }
+                                              ]
+                                            },
+                                            "allOf": [
+                                              {
+                                                "maxItems": 1
+                                              }
+                                            ]
+                                          },
+                                          "active_ids": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "integer",
+                                              "allOf": [
+                                                {
+                                                  "exclusiveMinimum": 0
+                                                },
+                                                {
+                                                  "maximum": 9007199254740991
+                                                }
+                                              ]
+                                            },
+                                            "allOf": [
+                                              {
+                                                "maxItems": 1
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "bank",
+                                          "saved_ids",
+                                          "active_ids"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "allOf": [
+                                        {
+                                          "maxItems": 4
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "admission_identity": {
                                   "type": "string",
                                   "enum": [
@@ -3358,7 +3747,7 @@
         "receipt": {
           "object": "remora.memory.save",
           "version": 1,
-          "bank": "discord:dm:1000000000000000001",
+          "bank": "discord:user:1000000000000000002",
           "request_id": "aaf6d36a573bf3ed68b80d798947e8531e7f99f846786b699dd2ad87e2b88ad5",
           "kind": "evidence",
           "source": {
@@ -3368,7 +3757,7 @@
             "actor": {
               "principal": "caller",
               "actor": {
-                "bank": "discord:dm:1000000000000000001",
+                "bank": "discord:user:1000000000000000002",
                 "role": "human",
                 "id": "discord:user:1000000000000000002"
               },
@@ -3397,7 +3786,7 @@
         "receipt": {
           "object": "remora.memory.save",
           "version": 1,
-          "bank": "discord:dm:1000000000000000001",
+          "bank": "discord:user:1000000000000000002",
           "request_id": "aaf6d36a573bf3ed68b80d798947e8531e7f99f846786b699dd2ad87e2b88ad5",
           "kind": "evidence",
           "source": {
@@ -3407,7 +3796,7 @@
             "actor": {
               "principal": "caller",
               "actor": {
-                "bank": "discord:dm:1000000000000000001",
+                "bank": "discord:user:1000000000000000002",
                 "role": "human",
                 "id": "discord:user:1000000000000000002"
               },
@@ -3456,16 +3845,16 @@
           "receipt": {
             "object": "remora.evidence.mutation",
             "version": 1,
-            "bank": "discord:dm:1000000000000000001",
+            "bank": "discord:user:1000000000000000002",
             "operation": "forget",
             "request_id": "6933e111fe0be52804dba9e5d6d5d6a04dfab553198c4ccc050259a4765b7853",
             "deleted_ids": [1],
             "deleted_count": 1,
             "dependent_suppression": {
-              "bank": "discord:dm:1000000000000000001",
+              "bank": "discord:user:1000000000000000002",
               "visible_active_count": 0
             },
-            "revision": "c861f75bdd79c1c78cde6327cc7bb2f06b59ad7e186688c341d22bdd13133844",
+            "revision": "e2cba56fb04c0b2d15dea2d58700ffe5d285e59e39e1fb0d146eb68ee7d4d137",
             "replayed": false,
             "cache_invalidated": true,
             "reset_required": true
@@ -3483,16 +3872,16 @@
         "receipt": {
           "object": "remora.evidence.mutation",
           "version": 1,
-          "bank": "discord:dm:1000000000000000001",
+          "bank": "discord:user:1000000000000000002",
           "operation": "forget",
           "request_id": "6933e111fe0be52804dba9e5d6d5d6a04dfab553198c4ccc050259a4765b7853",
           "deleted_ids": [1],
           "deleted_count": 1,
           "dependent_suppression": {
-            "bank": "discord:dm:1000000000000000001",
+            "bank": "discord:user:1000000000000000002",
             "visible_active_count": 0
           },
-          "revision": "c861f75bdd79c1c78cde6327cc7bb2f06b59ad7e186688c341d22bdd13133844",
+          "revision": "e2cba56fb04c0b2d15dea2d58700ffe5d285e59e39e1fb0d146eb68ee7d4d137",
           "replayed": true,
           "cache_invalidated": true,
           "reset_required": true
@@ -3508,7 +3897,7 @@
         "receipt": {
           "object": "remora.memory.save",
           "version": 1,
-          "bank": "discord:dm:1000000000000000001",
+          "bank": "discord:user:1000000000000000002",
           "request_id": "aaf6d36a573bf3ed68b80d798947e8531e7f99f846786b699dd2ad87e2b88ad5",
           "kind": "evidence",
           "source": {
@@ -3518,7 +3907,7 @@
             "actor": {
               "principal": "caller",
               "actor": {
-                "bank": "discord:dm:1000000000000000001",
+                "bank": "discord:user:1000000000000000002",
                 "role": "human",
                 "id": "discord:user:1000000000000000002"
               },

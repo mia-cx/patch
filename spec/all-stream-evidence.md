@@ -22,6 +22,17 @@ Requests carry `read_banks`, scoped `speaker` and `observations`. Legacy `turn`,
 `write_bank` and identity declarations are absent. Remora derives the principal.
 The older base fact/search/name contract remains unchanged.
 
+## Layered banks
+
+A server-channel message is written to `discord:channel:<id>`, `discord:guild:<id>` and
+the speaker's `discord:user:<id>`, and reads only the channel and server banks, so a DM
+fact never surfaces in public. The batch runs in the channel bank and names the other
+layers in `observations.also_banks` (Remora `features.also_banks`); the user layer is
+`{bank, actor}`, so it receives only that speaker's own words. A DM reads and writes the
+speaker's user bank; the trial DM also reads its earlier `discord:dm:<channel>` bank,
+which receives nothing new. `/memory` personal scope is the user bank. Explicit saves
+name the same layers, and forgetting a source in any layer erases every copy in Remora.
+
 ## Source identity and rendering
 
 Actual SDK text supplies `discord:message:<id>` at its edited timestamp or zero.

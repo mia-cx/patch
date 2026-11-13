@@ -182,10 +182,16 @@ export class RemoraMemoryClient {
   private searchLimits: MemorySearchLimits | undefined;
   private evidence = false;
   private saveChars: number | undefined;
+  private layers: number | undefined;
 
   /** Explicit writes require their own negotiated endpoint; automatic writes do not imply support. */
   get supportsSave() {
     return this.saveChars !== undefined;
+  }
+
+  /** How many extra layers one save may name; 0 when the backend writes one bank only. */
+  get maxLayers() {
+    return this.layers ?? 0;
   }
 
   get supportsManagement() {
@@ -206,6 +212,7 @@ export class RemoraMemoryClient {
     this.searchLimits = undefined;
     this.evidence = false;
     this.saveChars = undefined;
+    this.layers = undefined;
     const caps =
       capabilities ??
       parseRemoraCapabilities(await this.request("/remora/capabilities"));
@@ -252,6 +259,7 @@ export class RemoraMemoryClient {
     this.evidence = caps.features.all_stream_evidence === true;
     if (caps.features.explicit_memory_save)
       this.saveChars = caps.limits.max_explicit_memory_chars;
+    if (caps.features.also_banks) this.layers = caps.limits.max_also_banks;
     return caps;
   }
 
@@ -270,9 +278,12 @@ export class RemoraMemoryClient {
     const input = Schema.decodeUnknownSync(MemorySaveRequestSchema, {
       onExcessProperty: "error",
     })(request);
+    const layers = input.also_banks ?? [];
     if (
       Array.from(input.source.text).length > this.saveChars ||
-      !Number.isFinite(Date.parse(input.source.observed_at))
+      !Number.isFinite(Date.parse(input.source.observed_at)) ||
+      layers.length > this.maxLayers ||
+      new Set([input.bank, ...layers]).size !== layers.length + 1
     )
       throw new MemoryManagementError("invalid_parameter");
     const receipt = await this.evidenceRequest(
@@ -297,7 +308,9 @@ export class RemoraMemoryClient {
       (receipt.status === "saved"
         ? JSON.stringify(receipt.active_ids) !==
           JSON.stringify(receipt.saved_ids)
-        : receipt.active_ids.length !== 0)
+        : receipt.active_ids.length !== 0) ||
+      JSON.stringify(receipt.copies?.map((copy) => copy.bank) ?? []) !==
+        JSON.stringify(layers)
     )
       throw new MemoryManagementError("invalid_response");
     return receipt;

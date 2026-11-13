@@ -102,6 +102,15 @@ const Batch = Schema.Struct({
   labels: Schema.optional(
     Schema.Array(Schema.Struct({ actor: Actor, label: Schema.String })),
   ),
+  /** Layers that receive a copy of every admitted record; `{ bank, actor }` takes only that actor's. */
+  also_banks: Schema.optional(
+    Schema.Array(
+      Schema.Union([
+        EvidenceIdText,
+        Schema.Struct({ bank: EvidenceIdText, actor: Actor }),
+      ]),
+    ).check(Schema.isMaxLength(4)),
+  ),
 });
 
 /** Exact advertised values from the independent frozen companion, not legacy defaults. */
@@ -115,6 +124,8 @@ export const ObservationLimitsSchema = Schema.Struct({
   /** Present only when the backend advertises `observation_labels`. */
   max_observation_labels: Schema.optional(EvidenceId),
   max_observation_label_chars: Schema.optional(EvidenceId),
+  /** Present only when the backend advertises `also_banks`. */
+  max_also_banks: Schema.optional(EvidenceId),
 });
 export type ObservationLimits = typeof ObservationLimitsSchema.Type;
 export type ObservationBatch = typeof Batch.Type;
@@ -193,6 +204,18 @@ export const ObservationResponseSchema = Schema.Struct({
     Schema.String.check(Schema.isPattern(/^generation-[0-9a-f]{32}$/u)),
   ),
   input_replayed: Schema.Boolean,
+  /** One receipt per layer and admitted source when the batch named `also_banks`. */
+  copies: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        bank: EvidenceIdText,
+        source_id: EvidenceIdText,
+        revision: EvidenceIndex,
+        saved: Schema.Array(EvidenceId).check(Schema.isMaxLength(64)),
+        replayed: Schema.Boolean,
+      }),
+    ).check(Schema.isMaxLength(1024)),
+  ),
 });
 export type ObservationResponse = typeof ObservationResponseSchema.Type;
 
@@ -334,6 +357,21 @@ export function validateObservationBatch(
       batch.generated.actor.role !== "assistant")
   )
     throw new Error("Invalid generated observation actor");
+  if (batch.also_banks?.length) {
+    const banks = batch.also_banks.map((layer) =>
+      typeof layer === "string" ? layer : layer.bank,
+    );
+    if (
+      !limits.max_also_banks ||
+      banks.length > limits.max_also_banks ||
+      new Set(banks).size !== banks.length ||
+      banks.includes(batch.bank) ||
+      batch.also_banks.some(
+        (layer) => typeof layer !== "string" && layer.actor.bank !== batch.bank,
+      )
+    )
+      throw new Error("Invalid observation layers");
+  }
   const occupied = new Map<number, Array<{ start: number; end: number }>>();
   let views = 0;
   let total = 0;

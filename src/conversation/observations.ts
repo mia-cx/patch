@@ -562,6 +562,9 @@ export class ConversationObservations {
             ),
           }
         : {}),
+      ...(limits.max_also_banks && remora.also_banks?.length
+        ? { also_banks: remora.also_banks }
+        : {}),
     };
     validateObservationBatch(observations, messages, limits);
     this.consumed = this.consumedSources(observations);

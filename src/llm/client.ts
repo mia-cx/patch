@@ -244,6 +244,8 @@ export class LlmClient {
   }
 
   async complete(request: LlmRequest): Promise<LlmResponse> {
+    if (request.remora?.also_banks)
+      throw new Error("Remora layers travel inside the observation batch");
     if (
       this.evidenceLimits &&
       (request.remora?.turn ||

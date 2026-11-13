@@ -665,7 +665,7 @@ describe("Patch's Protocord integration", () => {
     });
   });
 
-  // Proves a private guild invocation resolves only the caller's DM and never posts memory content publicly.
+  // Proves a private guild invocation resolves only the caller's own bank and never posts memory content publicly.
   it("inspects personal memories from a guild through the actual SDK's own-DM lookup", async () => {
     const app = await runtime(false);
     const dm = "1000000000000000020";
@@ -687,11 +687,13 @@ describe("Patch's Protocord integration", () => {
     });
     const fetch = vi.fn(async (url: string) => {
       if (url.endsWith("/capabilities")) return Response.json(managementCaps);
-      expect(new URL(url).searchParams.get("bank")).toBe(`discord:dm:${dm}`);
+      expect(new URL(url).searchParams.get("bank")).toBe(
+        `discord:user:${MEMBER}`,
+      );
       return Response.json({
         object: "remora.memory.list",
         version: 1,
-        bank: `discord:dm:${dm}`,
+        bank: `discord:user:${MEMBER}`,
         revision: REVISION,
         data: [
           {

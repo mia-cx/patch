@@ -1113,8 +1113,8 @@ describe("opt-in Remora DM conversations", () => {
     expect(requests).toHaveLength(3);
     const first = requests[0];
     expect(first?.remora).toEqual({
-      read_banks: [`discord:dm:${CHANNEL}`, "shared:music"],
-      write_bank: `discord:dm:${CHANNEL}`,
+      read_banks: [`discord:user:${HUMAN}`, "shared:music"],
+      write_bank: `discord:user:${HUMAN}`,
       turn: {
         id: `discord:message:${packet(2).id}`,
         revision: 0,

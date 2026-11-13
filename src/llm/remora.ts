@@ -33,6 +33,11 @@ export type RemoraRequest = {
   identity?: RemoraIdentity;
   /** Separate source-view persistence, negotiated independently from legacy turn writes. */
   observations?: ObservationBatch;
+  /**
+   * Layers that also receive what this turn's batch admits; moved into the batch,
+   * never sent beside it. A `{ bank, actor }` layer takes only that actor's words.
+   */
+  also_banks?: ObservationBatch["also_banks"];
   turn?: {
     id: string;
     revision: number;
@@ -185,6 +190,7 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     memory_management: Schema.optional(Schema.Boolean),
     memory_search: Schema.optional(Schema.Boolean),
     explicit_memory_save: Schema.optional(Schema.Boolean),
+    also_banks: Schema.optional(Schema.Boolean),
     all_stream_evidence: Schema.optional(Schema.Boolean),
     source_references: Schema.optional(Schema.Boolean),
     observation_labels: Schema.optional(Schema.Boolean),
@@ -196,6 +202,9 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     context_tokens: PositiveInteger,
     max_output_tokens: PositiveInteger,
     max_read_banks: Schema.Literal(8),
+    max_also_banks: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(4)),
+    ),
     max_explicit_memory_chars: Schema.optional(
       PositiveInteger.check(Schema.isLessThanOrEqualTo(4096)),
     ),

@@ -472,7 +472,7 @@ describe("complete harness with the actual Discord SDK", () => {
       expect(
         app.store.generation(
           observationNamespace(app.config.llmBaseUrl, app.config.llmApiKey),
-          `discord:dm:${CHANNEL}`,
+          `discord:user:${HUMAN}`,
           `generation-${String(index + 1).padStart(32, "0")}:output`,
         )?.text,
       ).toBe(output);
@@ -660,7 +660,7 @@ describe("complete harness with the actual Discord SDK", () => {
         const revise = () =>
           app.store.advanceObservationRevision(
             observationNamespace(app.config.llmBaseUrl, app.config.llmApiKey),
-            `discord:dm:${CHANNEL}`,
+            `discord:user:${HUMAN}`,
             `discord:message:${CURRENT}`,
             1,
           );
@@ -782,7 +782,7 @@ describe("complete harness with the actual Discord SDK", () => {
           remora: {
             version: 1,
             backend: "transformers",
-            read_banks: [`discord:dm:${CHANNEL}`],
+            read_banks: [`discord:user:${HUMAN}`],
             selected: [],
             writes: null,
             cache: {
@@ -1141,7 +1141,7 @@ describe("complete harness with the actual Discord SDK", () => {
     app.config.llmTemperature = 0;
     app.config.remoraObservationStartId = "1000000000000000000";
     app.config.llmMaxTokens = 256;
-    const bank = `discord:dm:${CHANNEL}`;
+    const bank = `discord:user:${HUMAN}`;
     const history = [toConversationMessage(app.message, BOT)];
     const sent: ReturnType<typeof app.packet>[] = [];
     const originalGet = app.rest.get.getMockImplementation();
@@ -1320,7 +1320,7 @@ describe("complete harness with the actual Discord SDK", () => {
     app.config.llmTemperature = 0;
     app.config.remoraObservationStartId = "1000000000000000000";
     app.message.content = `  <@${BOT}> A😀 & <response>raw</response>\r\n`;
-    const bank = `discord:dm:${CHANNEL}`;
+    const bank = `discord:user:${HUMAN}`;
     const requests: Array<{
       messages: Array<{ role: string; content: string }>;
       remora: { observations: ObservationBatch; read_banks: string[] };
@@ -1885,7 +1885,7 @@ describe("complete harness with the actual Discord SDK", () => {
         },
       }),
     );
-    const bank = `discord:dm:${CHANNEL}`;
+    const bank = `discord:user:${HUMAN}`;
     const marker = `@{${"a".repeat(64)}}`;
     const hit = {
       bank,
@@ -2338,7 +2338,7 @@ describe("complete harness with the actual Discord SDK", () => {
         expect(request.remora?.write_bank).toBeUndefined();
         expect(request.remora?.turn).toBeUndefined();
         expect(request.remora?.speaker).toEqual({
-          bank: `discord:dm:${CHANNEL}`,
+          bank: `discord:user:${HUMAN}`,
           id: `discord:user:${HUMAN}`,
         });
         expect(request.messages).toContainEqual({

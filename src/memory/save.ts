@@ -12,6 +12,8 @@ const Id = Schema.Int.check(
 );
 export const MemorySaveRequestSchema = Schema.Struct({
   bank: Text,
+  /** Further layers that receive the same save, e.g. the server and the speaker's own bank. */
+  also_banks: Schema.optional(Schema.Array(Text).check(Schema.isMaxLength(4))),
   request_id: Text,
   source: Schema.Struct({
     id: Text,
@@ -51,6 +53,16 @@ export const MemorySaveReceiptSchema = Schema.Struct({
   active_ids: Schema.Array(Id).check(Schema.isMaxLength(1)),
   status: Schema.Literals(["saved", "forgotten"]),
   replayed: Schema.Boolean,
+  /** One entry per requested layer, in order; present only when the request named layers. */
+  copies: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        bank: Text,
+        saved_ids: Schema.Array(Id).check(Schema.isMaxLength(1)),
+        active_ids: Schema.Array(Id).check(Schema.isMaxLength(1)),
+      }),
+    ).check(Schema.isMaxLength(4)),
+  ),
   admission_identity: Schema.Literal(
     createHash("sha256")
       .update(JSON.stringify("explicit-human-save-v1"))

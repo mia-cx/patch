@@ -24,16 +24,16 @@ describe("Discord memory scopes", () => {
     expect(failure === undefined).toBe(allowed);
   });
 
-  // Proves personal scope in a server resolves the invoking user's DM, never that server/channel.
+  // Proves personal scope in a server resolves the invoking user's own bank, never that server/channel.
   it("resolves the invoking user's personal bank in any context", async () => {
     const createDM = vi.fn(async () => ({ id: "own-dm" }));
     const bank = await resolveMemoryBank("personal", {
       guildId: "server",
       channelId: "public-channel",
       channel: { type: ChannelType.GuildText },
-      user: { createDM },
+      user: { id: "me", createDM },
     });
-    expect(bank.bank).toBe("discord:dm:own-dm");
+    expect(bank.bank).toBe("discord:user:me");
     expect(bank.channelId).toBe("own-dm");
     expect(createDM).toHaveBeenCalledOnce();
   });
@@ -45,10 +45,10 @@ describe("Discord memory scopes", () => {
       guildId: null,
       channelId: "own-dm",
       channel: { type: ChannelType.DM },
-      user: { createDM },
+      user: { id: "me", createDM },
     };
     expect((await resolveMemoryBank("personal", interaction)).bank).toBe(
-      "discord:dm:own-dm",
+      "discord:user:me",
     );
     await expect(resolveMemoryBank("server", interaction)).rejects.toThrow();
     expect(createDM).not.toHaveBeenCalled();
@@ -60,7 +60,7 @@ describe("Discord memory scopes", () => {
       guildId: "server",
       channelId: "channel",
       channel: { type: ChannelType.GuildText },
-      user: { createDM: vi.fn(async () => ({ id: "unused" })) },
+      user: { id: "me", createDM: vi.fn(async () => ({ id: "unused" })) },
     };
     expect((await resolveMemoryBank("channel", interaction)).bank).toBe(
       "discord:channel:channel",

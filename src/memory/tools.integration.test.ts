@@ -44,7 +44,7 @@ const CHANNEL = "1000000000000000001";
 const HUMAN = "1000000000000000002";
 const BOT = "1000000000000000003";
 const CURRENT = "1000000000000000004";
-const BANK = `discord:dm:${CHANNEL}`;
+const BANK = `discord:user:${HUMAN}`;
 const cleanup: (() => void)[] = [];
 class Bot extends ClientUser {
   constructor(client: Client<true>) {

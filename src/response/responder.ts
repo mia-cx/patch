@@ -380,7 +380,7 @@ export async function respond(options: RespondOptions): Promise<void> {
             ? observations.request(requestMessages)
             : continuation && remora
               ? readOnlyRemora(remora)
-              : remora;
+              : remora && withoutLayers(remora);
           const result = await generateResponse({
             llm,
             promptMessages: requestMessages,
@@ -554,6 +554,14 @@ async function repairMissingSplitHints(options: {
   );
   const source = remora ? options.observations?.capture(response) : undefined;
   return { content: repaired, ...(source ? { source } : {}) };
+}
+
+/** Legacy turn writes have one destination; layers exist only inside an observation batch. */
+function withoutLayers({
+  also_banks: _,
+  ...remora
+}: RemoraRequest): RemoraRequest {
+  return remora;
 }
 
 /** Follow-up reads retain speaker and recall policy without re-observing the human source. */
