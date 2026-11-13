@@ -25,6 +25,11 @@ local inference) and Laya (reply timing). Inference is pluggable:
   as `memory:` messages. The memory tools stay available either way.
 When Remora saves something from the current message, the model is told so
 (`memory: saved just now: …`) so it never saves the same thing again with a tool.
+Never compact or summarise conversations. History rolls forward in large jumps so
+the prompt prefix stays cacheable, and Remora recalls anything older or from other
+conversations. On cloud models, design for prompt caching: stable instructions and
+history first, per-turn `memory:` messages after the cached prefix, next to the
+current message.
 Remora keeps its own repo and Python core; Patch consumes its HTTP API.
 
 Protocord is the shared Discord action framework. Its canonical source is
