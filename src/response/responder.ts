@@ -298,7 +298,8 @@ export async function respond(options: RespondOptions): Promise<void> {
         maxCalls: config.maxToolCalls ?? 3,
         maxInputChars: Math.max(
           0,
-          (budget.contextTokens -
+          (budget.contextTokens +
+            config.llmToolContextTokens -
             (budget.responseTokens ?? 0) -
             RESPONSE_TEMPLATE_TOKEN_MARGIN) *
             4,

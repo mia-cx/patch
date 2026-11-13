@@ -12,6 +12,8 @@ export type Config = {
   llmApiKey: string;
   settingsDbPath: string;
   llmContextTokens: number;
+  /** Extra tokens for one turn's tool exchanges, on top of the conversation budget; never carried to later turns. */
+  llmToolContextTokens: number;
   llmEnableThinking: boolean;
   llmThinkingMaxTokens: number;
   llmThinkingTimeoutMs: number;
@@ -68,6 +70,7 @@ const ConfigSchema = Schema.Struct({
   llmApiKey: Schema.String.check(Schema.isMinLength(1)),
   settingsDbPath: Schema.String.check(Schema.isMinLength(1)),
   llmContextTokens: PositiveInteger,
+  llmToolContextTokens: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   llmEnableThinking: Schema.Boolean,
   llmThinkingMaxTokens: PositiveInteger,
   llmThinkingTimeoutMs: PositiveInteger,
@@ -128,6 +131,7 @@ export function loadConfigEffect(env: NodeJS.ProcessEnv = process.env) {
       llmApiKey: env.LLM_API_KEY ?? "local",
       settingsDbPath: env.SETTINGS_DB_PATH ?? "data/patch.sqlite",
       llmContextTokens: integer(env.LLM_CONTEXT_TOKENS, 32_768),
+      llmToolContextTokens: integer(env.LLM_TOOL_CONTEXT_TOKENS, 16_384),
       llmEnableThinking: boolean(env.LLM_ENABLE_THINKING, false),
       llmThinkingMaxTokens: integer(env.LLM_THINKING_MAX_TOKENS, 1024),
       llmThinkingTimeoutMs: integer(env.LLM_THINKING_TIMEOUT_MS, 20_000),

@@ -194,6 +194,11 @@ export class LlmClient {
       this.config.llmContextTokens,
       limits.context_tokens,
     );
+    // Tool exchanges ride on top of the conversation budget inside one request.
+    this.config.llmToolContextTokens = Math.min(
+      this.config.llmToolContextTokens,
+      limits.context_tokens - this.config.llmContextTokens,
+    );
     this.maxOutputTokens = limits.max_output_tokens;
     this.config.llmMaxTokens = Math.min(
       this.config.llmMaxTokens,
