@@ -195,6 +195,8 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     all_stream_evidence: Schema.optional(Schema.Boolean),
     source_references: Schema.optional(Schema.Boolean),
     observation_labels: Schema.optional(Schema.Boolean),
+    /** Replies may use a nonzero temperature; otherwise Remora decodes greedily only. */
+    sampling: Schema.optional(Schema.Boolean),
     streaming: Schema.Boolean,
     tools: Schema.Boolean,
     thinking: Schema.Boolean,

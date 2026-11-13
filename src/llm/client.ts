@@ -169,17 +169,11 @@ export class LlmClient {
       throw new Error(
         "Remora backend does not support LLM_ENABLE_THINKING=true",
       );
-    if (
-      this.config.llmTemperature !== 0 &&
-      capabilities.backend === "transformers"
-    )
-      throw new Error("The Remora HF profile requires LLM_TEMPERATURE=0");
-    if (
-      this.config.activityUpdatesEnabled &&
-      capabilities.backend === "transformers"
-    )
+    if (this.config.llmTemperature !== 0 && !features.sampling)
+      throw new Error("This Remora backend requires LLM_TEMPERATURE=0");
+    if (this.config.activityUpdatesEnabled && !features.sampling)
       throw new Error(
-        "The Remora HF profile requires ACTIVITY_UPDATES_ENABLED=false; activity requests use sampling",
+        "This Remora backend requires ACTIVITY_UPDATES_ENABLED=false; activity requests use sampling",
       );
     const bankCount = Math.max(
       new Set(this.config.remoraReadBanks).size + 1,

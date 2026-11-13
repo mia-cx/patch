@@ -712,4 +712,29 @@ describe("Remora contract over the LLM HTTP interface", () => {
     );
     await expect(new LlmClient(config).initializeRemora()).rejects.toThrow();
   });
+
+  // Proves a backend advertising sampling accepts Patch's temperature and activity updates.
+  it("accepts a nonzero temperature when the backend samples", async () => {
+    const config = loadConfig({
+      DISCORD_TOKEN: "test",
+      DISCORD_CLIENT_ID: "test",
+      LLM_TEMPERATURE: "0.7",
+      ACTIVITY_UPDATES_ENABLED: "true",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          ...contract.capabilities_example,
+          features: {
+            ...contract.capabilities_example.features,
+            sampling: true,
+          },
+        }),
+      ),
+    );
+    await expect(
+      new LlmClient(config).initializeRemora(),
+    ).resolves.toBeDefined();
+  });
 });

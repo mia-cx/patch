@@ -152,8 +152,9 @@ See [Remora's active-recall guide](https://github.com/mia-cx/remora/blob/28216a6
 
 `REMORA_DM_ENABLED=true` enables memory for text turns in one-to-one DMs. Point
 the existing `LLM_BASE_URL`, `LLM_MODEL`, and `LLM_API_KEY` at an isolated Remora
-service. The validated profiles require `LLM_TEMPERATURE=0`, thinking disabled,
-and activity updates disabled. Memory remains off by default.
+service. Thinking must be disabled. A backend that does not advertise
+`features.sampling` also requires `LLM_TEMPERATURE=0` and activity updates
+disabled. Memory remains off by default.
 
 Set `DISCORD_TRIAL_DM_CHANNEL_ID` for a trial confined to one DM. Patch then
 subscribes only to DM events, confines conversation replies to that DM, and skips
