@@ -12,24 +12,27 @@ describe("model output controls", () => {
     expect(parseModelOutput(content)).toEqual({ content, toolCalls: [] });
   });
 
-  // Proves one opt-in reply and reaction preserve the emoji while hiding all control syntax.
-  it("separates the reply, reaction and message", () => {
-    expect(
-      parseModelOutput(
-        '<reply to="123" />\n<tool_call>{"name":"react","arguments":{"message_id":"123","emoji":"😂"}}</tool_call>\nyeah',
-      ),
-    ).toEqual({
-      replyTo: "123",
-      content: "yeah",
-      toolCalls: [
-        {
-          type: "function",
-          name: "react",
-          arguments: '{"message_id":"123","emoji":"😂"}',
-        },
-      ],
-    });
-  });
+  // Proves one opt-in reply and reaction preserve the emoji while hiding all control syntax; a legacy target is ignored.
+  it.each(["<reply />", '<reply to="123" />'])(
+    "separates the reply, reaction and message: %s",
+    (directive) => {
+      expect(
+        parseModelOutput(
+          `${directive}\n<tool_call>{"name":"react","arguments":{"emoji":"😂"}}</tool_call>\nyeah`,
+        ),
+      ).toEqual({
+        reply: true,
+        content: "yeah",
+        toolCalls: [
+          {
+            type: "function",
+            name: "react",
+            arguments: '{"emoji":"😂"}',
+          },
+        ],
+      });
+    },
+  );
 
   // Proves shorthand preserves one literal string, including a multiword query, without evaluating code or guessing multiple arguments.
   it.each([
@@ -54,7 +57,6 @@ describe("model output controls", () => {
 
   // Proves malformed control sections fail before any text or partial action is presented.
   it.each([
-    '<reply to="abc" /> hi',
     '<reply to="123">hi',
     '<tool_call>{"name":"react","arguments":{},"extra":true}</tool_call>',
     "<tool_call>{",

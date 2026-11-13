@@ -376,12 +376,12 @@ describe("complete harness with the actual Discord SDK", () => {
     for (const request of requests)
       expect(
         request.messages.filter(
-          (message) => message.content === app.message.content,
+          (message) => message.content === `Mia [Mia]: ${app.message.content}`,
         ),
       ).toHaveLength(1);
     const initial = requests[0]?.messages;
     expect(initial?.at(-2)?.content).toContain("Emit the tagged JSON call");
-    expect(initial?.at(-1)?.content).toBe(app.message.content);
+    expect(initial?.at(-1)?.content).toBe(`Mia [Mia]: ${app.message.content}`);
     expect(
       app.rest.post.mock.calls.find(([route]) =>
         route.endsWith("/messages"),
@@ -435,10 +435,12 @@ describe("complete harness with the actual Discord SDK", () => {
     expect(requests).toHaveLength(3);
     for (const request of requests.slice(1)) {
       const human = request.messages.findIndex(
-        (m) => m.content === app.message.content,
+        (m) => m.content === `Mia [Mia]: ${app.message.content}`,
       );
       expect(
-        request.messages.filter((m) => m.content === app.message.content),
+        request.messages.filter(
+          (m) => m.content === `Mia [Mia]: ${app.message.content}`,
+        ),
       ).toHaveLength(1);
       expect(request.messages[human + 1]).toMatchObject({
         role: "assistant",
@@ -1406,7 +1408,9 @@ describe("complete harness with the actual Discord SDK", () => {
         ),
       ).toBe(true);
       expect(
-        request.messages.filter((m) => m.content === app.message.content),
+        request.messages.filter(
+          (m) => m.content === `Mia [Mia]: ${app.message.content}`,
+        ),
       ).toHaveLength(1);
       const human = request.remora.observations.inputs.find(
         (input) => input.id === `discord:message:${CURRENT}`,
@@ -1805,6 +1809,7 @@ describe("complete harness with the actual Discord SDK", () => {
         authorId: "1000000000000000009",
         authorName: "Robin",
         content: "I play cello.",
+        source: { text: "I play cello.", revision: 0 },
       },
       {
         ...current,
@@ -1839,8 +1844,7 @@ describe("complete harness with the actual Discord SDK", () => {
       first?.messages.some(
         (message) =>
           message.role === "user" &&
-          message.content.includes('author_id="1000000000000000009"') &&
-          message.content.includes("I play cello."),
+          message.content === "Robin [Mia]: I play cello.",
       ),
     ).toBe(true);
     const second = app.complete.mock.calls[1]?.[0];
@@ -1992,13 +1996,13 @@ describe("complete harness with the actual Discord SDK", () => {
       expect(request).not.toHaveBeenCalled();
     },
   );
-  // Proves plain model output stays ordinary in guilds, while explicit replies target the selected message without pinging.
+  // Proves plain model output stays ordinary in guilds, while an explicit reply targets the message being answered without pinging.
   it.each([false, true])(
     "opts into a reply only when requested: %s",
     async (reply) => {
       const app = await runtime(true);
       app.complete.mockResolvedValue({
-        content: `${reply ? `<reply to="${PREVIOUS}" />\n` : ""}yeah, exactly`,
+        content: `${reply ? "<reply />\n" : ""}yeah, exactly`,
       });
       await app.run();
       const sent = app.rest.post.mock.calls.find(
@@ -2013,7 +2017,7 @@ describe("complete harness with the actual Discord SDK", () => {
       if (reply)
         expect(sent?.[1]?.body).toHaveProperty(
           "message_reference.message_id",
-          PREVIOUS,
+          CURRENT,
         );
       else
         expect(JSON.parse(JSON.stringify(sent?.[1]?.body))).not.toHaveProperty(
@@ -2218,7 +2222,7 @@ describe("complete harness with the actual Discord SDK", () => {
   it("prunes completed native exchanges before their arguments overflow context", async () => {
     const app = await runtime();
     app.config.llmToolMode = "native";
-    app.config.llmContextTokens = 11_776;
+    app.config.llmContextTokens = 9_216;
     app.config.llmToolContextTokens = 512;
     app.config.llmMaxTokens = 2048;
     const sizes: number[] = [];
@@ -2266,7 +2270,7 @@ describe("complete harness with the actual Discord SDK", () => {
     });
     await app.run();
     expect(app.complete).toHaveBeenCalledTimes(4);
-    expect(Math.max(...sizes)).toBeLessThanOrEqual(11_776 + 512);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(9_216 + 512);
     expect(callIds[3]?.length).toBeLessThan(3);
     expect(app.store.listNotes(CHANNEL)).toHaveLength(3);
   });
@@ -2290,6 +2294,37 @@ describe("complete harness with the actual Discord SDK", () => {
         }),
       }),
     );
+  });
+
+  // Proves tools work without visible IDs: reactions hit the message being answered, deletion hits Patch's latest message.
+  it("defaults omitted message IDs to the current and own latest message", async () => {
+    const app = await runtime();
+    app.complete
+      .mockResolvedValueOnce({
+        content: call("react", { emoji: "😂" }) + call("delete_message", {}),
+      })
+      .mockResolvedValueOnce({ content: "" });
+    await app.run();
+    expect(app.rest.put.mock.calls[0]?.[0]).toContain(
+      `/channels/${CHANNEL}/messages/${CURRENT}/reactions/`,
+    );
+    expect(app.rest.delete).toHaveBeenCalledWith(
+      `/channels/${CHANNEL}/messages/${PREVIOUS}`,
+    );
+  });
+
+  // Proves an `@username` for someone in the conversation reaches Discord as a real ping, and nobody else can be pinged.
+  it("turns a participant's @username into a ping", async () => {
+    const app = await runtime(true);
+    app.complete.mockResolvedValue({ content: "@mia look, not @ghost" });
+    await app.run();
+    const sent = app.rest.post.mock.calls.find(
+      ([route]) => route === `/channels/${CHANNEL}/messages`,
+    );
+    expect(sent?.[1]?.body).toMatchObject({
+      content: `<@${HUMAN}> look, not @ghost`,
+      allowed_mentions: { parse: [], users: [HUMAN] },
+    });
   });
 
   // Proves a bad second action cannot cause the first action to execute from a partially accepted batch.
@@ -2369,7 +2404,7 @@ describe("complete harness with the actual Discord SDK", () => {
   // Proves classifier-supplied history still reserves space for the actual tool catalogue and results.
   it("rolls supplied history forward when tool instructions fill its budget", async () => {
     const app = await runtime(false, true);
-    app.config.llmContextTokens = 8_192;
+    app.config.llmContextTokens = 6_656;
     app.config.llmMaxTokens = 256;
     const current = toConversationMessage(app.message, BOT);
     app.complete.mockResolvedValue({ content: "hey" });
@@ -2378,6 +2413,7 @@ describe("complete harness with the actual Discord SDK", () => {
         ...current,
         id: "1000000000000000000",
         content: `OLD_HISTORY ${"x".repeat(6000)}`,
+        source: { text: `OLD_HISTORY ${"x".repeat(6000)}`, revision: 0 },
       },
       current,
     ]);

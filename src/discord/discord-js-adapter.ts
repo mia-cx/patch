@@ -125,6 +125,7 @@ export function toConversationMessage(
       message.member?.displayName ??
       message.author.globalName ??
       message.author.username,
+    authorUsername: message.author.username,
     authorIsBot: message.author.bot,
     content: stripBotMention(message.content, botUserId).trim(),
     source: { text: message.content, revision: message.editedTimestamp ?? 0 },

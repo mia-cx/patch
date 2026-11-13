@@ -977,6 +977,7 @@ function memoryReceipt(
 
 describe("opt-in Remora DM conversations", () => {
   // Proves chat roles preserve distinct speakers, reply targets, and the exact new write source.
+  // Proves legacy source mode shows named chat history and still ends on the exact raw source turn.
   it("keeps attributed history in real chat roles before the raw new source", async () => {
     const app = await runtime();
     const bot = { ...packet(1).author, id: BOT, username: "Patch", bot: true };
@@ -1029,37 +1030,15 @@ describe("opt-in Remora DM conversations", () => {
       },
     });
     expect(requests).toHaveLength(1);
-    const turns = requests[0]?.messages.slice(1);
-    expect(turns?.map((turn) => turn.role)).toEqual([
-      "user",
-      "user",
-      "user",
-      "user",
-      "assistant",
-      "user",
-      "user",
+    expect(requests[0]?.messages.slice(1)).toEqual([
+      { role: "user", content: "Mia [Mia]: I adopted a puppy." },
+      { role: "user", content: "Sam [Sam]: My puppy is called Pip." },
+      {
+        role: "assistant",
+        content: "That's lovely.<|message_split|>Tell me more.",
+      },
+      { role: "user", content: "Want to hear his name?" },
     ]);
-    expect(turns?.[1]?.content).toContain(
-      `author_name="Mia" pronouns="she/her" author_id="${HUMAN}"`,
-    );
-    expect(turns?.[1]?.content).toContain("I adopted a puppy.");
-    expect(turns?.[2]?.content).toContain(
-      `author_name="Sam" pronouns="they/them" author_id="${other.id}"`,
-    );
-    expect(turns?.[2]?.content).toContain("My puppy is called Pip.");
-    expect(turns?.[4]?.content).toBe(
-      "That's lovely.<|message_split|>Tell me more.",
-    );
-    expect(turns?.[3]?.content).toContain('author_id="patch"');
-    expect(turns?.[5]?.content).toContain(
-      `author_name="Mia" pronouns="she/her" author_id="${HUMAN}"`,
-    );
-    expect(turns?.[5]?.content).toContain(`reply_to="${packet(1).id}"`);
-    expect(turns?.[5]?.content).not.toContain("Want to hear his name?");
-    expect(turns?.at(-1)).toEqual({
-      role: "user",
-      content: "Want to hear his name?",
-    });
     expect(requests[0]?.remora?.turn?.text).toBe("Want to hear his name?");
     expect(app.store.getStart(CHANNEL)).toBe(packet(1).id);
   });

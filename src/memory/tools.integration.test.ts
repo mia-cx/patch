@@ -151,6 +151,7 @@ async function fixture(base = "http://synthetic.test/v1") {
     writeBank: BANK,
     toolScope: {
       messageIds: new Set([CURRENT]),
+      currentMessageId: CURRENT,
       signal: new AbortController().signal,
       nonce: "synthetic",
     },

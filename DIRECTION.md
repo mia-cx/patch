@@ -4,8 +4,11 @@ boundaries, and timing. Build the simplest useful conversation path before
 expanding the assistant features in the versioned specs.
 
 The voice LoRA carries how Patch talks, so the system prompt holds no style guide:
-only role, identity, transcript reading, output, safety, helpfulness, splitting,
-mentions and tools (about 4k tokens). Long rule lists made her rigid.
+only role, identity, output, safety, helpfulness, splitting, mentions and tools
+(about 1.1k Gemma tokens before tools). Long rule lists made her rigid.
+History uses the LoRA's training format with no explaining prompt: each human
+or bot message is a `user` turn `DisplayName [username]: text`, and Patch's
+messages are plain `assistant` turns. No IDs, timestamps, pronouns or reply markers.
 Her identity is name, pronouns and background only. Tastes and opinions grow
 through Remora from her conversations. Later, Tastebase gives her Mia's music
 taste: a read-only store, like Remora but never written by Patch, filled by
@@ -25,7 +28,8 @@ and AI scaffold. Patch consumes it as a pinned submodule at `vendor/protocord`
 through pnpm workspace dependencies. Publishing packages is deferred.
 
 Patch actions use Protocord's shared validation, authorization and trigger lifecycle.
-Plain model text splits at `<|message_split|>` outside code; legacy `<split />` remains accepted. Headings keep their newlines. Optional reply metadata targets a visible message ID.
+Plain model text splits at `<|message_split|>` outside code; legacy `<split />` remains accepted. Headings keep their newlines. An optional `<reply />` replies to the message being answered.
+Patch mentions people as `@username`; the send path turns participants into pings and drops other IDs and roles.
 Reactions, own-message edits/deletion, threads, polls, stickers and fixed-text follow-ups are implemented.
 Every link Patch shows passes a link check before any chunk is sent, including text after actions and split repairs. A confirmed 404 (HEAD confirmed by GET) or definite DNS absence withholds the draft and asks for at most two rewrites through the tool loop; dead or rejected appended sources are dropped. Auth, server and timeout results are inconclusive and send. Checks follow bounded redirects and never reach private networks. Rejected drafts never post.
 Follow-ups support one-off timestamps or cron with explicit IANA timezone, persisted next occurrences and bounded missed-tick coalescing.
@@ -46,9 +50,9 @@ Mia added only guild `1559060271404945512`, channel `1561529690953490442`, along
 Read channel/server banks and write only the channel; the approved DM and exact shared scope are enabled.
 
 Patch's Remora client supports the approved DM and shared scope. Caller-owned history uses real
-user/assistant roles. Incoming turns retain author IDs, names, pronouns, and reply
-targets in readable labels; Patch replies remain plain assistant text. Separate
-metadata retains Patch reply references and identifies the raw final user turn.
+user/assistant roles. Incoming turns keep their exact text after a
+`DisplayName [username]: ` prefix, which memory evidence treats as frame text.
+Remora's legacy `turn` mode still ends on the raw final user message.
 Stable source IDs and edit revisions survive generation retries. Read-bank
 selection never adds write destinations or grants.
 Runtime capabilities bound context/output; receipts/cache reuse are validated. Classifier/activity calls have no memory access.
@@ -60,8 +64,8 @@ not whole-history continuity. Native CPU qualification is limited to its exact B
 see the released guides at `865ade5`. It does not establish GPU or broad HF parity.
 The HF trial uses separate SQLite settings and skips automatic global registration.
 Attributed chat roles pass both original failed follow-ups cold and cached, preserving receipts and bank rows.
-Keep assistant dialogue literal and reference metadata beside its reply. XML wrappers leak into output;
-cumulative metadata footers obscure recent dialogue in Gemma's 512-token local attention.
+Keep assistant dialogue literal. XML wrappers leak into output; cumulative
+metadata footers obscure recent dialogue in Gemma's 512-token local attention.
 llama.cpp qualification does not gate this HF trial.
 Mia approved evidence formation, replacing narrow passive writer/dreaming with attributed quotations on the same HF API.
 The scoped trial is online with tagged tools (three calls per turn); general semantic concept formation/dreaming remains open.

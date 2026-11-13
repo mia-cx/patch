@@ -52,6 +52,10 @@ export type ActionContext = {
   writeBank?: string | undefined;
   toolScope?: {
     messageIds: ReadonlySet<string>;
+    /** The message being answered: the default target for reactions, threads and polls. */
+    currentMessageId: string;
+    /** Patch's latest message in the conversation: the default target for edits and deletion. */
+    ownMessageId?: string;
     signal: AbortSignal;
     nonce: string;
   };

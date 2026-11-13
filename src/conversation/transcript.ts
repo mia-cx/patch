@@ -1,7 +1,6 @@
-import { getBotIdentity } from "../identity.js";
 import type { LlmMessage } from "../llm/client.js";
 import type { ObservationInput } from "../llm/evidence.js";
-import { escapeAttribute, escapeTranscriptText } from "./escape.js";
+import { escapeMessageSplit } from "./escape.js";
 import { MESSAGE_SPLIT } from "./reserved-tokens.js";
 import type {
   ConversationMessage,
@@ -10,67 +9,53 @@ import type {
   TranscriptParticipant,
 } from "./types.js";
 
-const SELF_AUTHOR_ID = "patch";
-const MISSING_PRONOUNS = "missing";
 const RESPONSE_SPLIT_MARKER = "\u0000patch-response-split\u0000";
 
 export function buildTranscript(
   messages: ConversationMessage[],
   botUserId: string,
 ): Transcript {
-  const identity = getBotIdentity();
-  const blocks = messages.map((message): TranscriptBlock => {
-    const isPatch = message.authorId === botUserId;
-    const block: TranscriptBlock = {
-      kind: isPatch ? "response" : "message",
-      id: message.id,
-      authorId: isPatch ? SELF_AUTHOR_ID : message.authorId,
-      authorName: isPatch ? identity.name : message.authorName,
-      role: isPatch ? "self" : message.authorIsBot ? "bot" : "human",
-      timestamp: message.timestamp,
-      context: message.context ?? "reply_chain",
-      channelId: message.channelId,
-      content: message.content,
-      ...(message.source ? { source: message.source } : {}),
-      ...(isPatch && message.source
-        ? { displayMessages: [{ id: message.id, ...message.source }] }
-        : {}),
-      attachments: message.attachments,
-    };
-
-    if (isPatch) {
-      block.authorPronouns = identity.pronouns;
-    } else if (message.authorPronouns) {
-      block.authorPronouns = message.authorPronouns;
-    }
-    if (message.replyTo) block.replyTo = message.replyTo.messageId;
-    if (message.threadId) block.threadId = message.threadId;
-
-    return block;
-  });
-
-  const mergedBlocks = mergeAdjacentPatchResponses(blocks);
-
-  return {
-    participants: collectParticipants(mergedBlocks),
-    blocks: mergedBlocks,
-    participantUserIds: new Set(
-      mergedBlocks
-        .filter((block) => block.kind === "message")
-        .map((block) => block.authorId),
-    ),
-  };
+  const blocks = mergeAdjacentPatchResponses(
+    messages.map((message): TranscriptBlock => {
+      const isPatch = message.authorId === botUserId;
+      return {
+        kind: isPatch ? "response" : "message",
+        id: message.id,
+        authorId: message.authorId,
+        authorName: message.authorName,
+        authorUsername: message.authorUsername,
+        role: isPatch ? "self" : message.authorIsBot ? "bot" : "human",
+        timestamp: message.timestamp,
+        channelId: message.channelId,
+        content: message.content,
+        ...(message.source ? { source: message.source } : {}),
+        ...(isPatch && message.source
+          ? { displayMessages: [{ id: message.id, ...message.source }] }
+          : {}),
+        ...(message.replyTo ? { replyTo: message.replyTo.messageId } : {}),
+        attachments: message.attachments,
+      };
+    }),
+  );
+  const participants = new Map<string, TranscriptParticipant>();
+  for (const block of blocks)
+    if (block.kind === "message")
+      participants.set(block.authorId, {
+        id: block.authorId,
+        username: block.authorUsername,
+        name: block.authorName,
+      });
+  return { blocks, participants: [...participants.values()] };
 }
 
-/** Formats history first so new participants only change the prompt's suffix. */
-export function formatTranscript(transcript: Transcript): string {
-  return [
-    ...transcript.blocks.map(formatBlock),
-    formatParticipants(transcript.participants),
-  ].join("\n\n");
-}
-
-/** Keeps speaker metadata inside real chat roles and identifies the separate raw current turn. */
+/**
+ * Render history in the voice LoRA's chat format: each human or bot message is a
+ * `user` turn `DisplayName [username]: text`, and Patch's messages are plain
+ * `assistant` turns. The current message goes last, after `beforeCurrent` notes.
+ *
+ * With source callbacks, human text keeps an exact literal span for memory
+ * evidence; the speaker prefix and attachment lines are unattributed frame text.
+ */
 export function formatTranscriptMessages(
   transcript: Transcript,
   currentMessageId: string,
@@ -78,167 +63,75 @@ export function formatTranscriptMessages(
     block: TranscriptBlock,
   ) => Omit<ObservationInput, "views" | "context"> | undefined,
   assistantBody?: (block: TranscriptBlock) => LlmMessage | undefined,
-  currentTurnInstructions = "",
+  beforeCurrent: readonly string[] = [],
 ): LlmMessage[] {
-  const messages: LlmMessage[] = [
-    {
-      role: "user",
-      content: `Participants:\n${transcript.participants.map(formatParticipantAttributes).join("\n")}`,
-    },
-  ];
+  const observed = Boolean(humanSource || assistantBody);
+  const render = (block: TranscriptBlock) =>
+    block.kind === "response"
+      ? formatResponse(block, assistantBody, observed)
+      : formatMessage(block, humanSource, observed);
   const current = transcript.blocks.find(
     (block) => block.id === currentMessageId,
   );
-  for (const block of transcript.blocks) {
-    if (block === current) continue;
-    // Keep reference metadata near its reply, outside the assistant's visible wording.
-    if (block.kind === "response") {
-      messages.push({
-        role: "user",
-        content: `Following Patch reply:\n${formatAttributes(block)}`,
-      });
-    }
-    const source = block.role === "human" ? humanSource?.(block) : undefined;
-    const observedBody =
-      block.role === "self" ? assistantBody?.(block) : undefined;
-    const prefix =
-      block.kind === "response"
-        ? ""
-        : `Speaker: ${formatAttributes(block)}\n\n`;
-    // JSON string views preserve original mentions, whitespace and reserved markup exactly.
-    const encoded =
-      source && block.source
-        ? JSON.stringify(block.source.text)
-            .replaceAll("<", "\\u003c")
-            .replaceAll(">", "\\u003e")
-            .replaceAll("&", "\\u0026")
-        : undefined;
-    const body = observedBody?.content ?? encoded ?? formatBlockBody(block);
-    const content =
-      observedBody || encoded !== undefined
-        ? [prefix + body, ...block.attachments.map(formatAttachment)].join("\n")
-        : prefix + body;
-    messages.push({
-      role: block.kind === "response" ? "assistant" : "user",
-      content,
-      ...(observedBody
-        ? {
-            observationSources:
-              observedBody.observationSources?.map((segment) => ({
-                ...segment,
-                start: segment.start + prefix.length,
-                end: segment.end + prefix.length,
-              })) ?? [],
-            observationReferences: observedBody.observationReferences ?? [],
-            observationParents: observedBody.observationParents ?? [],
-          }
-        : {}),
-      ...(humanSource || assistantBody
-        ? {
-            observationUnknown: [
-              ...(observedBody?.observationUnknown ?? []).map((range) => ({
-                start: range.start + prefix.length,
-                end: range.end + prefix.length,
-              })),
-              ...(!source && !observedBody
-                ? [{ start: prefix.length, end: content.length }]
-                : []),
-              ...((source || observedBody) && block.attachments.length
-                ? [{ start: prefix.length + body.length, end: content.length }]
-                : []),
-            ],
-          }
-        : {}),
-      ...(source && encoded !== undefined
-        ? {
-            observationSources: [
-              {
-                source,
-                start: prefix.length,
-                end: prefix.length + encoded.length,
-                encoding: "json_string" as const,
-              },
-            ],
-          }
-        : {}),
-    });
-  }
-  // Source binding requires the next user message to contain only its original text.
-  if (current) {
-    messages.push({
-      role: "user",
-      content: [
-        currentTurnInstructions,
-        `Current human message:\n${formatAttributes(current)}`,
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-    });
-  }
-  return messages;
-}
-
-function collectParticipants(
-  blocks: TranscriptBlock[],
-): TranscriptParticipant[] {
-  const participants = new Map<string, TranscriptParticipant>();
-  const identity = getBotIdentity();
-  participants.set(SELF_AUTHOR_ID, {
-    authorId: SELF_AUTHOR_ID,
-    authorName: identity.name,
-    pronouns: identity.pronouns,
-    role: "self",
-  });
-
-  for (const block of blocks) {
-    const participant: TranscriptParticipant = {
-      authorId: block.authorId,
-      authorName: block.authorName,
-      pronouns: block.authorPronouns ?? MISSING_PRONOUNS,
-      role: block.role,
-    };
-    const existing = participants.get(participant.authorId);
-    if (!existing) {
-      participants.set(participant.authorId, participant);
-      continue;
-    }
-
-    if (
-      existing.pronouns === MISSING_PRONOUNS &&
-      participant.pronouns !== MISSING_PRONOUNS
-    ) {
-      participants.set(participant.authorId, {
-        ...existing,
-        pronouns: participant.pronouns,
-      });
-    }
-  }
-
-  return [...participants.values()];
-}
-
-function formatParticipants(participants: TranscriptParticipant[]): string {
-  const rows = participants.map(formatParticipant).join("\n");
-  return `<participants>\n${rows}\n</participants>`;
-}
-
-function formatParticipant(participant: TranscriptParticipant): string {
-  return `<participant ${formatParticipantAttributes(participant)} />`;
-}
-
-function formatParticipantAttributes(
-  participant: TranscriptParticipant,
-): string {
-  const attributes: [string, string][] = [
-    ["author_id", participant.authorId],
-    ["author_name", participant.authorName],
-    ["pronouns", participant.pronouns],
-    ["role", participant.role],
+  return [
+    ...transcript.blocks.filter((block) => block !== current).map(render),
+    ...beforeCurrent.map((content) => ({ role: "user" as const, content })),
+    ...(current ? [render(current)] : []),
   ];
+}
 
-  return attributes
-    .map(([key, value]) => `${key}="${escapeAttribute(value)}"`)
-    .join(" ");
+function formatMessage(
+  block: TranscriptBlock,
+  humanSource: Parameters<typeof formatTranscriptMessages>[2],
+  observed: boolean,
+): LlmMessage {
+  const prefix = `${block.authorName} [${block.authorUsername}]: `;
+  const text = block.source?.text ?? block.content;
+  // A literal marker would split the history turn; escaped text no longer equals its source.
+  const body = escapeMessageSplit(text);
+  const content = [
+    prefix + body,
+    ...block.attachments.map(({ filename }) => `[attachment: ${filename}]`),
+  ].join("\n");
+  if (!observed) return { role: "user", content };
+  const source = block.role === "human" ? humanSource?.(block) : undefined;
+  const bodyEnd = prefix.length + body.length;
+  if (!source || body !== text)
+    return {
+      role: "user",
+      content,
+      observationUnknown: [{ start: prefix.length, end: content.length }],
+    };
+  return {
+    role: "user",
+    content,
+    observationSources: [
+      { source, start: prefix.length, end: bodyEnd, encoding: "literal" },
+    ],
+    observationUnknown:
+      bodyEnd < content.length ? [{ start: bodyEnd, end: content.length }] : [],
+  };
+}
+
+function formatResponse(
+  block: TranscriptBlock,
+  assistantBody: Parameters<typeof formatTranscriptMessages>[3],
+  observed: boolean,
+): LlmMessage {
+  const body = assistantBody?.(block);
+  if (body) return body;
+  const content = block.content
+    .split(RESPONSE_SPLIT_MARKER)
+    .map((chunk) => escapeMessageSplit(chunk.trim()))
+    .filter(Boolean)
+    .join(MESSAGE_SPLIT);
+  return {
+    role: "assistant",
+    content,
+    ...(observed
+      ? { observationUnknown: [{ start: 0, end: content.length }] }
+      : {}),
+  };
 }
 
 function mergeAdjacentPatchResponses(
@@ -267,57 +160,6 @@ function mergeAdjacentPatchResponses(
   }
 
   return merged;
-}
-
-function formatBlock(block: TranscriptBlock): string {
-  const tag = block.kind;
-  const attributes = formatAttributes(block);
-  return `<${tag} ${attributes}>\n${formatBlockBody(block)}\n</${tag}>`;
-}
-
-function formatBlockBody(block: TranscriptBlock): string {
-  const content = formatBlockContent(block);
-  const attachments = block.attachments.map(formatAttachment).join("\n");
-  return [content, attachments].filter(Boolean).join("\n");
-}
-
-function formatBlockContent(block: TranscriptBlock): string {
-  if (block.kind !== "response")
-    return escapeTranscriptText(block.content.trim());
-
-  return block.content
-    .split(RESPONSE_SPLIT_MARKER)
-    .map((chunk) => escapeTranscriptText(chunk.trim()))
-    .filter(Boolean)
-    .join(MESSAGE_SPLIT);
-}
-
-function formatAttributes(block: TranscriptBlock): string {
-  const attributes: [string, string][] = [];
-
-  attributes.push(["author_name", block.authorName]);
-  if (block.authorPronouns) attributes.push(["pronouns", block.authorPronouns]);
-  attributes.push(["author_id", block.authorId]);
-  if (block.id) attributes.push(["id", block.id]);
-  if (block.messageIds?.length)
-    attributes.push(["message_ids", block.messageIds.join(",")]);
-  attributes.push(["role", block.role]);
-  attributes.push(["timestamp", block.timestamp.toISOString()]);
-  if (block.replyTo) attributes.push(["reply_to", block.replyTo]);
-
-  return attributes
-    .map(([key, value]) => `${key}="${escapeAttribute(value)}"`)
-    .join(" ");
-}
-
-function formatAttachment(
-  attachment: TranscriptBlock["attachments"][number],
-): string {
-  const attributes: [string, string][] = [["filename", attachment.filename]];
-  if (attachment.mediaType)
-    attributes.push(["media_type", attachment.mediaType]);
-  attributes.push(["unavailable_for_v0", "true"]);
-  return `<attachment ${attributes.map(([key, value]) => `${key}="${escapeAttribute(value)}"`).join(" ")} />`;
 }
 
 function isString(value: string | undefined): value is string {

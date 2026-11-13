@@ -17,6 +17,8 @@ export type ConversationMessage = {
   threadId?: string;
   authorId: string;
   authorName: string;
+  /** Discord username, shown in brackets after the display name and used for `@username` mentions. */
+  authorUsername: string;
   authorPronouns?: string;
   authorIsBot: boolean;
   content: string;
@@ -37,28 +39,25 @@ export type TranscriptBlock = {
   messageIds?: string[];
   authorId: string;
   authorName: string;
-  authorPronouns?: string;
+  authorUsername: string;
   role: TranscriptRole;
   timestamp: Date;
   replyTo?: string;
-  context: TranscriptContext;
   channelId?: string;
-  threadId?: string;
   content: string;
   source?: { text: string; revision: number };
   displayMessages?: { id: string; text: string; revision: number }[];
   attachments: Attachment[];
 };
 
+/** Someone other than Patch who spoke in the conversation; the only people Patch may ping. */
 export type TranscriptParticipant = {
-  authorId: string;
-  authorName: string;
-  pronouns: string;
-  role: TranscriptRole;
+  id: string;
+  username: string;
+  name: string;
 };
 
 export type Transcript = {
   participants: TranscriptParticipant[];
   blocks: TranscriptBlock[];
-  participantUserIds: Set<string>;
 };

@@ -76,6 +76,8 @@ export async function runToolTurn(options: {
   context?: ActionContext;
   message: Message;
   visibleMessageIds: ReadonlySet<string>;
+  /** Patch's latest message in this conversation; the default edit/delete target. */
+  ownMessageId?: string;
   allowedTools: ReadonlySet<string>;
   maxCalls: number;
   maxInputChars: number;
@@ -212,11 +214,7 @@ export async function runToolTurn(options: {
     );
     const generatedSource = options.onResponse?.(response) ?? undefined;
     const parsed = parseModelOutput(response.content);
-    if (parsed.replyTo) {
-      if (!visibleMessageIds.has(parsed.replyTo))
-        throw new Error("Reply target is not in the supplied conversation");
-      replyTo = parsed.replyTo;
-    }
+    if (parsed.reply) replyTo = options.message.id;
     if (response.toolCalls?.length && parsed.toolCalls.length)
       throw new Error("Mixed native and tagged tool calls");
     const calls = response.toolCalls ?? parsed.toolCalls;
@@ -336,6 +334,10 @@ export async function runToolTurn(options: {
         ...context,
         toolScope: {
           messageIds: visibleMessageIds,
+          currentMessageId: options.message.id,
+          ...(options.ownMessageId
+            ? { ownMessageId: options.ownMessageId }
+            : {}),
           signal: options.signal,
           // Discord's own HTTP retries happen inside the durable mutation boundary.
           nonce: createHash("sha256")

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { MESSAGE_SPLIT } from "./reserved-tokens.js";
-import { buildTranscript, formatTranscript } from "./transcript.js";
+import { buildTranscript, formatTranscriptMessages } from "./transcript.js";
 import type { ConversationMessage } from "./types.js";
 
 describe("buildTranscript", () => {
-  it("allows mentions for message authors in the transcript", () => {
+  // Proves only people who spoke, never Patch herself, become pingable participants.
+  it("lists other speakers as participants", () => {
     const transcript = buildTranscript(
       [
         message({ id: "1", authorId: "mia", authorName: "Mia" }),
@@ -14,169 +15,135 @@ describe("buildTranscript", () => {
           authorName: "Other Bot",
           authorIsBot: true,
         }),
+        message({ id: "3", authorId: "patch", authorIsBot: true }),
+      ],
+      "patch",
+    );
+
+    expect(transcript.participants).toEqual([
+      { id: "mia", username: "mia", name: "Mia" },
+      { id: "other-bot", username: "other bot", name: "Other Bot" },
+    ]);
+  });
+});
+
+describe("formatTranscriptMessages", () => {
+  // Proves history matches the voice LoRA's chat format: named user turns, plain assistant turns, current message last.
+  it("renders a multi-speaker guild history as plain chat turns", () => {
+    const transcript = buildTranscript(
+      [
+        message({ id: "1", authorId: "mia", authorName: "Mia", content: "a" }),
+        message({
+          id: "2",
+          authorId: "noor",
+          authorName: "Noor",
+          content: "b",
+        }),
         message({
           id: "3",
           authorId: "patch",
-          authorName: "Patch",
           authorIsBot: true,
+          content: "c",
+        }),
+        message({
+          id: "4",
+          authorId: "patch",
+          authorIsBot: true,
+          content: "d",
+        }),
+        message({
+          id: "5",
+          authorId: "mia",
+          authorName: "Mia",
+          content: "look",
+          replyTo: { channelId: "channel", messageId: "3" },
+          attachments: [{ filename: "cat.png", url: "https://cdn.example/x" }],
         }),
       ],
       "patch",
     );
 
-    expect([...transcript.participantUserIds]).toEqual(["mia", "other-bot"]);
-  });
-});
-
-describe("formatTranscript", () => {
-  it("includes a participant block with speaker metadata", () => {
-    const messages: ConversationMessage[] = [
-      message({
-        id: "1",
-        authorId: "mia",
-        authorName: "Mia",
-        authorPronouns: "she/her",
-      }),
-    ];
-
-    const formatted = formatTranscript(buildTranscript(messages, "patch"));
-
-    expect(formatted).toContain("<participants>");
-    expect(formatted).toContain(
-      '<participant author_id="patch" author_name="Patch" pronouns="she/her" role="self" />',
-    );
-    expect(formatted).toContain(
-      '<participant author_id="mia" author_name="Mia" pronouns="she/her" role="human" />',
-    );
+    expect(formatTranscriptMessages(transcript, "5")).toEqual([
+      { role: "user", content: "Mia [mia]: a" },
+      { role: "user", content: "Noor [noor]: b" },
+      { role: "assistant", content: `c${MESSAGE_SPLIT}d` },
+      { role: "user", content: "Mia [mia]: look\n[attachment: cat.png]" },
+    ]);
   });
 
-  it("puts author name, pronouns, and role on human message blocks", () => {
-    const messages: ConversationMessage[] = [
-      message({
-        id: "1",
-        authorId: "mia",
-        authorName: "Mia",
-        authorPronouns: "she/her",
-      }),
-    ];
-
-    const formatted = formatTranscript(buildTranscript(messages, "patch"));
-
-    expect(formatted).toContain(
-      '<message author_name="Mia" pronouns="she/her" author_id="mia"',
-    );
-    expect(formatted).toContain('role="human"');
-  });
-
-  it("uses role instead of author_is_bot on other bot message blocks", () => {
-    const messages: ConversationMessage[] = [
-      message({
-        id: "1",
-        authorId: "other-bot",
-        authorName: "Other Bot",
-        authorIsBot: true,
-      }),
-    ];
-
-    const formatted = formatTranscript(buildTranscript(messages, "patch"));
-
-    expect(formatted).toContain('role="bot"');
-    expect(formatted).not.toContain("author_is_bot");
-  });
-
-  it("does not expose internal context labels on message blocks", () => {
-    const messages: ConversationMessage[] = [
-      message({ id: "1", context: "thread" }),
-    ];
-
-    expect(formatTranscript(buildTranscript(messages, "patch"))).not.toContain(
-      'context="thread"',
-    );
-  });
-
-  it("includes Patch's pronouns on response blocks", () => {
-    const messages: ConversationMessage[] = [
-      message({
-        id: "1",
-        authorId: "patch",
-        authorName: "Patch",
-        authorIsBot: true,
-      }),
-    ];
-
-    expect(formatTranscript(buildTranscript(messages, "patch"))).toContain(
-      '<response author_name="Patch" pronouns="she/her" author_id="patch" id="1" role="self"',
-    );
-  });
-
-  it("preserves Discord mentions in message content", () => {
-    const formatted = formatTranscript(
-      buildTranscript(
-        [message({ id: "1", content: "pinged <@123> but not <@456>" })],
-        "patch",
-      ),
-    );
-
-    expect(formatted).toContain("pinged <@123> but not <@456>");
-  });
-
-  it("neutralizes reserved transcript tags in message content", () => {
-    const formatted = formatTranscript(
+  // Proves memory evidence keeps the exact human text while the speaker prefix and attachment line stay frame text.
+  it("binds exact human text and leaves the prefix unattributed", () => {
+    const text = "  <@123> hi\r\n";
+    const source = { id: "discord:message:1", revision: 0 } as const;
+    const [rendered] = formatTranscriptMessages(
       buildTranscript(
         [
           message({
             id: "1",
-            content: `<message>nope</message> <split /> ${MESSAGE_SPLIT}`,
+            authorName: "Mia",
+            authorUsername: "mia",
+            content: "hi",
+            source: { text, revision: 0 },
+            attachments: [{ filename: "a.txt" }],
           }),
         ],
         "patch",
       ),
+      "1",
+      () => ({ ...source, origin: "human_input" }),
     );
 
-    expect(formatted).toContain(
-      "<message_escaped>nope</message_escaped> <split_escaped /> <|message_split_escaped|>",
-    );
+    const prefix = "Mia [mia]: ";
+    expect(rendered?.content).toBe(`${prefix}${text}\n[attachment: a.txt]`);
+    const span = rendered?.observationSources?.[0];
+    expect(rendered?.content.slice(span?.start, span?.end)).toBe(text);
+    expect(rendered?.observationUnknown).toEqual([
+      {
+        start: prefix.length + text.length,
+        end: rendered?.content.length,
+      },
+    ]);
   });
 
   // Proves history joins Patch's messages with the bare canonical marker, keeps their newlines, and escapes marker text they contain.
-  it("merges adjacent Patch response chunks into one response block", () => {
-    const messages: ConversationMessage[] = [
-      message({ id: "1", authorId: "mia", authorName: "Mia" }),
-      message({
-        id: "2",
-        authorId: "patch",
-        authorName: "Patch",
-        authorIsBot: true,
-        content: "## first chunk\n- line one\n\nline two",
-      }),
-      message({
-        id: "3",
-        authorId: "patch",
-        authorName: "Patch",
-        authorIsBot: true,
-        content: `second \`${MESSAGE_SPLIT}\` chunk`,
-      }),
-      message({ id: "4", authorId: "mia", authorName: "Mia" }),
-    ];
-
-    const formatted = formatTranscript(buildTranscript(messages, "patch"));
-
-    expect(formatted).toContain(
-      '<response author_name="Patch" pronouns="she/her" author_id="patch" message_ids="2,3" role="self"',
+  it("merges adjacent Patch messages into one assistant turn", () => {
+    const transcript = buildTranscript(
+      [
+        message({
+          id: "2",
+          authorId: "patch",
+          authorIsBot: true,
+          content: "## first chunk\n- line one\n\nline two",
+        }),
+        message({
+          id: "3",
+          authorId: "patch",
+          authorIsBot: true,
+          content: `second \`${MESSAGE_SPLIT}\` chunk`,
+        }),
+      ],
+      "patch",
     );
-    expect(formatted).toContain(
-      "\n## first chunk\n- line one\n\nline two<|message_split|>second `<|message_split_escaped|>` chunk\n</response>",
-    );
+
+    expect(formatTranscriptMessages(transcript, "4")).toEqual([
+      {
+        role: "assistant",
+        content:
+          "## first chunk\n- line one\n\nline two<|message_split|>second `<|message_split_escaped|>` chunk",
+      },
+    ]);
   });
 });
 
 function message(
   overrides: Partial<ConversationMessage> & Pick<ConversationMessage, "id">,
 ): ConversationMessage {
+  const authorName = overrides.authorName ?? `author-${overrides.id}`;
   return {
     channelId: "channel",
     authorId: `author-${overrides.id}`,
-    authorName: `author-${overrides.id}`,
+    authorName,
+    authorUsername: authorName.toLowerCase(),
     authorIsBot: false,
     content: "hello",
     timestamp: new Date("2026-01-01T00:00:00.000Z"),

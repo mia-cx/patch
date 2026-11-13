@@ -26,11 +26,11 @@ import { MESSAGE_SPLIT } from "../conversation/reserved-tokens.js";
 import type { ConversationContextStore } from "../conversation/store.js";
 import {
   buildTranscript,
-  formatTranscript,
   formatTranscriptMessages,
 } from "../conversation/transcript.js";
 import type { ConversationMessage } from "../conversation/types.js";
 import type { DiscordAdapter } from "../discord/adapter.js";
+import { repairMentions } from "../discord/mentions.js";
 import { stripUnicodeEmoji } from "../discord/no-emoji.js";
 import type { PronounProvider } from "../discord/pronouns.js";
 import {
@@ -48,7 +48,6 @@ import type { RemoraRequest } from "../llm/remora.js";
 import type { Logger } from "../logger.js";
 import {
   RESPONSE_TEMPLATE_TOKEN_MARGIN,
-  type ResponseTranscriptMode,
   buildResponseContextBudget,
   buildResponseMessages,
   buildResponseSystemPrompt,
@@ -176,8 +175,6 @@ export async function respond(options: RespondOptions): Promise<void> {
     if (remora) contextStore.recordMemoryContext(message.channelId);
     const budget = buildResponseContextBudget(
       config,
-      getResponseTranscriptMode(message),
-      remora !== undefined,
       availableActionsPrompt,
       tools,
       currentTurnInstructions,
@@ -207,63 +204,37 @@ export async function respond(options: RespondOptions): Promise<void> {
     }
     if (chain.length === 0) return;
     const transcript = buildTranscript(chain, botUserId);
-    const history = remora
-      ? {
-          ...transcript,
-          blocks: transcript.blocks.filter((block) => block.id !== message.id),
-        }
-      : transcript;
-    const transcriptText = withClassifierDecisionBlock(
-      formatTranscript(history),
-      classifierDecision,
-    );
-
-    if (config.debugLogging) {
-      log.debug({ transcript: transcriptText }, "built transcript");
-    }
-
-    const promptTranscript = remora
-      ? formatTranscriptMessages(
-          transcript,
-          message.id,
-          observations ? (block) => observations.humanSource(block) : undefined,
-          observations
-            ? (block) => observations.assistantBody(block)
-            : undefined,
-          currentTurnInstructions,
-        )
-      : transcriptText;
-    if (Array.isArray(promptTranscript) && classifierDecision) {
-      promptTranscript.push({
-        role: "user",
-        content: withClassifierDecisionBlock("", classifierDecision),
-        observationUnknown: [
-          {
-            start: 0,
-            end: withClassifierDecisionBlock("", classifierDecision).length,
-          },
-        ],
-      });
-    }
+    // Remora's legacy source mode binds the raw final message, which cannot carry the speaker prefix.
+    const legacyTurn = observations ? undefined : remora?.turn;
     const promptMessages = buildResponseMessages(
-      promptTranscript,
-      getResponseTranscriptMode(message),
+      formatTranscriptMessages(
+        legacyTurn
+          ? {
+              ...transcript,
+              blocks: transcript.blocks.filter(
+                (block) => block.id !== message.id,
+              ),
+            }
+          : transcript,
+        message.id,
+        observations ? (block) => observations.humanSource(block) : undefined,
+        observations ? (block) => observations.assistantBody(block) : undefined,
+        [
+          classifierDecision
+            ? formatClassifierDecision(classifierDecision)
+            : "",
+          currentTurnInstructions,
+        ].filter(Boolean),
+      ),
       availableActionsPrompt,
-      remora?.turn?.text,
     );
-    if (observations) {
-      const current = transcript.blocks.find(
-        (block) => block.id === message.id,
-      );
-      if (current) observations.noteSpeaker(current);
-      promptMessages[promptMessages.length - 1] = observations.currentMessage();
-    }
+    if (legacyTurn)
+      promptMessages.push({ role: "user", content: legacyTurn.text });
 
     if (config.llmTraceLogging) {
       log.debug(
         {
           context: summarizeContext(chain),
-          transcript: transcriptText,
           availableActions,
           nativeTools: tools.map((tool) => tool.function.name),
           promptMessages,
@@ -288,6 +259,7 @@ export async function respond(options: RespondOptions): Promise<void> {
             .filter((item) => item.channelId === message.channelId)
             .map((item) => item.id),
         ]),
+        ...ownMessageId(chain, message.channelId, botUserId),
         allowedTools: new Set(
           actionTools
             .map((tool) => tool.function.name)
@@ -366,11 +338,10 @@ export async function respond(options: RespondOptions): Promise<void> {
                 {
                   role: "system",
                   content: buildResponseSystemPrompt(
-                    getResponseTranscriptMode(message),
                     remainingCalls
                       ? availableActionsPrompt
                       : OUTPUT_INSTRUCTIONS,
-                    "before-tools",
+                    true,
                   ),
                 },
                 ...messages.slice(1),
@@ -443,8 +414,8 @@ export async function respond(options: RespondOptions): Promise<void> {
       await sendChunks(
         adapter,
         message,
-        generated.content,
-        [...transcript.participantUserIds],
+        repairMentions(generated.content, transcript.participants),
+        transcript.participants.map(({ id }) => id),
         log,
         generated.replyTo,
         observations && displayedParent
@@ -594,15 +565,9 @@ function withSources(
   return `${content}\n-# ${links.join(" · ")}`;
 }
 
-function withClassifierDecisionBlock(
-  transcript: string,
-  decision: ClassifierDecision | undefined,
-): string {
-  if (!decision) return transcript;
-
-  const block = `<classifier_decision should_respond="${String(decision.shouldRespond)}" confidence="${escapeAttribute(String(decision.confidence))}">\n${escapeTranscriptText(decision.reason)}\n</classifier_decision>`;
-  // Per-turn guidance follows history so it cannot invalidate its cached prefix.
-  return `${transcript}\n\n${block}`;
+// Per-turn guidance follows history so it cannot invalidate its cached prefix.
+function formatClassifierDecision(decision: ClassifierDecision): string {
+  return `<classifier_decision should_respond="${String(decision.shouldRespond)}" confidence="${escapeAttribute(String(decision.confidence))}">\n${escapeTranscriptText(decision.reason)}\n</classifier_decision>`;
 }
 
 async function generateResponse(options: {
@@ -725,6 +690,18 @@ function withTimeoutSignal(parent: AbortSignal, timeoutMs: number) {
       parent.removeEventListener("abort", abort);
     },
   };
+}
+
+/** Patch's latest message in this conversation, the default target for edits and deletion. */
+function ownMessageId(
+  chain: readonly ConversationMessage[],
+  channelId: string,
+  botUserId: string,
+): { ownMessageId?: string } {
+  const own = chain.findLast(
+    (item) => item.authorId === botUserId && item.channelId === channelId,
+  );
+  return own ? { ownMessageId: own.id } : {};
 }
 
 function isAbortError(error: unknown): boolean {
@@ -856,12 +833,6 @@ function clamp(value: number, min: number, max: number): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function getResponseTranscriptMode(message: Message): ResponseTranscriptMode {
-  if (!message.inGuild()) return "dm";
-  if (message.channel.isThread()) return "thread";
-  return "global";
 }
 
 function keepTyping(adapter: DiscordAdapter, channelId: string, log: Logger) {

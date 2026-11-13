@@ -264,6 +264,7 @@ async function runReply(replies: LlmResponse[]) {
     channelId: "dm",
     authorId: "human",
     authorName: "Mia",
+    authorUsername: "mia",
     authorIsBot: false,
     content: "got any recordings?",
     timestamp: new Date("2026-11-08T00:00:00Z"),

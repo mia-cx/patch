@@ -113,10 +113,14 @@ export function registerHarnessActions(registry: ActionRegistry) {
 
   register(
     "react",
-    "Add Patch's reaction to a visible message. This can be your entire response.",
-    Schema.Struct({ message_id: ID, emoji: Name }),
+    "Add Patch's reaction to the message you are answering, or to message_id from a tool result. This can be your entire response.",
+    Schema.Struct({ message_id: Schema.optional(ID), emoji: Name }),
     async (input, context, channelId) => {
-      const message = await target(context, channelId, input.message_id);
+      const message = await target(
+        context,
+        channelId,
+        input.message_id ?? context.toolScope.currentMessageId,
+      );
       context.toolScope.signal.throwIfAborted();
       await message.react(input.emoji);
       return { message_id: message.id, reacted: true };
@@ -124,10 +128,14 @@ export function registerHarnessActions(registry: ActionRegistry) {
   );
   register(
     "unreact",
-    "Remove only Patch's reaction from a visible message.",
-    Schema.Struct({ message_id: ID, emoji: Name }),
+    "Remove only Patch's reaction from the message you are answering, or from message_id.",
+    Schema.Struct({ message_id: Schema.optional(ID), emoji: Name }),
     async (input, context, channelId) => {
-      const message = await target(context, channelId, input.message_id);
+      const message = await target(
+        context,
+        channelId,
+        input.message_id ?? context.toolScope.currentMessageId,
+      );
       const reaction = message.reactions.resolve(input.emoji);
       if (!reaction || !context.client.user)
         throw new Error("Patch's reaction was not found");
@@ -138,8 +146,8 @@ export function registerHarnessActions(registry: ActionRegistry) {
   );
   register(
     "edit_message",
-    "Edit a visible message written by Patch; never edit another author's message.",
-    Schema.Struct({ message_id: ID, text: Text }),
+    "Edit Patch's latest message in this conversation; never another author's message.",
+    Schema.Struct({ message_id: Schema.optional(ID), text: Text }),
     async (input, context, channelId) => {
       const message = await ownTarget(context, channelId, input.message_id);
       context.toolScope.signal.throwIfAborted();
@@ -149,8 +157,8 @@ export function registerHarnessActions(registry: ActionRegistry) {
   );
   register(
     "delete_message",
-    "Delete a visible message written by Patch only.",
-    Schema.Struct({ message_id: ID }),
+    "Delete Patch's latest message in this conversation. Patch's own messages only.",
+    Schema.Struct({ message_id: Schema.optional(ID) }),
     async (input, context, channelId) => {
       const message = await ownTarget(context, channelId, input.message_id);
       context.toolScope.signal.throwIfAborted();
@@ -160,10 +168,18 @@ export function registerHarnessActions(registry: ActionRegistry) {
   );
   register(
     "start_thread",
-    "Start or reuse a thread on a visible message, with optional opening text.",
-    Schema.Struct({ message_id: ID, name: Name, text: Schema.optional(Text) }),
+    "Start or reuse a thread on the message you are answering, with optional opening text.",
+    Schema.Struct({
+      message_id: Schema.optional(ID),
+      name: Name,
+      text: Schema.optional(Text),
+    }),
     async (input, context, channelId) => {
-      const message = await target(context, channelId, input.message_id);
+      const message = await target(
+        context,
+        channelId,
+        input.message_id ?? context.toolScope.currentMessageId,
+      );
       context.toolScope.signal.throwIfAborted();
       const thread = message.hasThread
         ? (message.thread ?? (await context.client.channels.fetch(message.id)))
@@ -244,10 +260,14 @@ export function registerHarnessActions(registry: ActionRegistry) {
   );
   register(
     "poll_results",
-    "Read the actual counts from a visible poll.",
-    Schema.Struct({ message_id: ID }),
+    "Read the actual counts from Patch's latest poll, or from message_id returned by create_poll.",
+    Schema.Struct({ message_id: Schema.optional(ID) }),
     async (input, context, channelId) => {
-      const message = await target(context, channelId, input.message_id);
+      const message = await target(
+        context,
+        channelId,
+        input.message_id ?? context.toolScope.ownMessageId,
+      );
       if (!message.poll) throw new Error("Message has no poll");
       return {
         question: message.poll.question.text,
@@ -261,8 +281,8 @@ export function registerHarnessActions(registry: ActionRegistry) {
   );
   register(
     "end_poll",
-    "End a visible poll created by Patch.",
-    Schema.Struct({ message_id: ID }),
+    "End Patch's latest poll, or the poll at message_id returned by create_poll.",
+    Schema.Struct({ message_id: Schema.optional(ID) }),
     async (input, context, channelId) => {
       const message = await ownTarget(context, channelId, input.message_id);
       if (!message.poll) throw new Error("Message has no poll");
@@ -548,8 +568,9 @@ async function sendable(
 async function target(
   context: ActionContext,
   channelId: string,
-  messageId: string,
+  messageId: string | undefined,
 ): Promise<Message> {
+  if (!messageId) throw new Error("There is no message to act on");
   if (!context.toolScope?.messageIds.has(messageId))
     throw new Error("Message target is not in the supplied conversation");
   const channel: TextBasedChannel = await sendable(context, channelId);
@@ -560,10 +581,11 @@ async function target(
   });
 }
 
+/** Patch's own message: the given ID, or her latest message in this conversation. */
 async function ownTarget(
   context: ActionContext,
   channelId: string,
-  messageId: string,
+  messageId = context.toolScope?.ownMessageId,
 ) {
   const message = await target(context, channelId, messageId);
   if (message.author.id !== context.client.user?.id)
