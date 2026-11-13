@@ -6,6 +6,10 @@ expanding the assistant features in the versioned specs.
 The voice LoRA carries how Patch talks, so the system prompt holds no style guide:
 only role, identity, transcript reading, output, safety, helpfulness, splitting,
 mentions and tools (about 4k tokens). Long rule lists made her rigid.
+Her identity is name, pronouns and background only. Tastes and opinions grow
+through Remora from her conversations. Later, Tastebase gives her Mia's music
+taste: a read-only store, like Remora but never written by Patch, filled by
+importing Mia's last.fm history with an embedding per song.
 
 Patch's runtime stays JavaScript/TypeScript. Remora provides an OpenAI-compatible
 inference API with optional memory-bank selection and fact-level recall controls.

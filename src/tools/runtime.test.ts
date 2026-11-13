@@ -2218,7 +2218,7 @@ describe("complete harness with the actual Discord SDK", () => {
   it("prunes completed native exchanges before their arguments overflow context", async () => {
     const app = await runtime();
     app.config.llmToolMode = "native";
-    app.config.llmContextTokens = 12_288;
+    app.config.llmContextTokens = 11_776;
     app.config.llmToolContextTokens = 512;
     app.config.llmMaxTokens = 2048;
     const sizes: number[] = [];
@@ -2266,7 +2266,7 @@ describe("complete harness with the actual Discord SDK", () => {
     });
     await app.run();
     expect(app.complete).toHaveBeenCalledTimes(4);
-    expect(Math.max(...sizes)).toBeLessThanOrEqual(12_288 + 512);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(11_776 + 512);
     expect(callIds[3]?.length).toBeLessThan(3);
     expect(app.store.listNotes(CHANNEL)).toHaveLength(3);
   });
