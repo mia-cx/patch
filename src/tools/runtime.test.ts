@@ -1256,7 +1256,9 @@ describe("complete harness with the actual Discord SDK", () => {
           input.views.some((view) => view.message_index === 0),
       ),
     ).toBe(true);
-    expect(sent[0]?.content).toContain("Sources:");
+    expect(sent[0]?.content).toContain(
+      "\n-# [fictional-release.example](https://fictional-release.example/aurora)",
+    );
     expect(sent[0]?.content).not.toContain("😀");
     const adapter = new DiscordJsAdapter(app.client, BOT);
     const displayed = await adapter.fetchMessage({

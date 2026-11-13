@@ -5,6 +5,7 @@ import {
   GatewayIntentBits,
   type Message,
   type MessageCreateOptions,
+  MessageFlags,
   type MessageMentionOptions,
   type MessageReference,
   Partials,
@@ -28,6 +29,7 @@ export const discordClientOptions = {
   partials: [Partials.Channel, Partials.Message],
 };
 
+/** Sends Patch's messages with link embeds suppressed, as if every link were wrapped in `<>`. */
 export class DiscordJsAdapter implements DiscordAdapter {
   constructor(
     private readonly client: Client,
@@ -75,6 +77,7 @@ export class DiscordJsAdapter implements DiscordAdapter {
 
     const message = await channel.send({
       content,
+      flags: MessageFlags.SuppressEmbeds,
       allowedMentions: buildAllowedMentions(options.allowedMentionUsers),
       nonce: randomUUID().replaceAll("-", "").slice(0, 25),
       enforceNonce: true,
@@ -99,6 +102,7 @@ export class DiscordJsAdapter implements DiscordAdapter {
     const messageOptions: MessageCreateOptions = {
       content,
       reply: { messageReference: target.messageId, failIfNotExists: false },
+      flags: MessageFlags.SuppressEmbeds,
       allowedMentions: buildAllowedMentions(options.allowedMentionUsers),
       nonce: randomUUID().replaceAll("-", "").slice(0, 25),
       enforceNonce: true,

@@ -147,7 +147,7 @@ export async function auditFullCaller() {
     toolRounds = 3;
     await app.turn(BANKS[1], `Read ${WEB_URL}`);
     assert(
-      app.sent.some((message) => message.text.includes("Sources:")),
+      app.sent.some((message) => message.text.includes("\n-# [")),
       "Actual citation transformation was not exercised",
     );
     assert.equal(app.violations.length, 0);

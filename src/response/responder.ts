@@ -574,11 +574,15 @@ function withSources(
   sources: Array<{ title: string; url: string; kind: string }>,
 ) {
   if (!sources.length) return content;
-  const links = sources.map(
-    (source) =>
-      `[${source.title.replaceAll(/[\[\]\\\r\n]/g, " ").slice(0, 90)}](${source.url.replaceAll("(", "%28").replaceAll(")", "%29")})${source.kind === "search" ? " (search)" : ""}`,
-  );
-  return `${content}\n\nSources: ${links.join(" · ")}`;
+  // One subtext line of hostnames: tiny, one link per site.
+  const sites = new Map<string, string>();
+  for (const { url } of sources) {
+    const host = new URL(url).hostname.replace(/^www\./, "");
+    if (!sites.has(host))
+      sites.set(host, url.replaceAll("(", "%28").replaceAll(")", "%29"));
+  }
+  const links = [...sites].map(([host, url]) => `[${host}](${url})`);
+  return `${content}\n-# ${links.join(" · ")}`;
 }
 
 function withClassifierDecisionBlock(
