@@ -14,13 +14,18 @@ through Remora from her conversations. Later, Tastebase gives her Mia's music
 taste: a read-only store, like Remora but never written by Patch, filled by
 importing Mia's last.fm history with an embedding per song.
 
-Patch's runtime stays JavaScript/TypeScript. Remora provides an OpenAI-compatible
-inference API with optional memory-bank selection and fact-level recall controls.
-Remora can keep its Python core; Patch consumes the API and remains independent
-of the inference backend. Bank selection and write destinations are distinct,
-and Remora enforces which facts may enter recall. For service setup and supported
-trial behavior, read the [final Remora serving guide](https://github.com/mia-cx/remora/blob/242fae2c141a7d0c5ebf8ec8dcebaec6ffc1351c/docs/api/serving.md)
-and [entity identity handback](https://github.com/mia-cx/remora/blob/242fae2c141a7d0c5ebf8ec8dcebaec6ffc1351c/docs/api/entity-identity.md).
+This repo is the whole harness: the Discord runtime (TypeScript), Protocord,
+Patch's tools, and the self-hosted services she runs on, Remora (memory and
+local inference) and Laya (reply timing). Inference is pluggable:
+- **Local (now):** Gemma 4 E4B with the voice and atomiser LoRAs on Remora; memory
+  reaches the model through its context, and her voice runs at temperature 0.7.
+- **Cloud (later):** if Gemma's conversation isn't good enough, a much larger hosted
+  model with written instructions. Remora then does memory only: it still recalls,
+  atomises and saves, and Patch puts recalled memories into the model's text input
+  as `memory:` messages. The memory tools stay available either way.
+When Remora saves something from the current message, the model is told so
+(`memory: saved just now: …`) so it never saves the same thing again with a tool.
+Remora keeps its own repo and Python core; Patch consumes its HTTP API.
 
 Protocord is the shared Discord action framework. Its canonical source is
 `mia-cx/protocord`, extracted from Prod with the core, settings, permissions,
