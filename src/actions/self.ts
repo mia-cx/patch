@@ -138,31 +138,20 @@ async function add(
   context: ActionContext,
 ) {
   const identity = getBotIdentity();
-  const receipt = await self
-    .saveStatement({
-      bank: SELF_BANK,
-      request_id: interaction.id,
-      source: {
-        id: `discord:interaction:${interaction.id}`,
-        revision: 0,
-        // Her stable self: the bot's user ID, so renames keep the same identity.
-        entity_id: `discord:user:${interaction.client.user.id}`,
-        label: identity.name,
-        aliases: identity.aliases.slice(0, 8),
-        text: statement,
-        observed_at: new Date(interaction.createdTimestamp).toISOString(),
-      },
-    })
-    .catch((error: unknown) => {
-      if (
-        error instanceof MemoryManagementError &&
-        error.code === "not_about_assistant"
-      )
-        return undefined;
-      throw error;
-    });
-  if (!receipt)
-    return `nothing saved: none of it is about ${identity.name}. say it in her voice ("I love teal") or by name ("${identity.name} loves teal").`;
+  const receipt = await self.saveStatement({
+    bank: SELF_BANK,
+    request_id: interaction.id,
+    source: {
+      id: `discord:interaction:${interaction.id}`,
+      revision: 0,
+      // Her stable self: the bot's user ID, so renames keep the same identity.
+      entity_id: `discord:user:${interaction.client.user.id}`,
+      label: identity.name,
+      aliases: identity.aliases.slice(0, 8),
+      text: statement,
+      observed_at: new Date(interaction.createdTimestamp).toISOString(),
+    },
+  });
   context.logger.info(
     {
       userId: interaction.user.id,
@@ -176,6 +165,9 @@ async function add(
     ...receipt.atoms.map((atom) => `- ${atom}`),
     ...(receipt.context.length
       ? ["context:", ...receipt.context.map((atom) => `- ${atom}`)]
+      : []),
+    ...(receipt.attached.length
+      ? [`attached to #${receipt.attached.join(", #")}`]
       : []),
   ];
   return clip(lines.join("\n"));

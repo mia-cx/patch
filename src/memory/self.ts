@@ -47,8 +47,10 @@ export const SelfStatementReceiptSchema = Schema.Struct({
   status: Schema.Literals(["saved", "forgotten"]),
   /** The standalone statements stored about Patch. */
   atoms: Schema.Array(Schema.String),
-  /** Atoms that did not name Patch, and so were not kept. */
+  /** Atoms that do not name Patch, kept unbound as context. */
   context: Schema.Array(Schema.String),
+  /** Her facts a context-only statement is about; recall reads them together. */
+  attached: Schema.Array(Id),
   /** The self entity's identity digest every kept atom is bound to. */
   subject: Digest,
   linked: Schema.Array(Id),

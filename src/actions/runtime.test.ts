@@ -1173,7 +1173,7 @@ describe("Patch's self memory", () => {
   };
 
   /** The runtime with a team-owned application (OWNER on the team) and a self client. */
-  async function selfRuntime() {
+  async function selfRuntime(receipt: Record<string, unknown> = {}) {
     const app = await runtime();
     const original = app.rest.get.getMockImplementation();
     app.rest.get.mockImplementation(async (route, options) => {
@@ -1258,11 +1258,13 @@ describe("Patch's self memory", () => {
           status: "saved",
           atoms: ["Patch likes teal."],
           context: ["Teal is a blue-green colour."],
+          attached: [],
           subject: "c".repeat(64),
           linked: [],
           replayed: false,
           admission_identity:
             "a56bb32e55d908ce8b66725051ecef1c7d23226b5bf5a924ee32c8e749a96bf8",
+          ...receipt,
         });
       }),
     );
@@ -1362,6 +1364,25 @@ describe("Patch's self memory", () => {
         body: expect.objectContaining({
           content:
             "saved #7:\n- Patch likes teal.\ncontext:\n- Teal is a blue-green colour.",
+        }),
+      }),
+    );
+  });
+
+  // Proves a statement with nothing about Patch is still saved, and says which of her facts it belongs with.
+  it("saves context-only statements and names the fact they attach to", async () => {
+    const app = await selfRuntime({
+      atoms: [],
+      context: ["underscores uses she/her pronouns."],
+      attached: [2],
+    });
+    await app.dispatch(app.add(OWNER));
+    expect(app.rest.patch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        body: expect.objectContaining({
+          content:
+            "saved #7:\ncontext:\n- underscores uses she/her pronouns.\nattached to #2",
         }),
       }),
     );
