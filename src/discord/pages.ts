@@ -2,9 +2,13 @@ import {
   ActionRowBuilder,
   type AttachmentBuilder,
   ButtonBuilder,
+  type ButtonInteraction,
   ButtonStyle,
   type ChatInputCommandInteraction,
   ComponentType,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } from "discord.js";
 import type { Logger } from "../logger.js";
 
@@ -41,8 +45,9 @@ export function paginate(
 }
 
 /**
- * Show `pages` in the command's deferred reply, with ◀ / ▶ buttons while there is more than one.
- * Clicks edit the same message; after `PAGING_MS` the buttons go away. `files` stay on every page.
+ * Show `pages` in the command's deferred reply, with ⏮ ◀ [n / N] ▶ ⏭ buttons while there is more than one.
+ * The page-number button asks for a page to jump to. Clicks edit the same message; after `PAGING_MS`
+ * the buttons go away. `files` stay on every page.
  */
 export async function showPages(
   interaction: ChatInputCommandInteraction,
@@ -51,6 +56,7 @@ export async function showPages(
   files: readonly AttachmentBuilder[] = [],
 ) {
   let at = 0;
+  const last = pages.length - 1;
   const view = () => ({
     content: pages[at] ?? "",
     components: pages.length > 1 ? [buttons(at, pages.length)] : [],
@@ -67,11 +73,29 @@ export async function showPages(
       { error, interactionId: interaction.id },
       "memory page did not update",
     );
+  const jump = async (click: ButtonInteraction) => {
+    const id = `page:jump:${click.id}`;
+    await click.showModal(jumpModal(id, pages.length));
+    const submit = await click.awaitModalSubmit({
+      time: PAGING_MS,
+      filter: (modal) => modal.customId === id,
+    });
+    const page = Number(submit.fields.getTextInputValue("page"));
+    if (Number.isInteger(page)) at = Math.min(Math.max(page - 1, 0), last);
+    if (submit.isFromMessage()) await submit.update(view());
+  };
   collector.on("collect", (click) => {
-    at = Math.min(
-      Math.max(at + (click.customId === "page:next" ? 1 : -1), 0),
-      pages.length - 1,
-    );
+    if (click.customId === "page:at") {
+      jump(click).catch(failed);
+      return;
+    }
+    at =
+      {
+        "page:first": 0,
+        "page:previous": Math.max(at - 1, 0),
+        "page:next": Math.min(at + 1, last),
+        "page:last": last,
+      }[click.customId] ?? at;
     click.update(view()).catch(failed);
   });
   collector.on("end", () => {
@@ -80,21 +104,33 @@ export async function showPages(
 }
 
 function buttons(at: number, count: number) {
+  const button = (id: string, disabled: boolean) =>
+    new ButtonBuilder()
+      .setCustomId(`page:${id}`)
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(disabled);
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId("page:previous")
-      .setEmoji("◀️")
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(at === 0),
-    new ButtonBuilder()
-      .setCustomId("page:at")
-      .setLabel(`${at + 1} / ${count}`)
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(true),
-    new ButtonBuilder()
-      .setCustomId("page:next")
-      .setEmoji("▶️")
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(at === count - 1),
+    button("first", at === 0).setEmoji("⏮️"),
+    button("previous", at === 0).setEmoji("◀️"),
+    button("at", false).setLabel(`${at + 1} / ${count}`),
+    button("next", at === count - 1).setEmoji("▶️"),
+    button("last", at === count - 1).setEmoji("⏭️"),
   );
+}
+
+function jumpModal(id: string, count: number) {
+  return new ModalBuilder()
+    .setCustomId(id)
+    .setTitle("Go to page")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("page")
+          .setLabel(`Page (1–${count})`)
+          .setStyle(TextInputStyle.Short)
+          .setMinLength(1)
+          .setMaxLength(String(count).length)
+          .setRequired(true),
+      ),
+    );
 }

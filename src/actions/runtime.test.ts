@@ -657,9 +657,11 @@ describe("Patch's Protocord integration", () => {
       components: [
         {
           components: [
+            { custom_id: "page:first", disabled: true },
             { custom_id: "page:previous", disabled: true },
-            { label: `1 / ${pages}`, disabled: true },
+            { custom_id: "page:at", label: `1 / ${pages}`, disabled: false },
             { custom_id: "page:next", disabled: false },
+            { custom_id: "page:last", disabled: false },
           ],
         },
       ],
