@@ -1089,7 +1089,7 @@ describe("opt-in Remora DM conversations", () => {
         contextStore: app.store,
       });
     await run();
-    expect(requests).toHaveLength(3);
+    expect(requests).toHaveLength(2);
     const first = requests[0];
     expect(first?.remora).toEqual({
       read_banks: [`discord:user:${HUMAN}`, "shared:music"],
@@ -1110,7 +1110,6 @@ describe("opt-in Remora DM conversations", () => {
     expect(priorHistory).not.toContain("my teacher is Elin");
     expect(requests[1]?.remora).toEqual(first?.remora);
     expect(requests[1]?.chat_template_kwargs.enable_thinking).toBe(false);
-    expect(requests[2]?.remora).toBeUndefined(); // Formatting repair has no write authority.
     const revised = "my teacher is Niko";
     app.remove(2);
     app.add(2, {
@@ -1118,20 +1117,21 @@ describe("opt-in Remora DM conversations", () => {
       edited_timestamp: "2026-10-16T11:00:00.000Z",
     });
     await run();
-    expect(requests[3]?.remora?.turn).toEqual({
+    expect(requests[2]?.remora?.turn).toEqual({
       ...first?.remora?.turn,
       text: revised,
       revision: 1792148400000,
     });
-    expect(requests[3]?.messages.at(-1)?.content).toBe(revised);
+    expect(requests[2]?.messages.at(-1)?.content).toBe(revised);
     const sent = app.post.mock.calls.filter(
       ([route]) => route === `/channels/${CHANNEL}/messages`,
     );
-    expect(sent).toHaveLength(2);
-    for (const [, options] of sent)
-      expect(options?.body).toEqual(
-        expect.objectContaining({ content: "hello" }),
-      );
+    // The first reply is a casual two-line burst: one message per line.
+    expect(sent.map(([, options]) => options?.body)).toEqual([
+      expect.objectContaining({ content: "line one" }),
+      expect.objectContaining({ content: "line two" }),
+      expect.objectContaining({ content: "hello" }),
+    ]);
   });
 
   // Proves ordinary endpoints, shared channels, and attachment-only turns receive no memory controls.

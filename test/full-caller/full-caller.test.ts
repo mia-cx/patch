@@ -14,7 +14,7 @@ vi.mock("node:dns/promises", () => ({
 }));
 
 describe("prepared full caller qualification", () => {
-  // Proves the complete persona, all three tagged rounds, repair and display re-entry bind every nonblank scalar without real HTTP.
+  // Proves the complete persona, all three tagged rounds, and display re-entry bind every nonblank scalar without real HTTP.
   it("audits complete real caller branches with invented responses", async () => {
     vi.useFakeTimers();
     const pending = auditFullCaller();

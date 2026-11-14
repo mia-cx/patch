@@ -33,10 +33,7 @@ import type { DiscordAdapter } from "../discord/adapter.js";
 import { repairMentions } from "../discord/mentions.js";
 import { stripUnicodeEmoji } from "../discord/no-emoji.js";
 import type { PronounProvider } from "../discord/pronouns.js";
-import {
-  needsSplitHintRepair,
-  splitDiscordResponse,
-} from "../discord/split.js";
+import { splitDiscordResponse } from "../discord/split.js";
 import type {
   LlmClient,
   LlmMessage,
@@ -289,14 +286,11 @@ export async function respond(options: RespondOptions): Promise<void> {
         // Check the exact text Discord will show. A plausible URL is not a page:
         // confirmed 404s and missing DNS names never reach Discord.
         present: async ({ content, sources, generatedSource }) => {
-          const repaired = await repairMissingSplitHints({
-            llm,
+          // A casual multi-line burst is split per line when sent (`splitDiscordResponse`).
+          const repaired = {
             content: stripUnicodeEmoji(content.trim()),
-            signal: controller.signal,
-            log,
-            ...(observations ? { observations } : {}),
-            ...(generatedSource ? { source: generatedSource } : {}),
-          });
+            source: generatedSource,
+          };
           observations?.assertCurrent();
           const broken = await findBrokenReplyLinks(
             repaired.content,
@@ -463,74 +457,6 @@ function buildAvailableActions(options: {
     context: options.actionContext,
     registry: options.actionRegistry,
   });
-}
-
-async function repairMissingSplitHints(options: {
-  llm: LlmClient;
-  content: string;
-  signal: AbortSignal;
-  log: Logger;
-  observations?: ConversationObservations;
-  source?: CompletedGeneration;
-}): Promise<{ content: string; source?: CompletedGeneration }> {
-  if (!needsSplitHintRepair(options.content))
-    return {
-      content: options.content,
-      ...(options.source ? { source: options.source } : {}),
-    };
-
-  options.log.debug(
-    { contentLength: options.content.length },
-    "repairing missing split hints",
-  );
-
-  const messages: LlmMessage[] = [
-    {
-      role: "system",
-      content: `Repair Discord output formatting only. Preserve the exact words, order, casing, and punctuation. Replace each casual message-separating line break or blank line with ${MESSAGE_SPLIT}, with no newline around it. If the text is a poem, list, quote, heading, code, or structured markdown, return it unchanged. Output only the repaired text.`,
-    },
-    { role: "user", content: options.content },
-  ];
-  const remora = options.observations
-    ? options.observations.transformation(messages, options.source)
-    : undefined;
-  const response = await options.llm.complete({
-    messages,
-    temperature: 0,
-    maxTokens: 768,
-    enableThinking: false,
-    signal: options.signal,
-    ...(options.observations
-      ? { beforeRequest: () => options.observations?.assertCurrent() }
-      : {}),
-    ...(remora
-      ? {
-          remora,
-          onResponse: (reply: LlmResponse) => {
-            options.observations?.capture(reply, remora.observations);
-          },
-        }
-      : {}),
-  });
-
-  const repaired = stripUnicodeEmoji(response.content.trim());
-  if (!repaired)
-    return {
-      content: options.content,
-      ...(options.source ? { source: options.source } : {}),
-    };
-
-  options.log.debug(
-    {
-      repaired: repaired !== options.content,
-      stillNeedsRepair: needsSplitHintRepair(repaired),
-      finishReason: response.finishReason,
-      timings: response.timings,
-    },
-    "split hint repair complete",
-  );
-  const source = remora ? options.observations?.capture(response) : undefined;
-  return { content: repaired, ...(source ? { source } : {}) };
 }
 
 /** Legacy turn writes have one destination; layers exist only inside an observation batch. */

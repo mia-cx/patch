@@ -38,10 +38,10 @@ and AI scaffold. Patch consumes it as a pinned submodule at `vendor/protocord`
 through pnpm workspace dependencies. Publishing packages is deferred.
 
 Patch actions use Protocord's shared validation, authorization and trigger lifecycle.
-Plain model text splits at `<|message_split|>` outside code; legacy `<split />` remains accepted. Headings keep their newlines. An optional `<reply />` replies to the message being answered.
+A casual reply of up to four short lines, with no markdown structure, sends one Discord message per line, matching how the voice adapter learned bursts. Other text splits at `<|message_split|>` outside code; legacy `<split />` remains accepted. Lists, quotes, headings and code keep their newlines. The persona prompt is written in Patch's own lowercase register. An optional `<reply />` replies to the message being answered.
 Patch mentions people as `@username`; the send path turns participants into pings and drops other IDs and roles.
 Reactions, own-message edits/deletion, threads, polls, stickers and fixed-text follow-ups are implemented.
-Every link Patch shows passes a link check before any chunk is sent, including text after actions and split repairs. A confirmed 404 (HEAD confirmed by GET) or definite DNS absence withholds the draft and asks for at most two rewrites through the tool loop; dead or rejected appended sources are dropped. Auth, server and timeout results are inconclusive and send. Checks follow bounded redirects and never reach private networks. Rejected drafts never post.
+Every link Patch shows passes a link check before any chunk is sent, including text after actions. A confirmed 404 (HEAD confirmed by GET) or definite DNS absence withholds the draft and asks for at most two rewrites through the tool loop; dead or rejected appended sources are dropped. Auth, server and timeout results are inconclusive and send. Checks follow bounded redirects and never reach private networks. Rejected drafts never post.
 Follow-ups support one-off timestamps or cron with explicit IANA timezone, persisted next occurrences and bounded missed-tick coalescing.
 Ambiguous sends pause the schedule. Recurring delivery is synthetically qualified, without deployment or real scheduled messages.
 DDG search/fetch identifies Patch/Protocord; persistent scoped notes offer no code execution.

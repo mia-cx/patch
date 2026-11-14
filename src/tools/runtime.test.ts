@@ -699,57 +699,19 @@ describe("complete harness with the actual Discord SDK", () => {
     },
   );
 
-  // Proves an unqualified predecessor leaves repair input unknown while both exact decoder preimages are captured.
-  it("captures an actual repair attempt with an unqualified original parent", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "patch-raw-repair-"));
-    resources.push(() => rmSync(dir, { recursive: true, force: true }));
-    const path = join(dir, "harness.sqlite");
-    const app = await runtime(false, true, path);
-    app.complete.mockRestore();
-    app.config.llmTemperature = 0;
-    app.config.remoraObservationStartId = "1000000000000000000";
-    const bodies: Array<{
-      messages: LlmMessage[];
-      remora?: { observations: ObservationBatch };
-    }> = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        if (url.endsWith("/capabilities"))
-          return Response.json(evidenceCapabilities);
-        const body = JSON.parse(String(init?.body));
-        bodies.push(body);
-        const content =
-          bodies.length === 1 ? "first\nsecond" : "first<split />second";
-        return Response.json(
-          body.remora
-            ? observationReply(
-                body.remora.observations,
-                content,
-                bodies.length,
-                "untracked_dependencies",
-              )
-            : { choices: [{ message: { content } }] },
-        );
-      }),
-    );
-    await app.llm.initializeRemora();
-    await app.run([toConversationMessage(app.message, BOT)]);
-    expect(bodies).toHaveLength(2);
+  // Proves a casual two-line reply goes out as two Discord messages with no second model call.
+  it("sends each line of a casual burst as its own message without a repair call", async () => {
+    const app = await runtime(true);
+    app.complete.mockResolvedValue({ content: "first\nsecond" });
+    await app.run();
+    expect(app.complete).toHaveBeenCalledTimes(1);
     expect(
-      bodies[1]?.remora?.observations.inputs.every(
-        (input) => input.origin === "system_input",
-      ),
-    ).toBe(true);
-    const inspect = new DatabaseSync(path, { readOnly: true });
-    resources.push(() => inspect.close());
-    expect(
-      inspect
-        .prepare("SELECT raw,eligible FROM harness_generations ORDER BY id")
-        .all(),
+      app.rest.post.mock.calls
+        .filter(([route]) => route === `/channels/${CHANNEL}/messages`)
+        .map(([, options]) => options?.body),
     ).toEqual([
-      { raw: "first\nsecond", eligible: 0 },
-      { raw: "first<split />second", eligible: 0 },
+      expect.objectContaining({ content: "first" }),
+      expect.objectContaining({ content: "second" }),
     ]);
   });
   // Proves a fenced in-flight response cannot execute an action or present either private text or a fallback message.
@@ -2422,8 +2384,8 @@ describe("complete harness with the actual Discord SDK", () => {
       {
         ...current,
         id: "1000000000000000000",
-        content: `OLD_HISTORY ${"x".repeat(6000)}`,
-        source: { text: `OLD_HISTORY ${"x".repeat(6000)}`, revision: 0 },
+        content: `OLD_HISTORY ${"x".repeat(8000)}`,
+        source: { text: `OLD_HISTORY ${"x".repeat(8000)}`, revision: 0 },
       },
       current,
     ]);

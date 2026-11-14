@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { MESSAGE_SPLIT as S } from "../conversation/reserved-tokens.js";
-import { needsSplitHintRepair, splitDiscordResponse } from "./split.js";
+import { isCasualBurst, splitDiscordResponse } from "./split.js";
 
 describe("splitDiscordResponse", () => {
   // Proves explicit markers outside code are the only message boundaries, and every newline inside a message survives.
   it.each([
     [
-      "keeps newlines without markers",
+      "sends each line of a casual burst as its own message",
       "first\nsecond\n\nthird",
-      ["first\nsecond\n\nthird"],
+      ["first", "second", "third"],
+    ],
+    [
+      "keeps a list's newlines inside one message",
+      "my picks:\n- teal\n- violet",
+      ["my picks:\n- teal\n- violet"],
     ],
     [
       "splits at the canonical marker with no added whitespace",
@@ -109,7 +114,7 @@ describe("splitDiscordResponse", () => {
   });
 });
 
-describe("needsSplitHintRepair", () => {
+describe("isCasualBurst", () => {
   // Proves only short casual multi-line output without markers or Markdown structure asks for repair.
   it.each([
     ["casual blank-line burst", "first\nsecond\n\nthird", true],
@@ -129,6 +134,6 @@ describe("needsSplitHintRepair", () => {
     ["long line", `${"x".repeat(181)}\nshort`, false],
     ["many lines", "one\ntwo\nthree\nfour\nfive", false],
   ])("%s", (_reason, input, expected) => {
-    expect(needsSplitHintRepair(input)).toBe(expected);
+    expect(isCasualBurst(input)).toBe(expected);
   });
 });

@@ -1,8 +1,8 @@
 const DISCORD_MESSAGE_LIMIT = 2000;
 const SAFE_MESSAGE_LIMIT = 1900;
 const MAX_RESPONSE_MESSAGES = 6;
-const MAX_SPLIT_REPAIR_LINES = 4;
-const MAX_SPLIT_REPAIR_LINE_CHARS = 180;
+const MAX_BURST_LINES = 4;
+const MAX_BURST_LINE_CHARS = 180;
 /** The canonical `MESSAGE_SPLIT` marker, plus the `<split />` hint older adapters emit. */
 const SPLIT_MARKER = /<\|message_split\|>|<split\s*\/?>/i;
 const FENCE = /^([ \t]*)(`{3,}|~{3,})(.*)$/;
@@ -24,8 +24,8 @@ const STRUCTURED_MARKDOWN = [
 
 type Range = readonly [start: number, end: number];
 
-/** Casual multi-line output with no explicit markers may ask the model to place them. */
-export function needsSplitHintRepair(content: string): boolean {
+/** Casual multi-line output with no explicit markers: a burst, sent as one Discord message per line. */
+export function isCasualBurst(content: string): boolean {
   if (!content.trim()) return false;
   if (SPLIT_MARKER.test(content)) return false;
   if (STRUCTURED_MARKDOWN.some((pattern) => pattern.test(content))) {
@@ -38,17 +38,19 @@ export function needsSplitHintRepair(content: string): boolean {
     .filter(Boolean);
   return (
     nonEmptyLines.length >= 2 &&
-    nonEmptyLines.length <= MAX_SPLIT_REPAIR_LINES &&
-    nonEmptyLines.every((line) => line.length <= MAX_SPLIT_REPAIR_LINE_CHARS)
+    nonEmptyLines.length <= MAX_BURST_LINES &&
+    nonEmptyLines.every((line) => line.length <= MAX_BURST_LINE_CHARS)
   );
 }
 
 /**
- * Sends one Discord message per explicit marker outside code, keeping every
- * newline inside a message, then applies Discord's length and burst limits.
+ * Sends one Discord message per line of a casual burst, or per explicit marker outside code
+ * (keeping every other newline inside a message), then applies Discord's length and burst limits.
  */
 export function splitDiscordResponse(content: string): string[] {
-  const chunks = splitOnMarkers(content)
+  const chunks = (
+    isCasualBurst(content) ? content.split("\n") : splitOnMarkers(content)
+  )
     .flatMap((chunk) => splitHardLimit(chunk.trim()))
     .filter(Boolean);
   return capResponseMessages(chunks);

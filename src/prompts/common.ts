@@ -5,6 +5,5 @@ export const RESPONSE_PROMPT_FILES = [
   "system/06-output.md",
   "system/07-safety.md",
   "system/12-helpfulness.md",
-  "system/13-splitting.md",
   "system/14-mentions.md",
 ];
