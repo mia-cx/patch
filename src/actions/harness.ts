@@ -26,6 +26,7 @@ const NO_MENTIONS = { parse: [] as never[], repliedUser: false };
 const CONTINUATION_TOOLS = new Set([
   "web_search",
   "web_fetch",
+  "urban_dictionary",
   "memory_search",
   "scratch_list",
   "scratch_read",
@@ -476,6 +477,13 @@ export function registerHarnessActions(registry: ActionRegistry) {
         input.offset,
         context.toolScope?.signal,
       ),
+  );
+  register(
+    "urban_dictionary",
+    "Look up slang you don't know on Urban Dictionary. Returns up to three crowd-written definitions; how the word was used decides which one fits.",
+    Schema.Struct({ term: Schema.String }),
+    async (input, context) =>
+      context.harness?.web.slang(input.term, context.toolScope?.signal),
   );
   register(
     "scratch_list",

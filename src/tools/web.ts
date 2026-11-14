@@ -2,6 +2,7 @@ import { lookup } from "node:dns/promises";
 import { request } from "node:https";
 import { isIP } from "node:net";
 import { createBrotliDecompress, createUnzip } from "node:zlib";
+import { Schema } from "effect";
 import ipaddr from "ipaddr.js";
 import { DOMParser, parseHTML } from "linkedom";
 
@@ -38,6 +39,27 @@ function feedText(xml: string) {
       .join("\n"),
   };
 }
+const SLANG_DEFINITIONS = 3;
+const UrbanDictionary = Schema.Struct({
+  list: Schema.Array(
+    Schema.Struct({
+      word: Schema.String,
+      definition: Schema.String,
+      example: Schema.String,
+      permalink: Schema.String,
+    }),
+  ),
+});
+
+/** Urban Dictionary text without its [cross-link] brackets or CRLFs, cut to `limit` characters. */
+function plain(text: string, limit: number) {
+  const clean = text
+    .replaceAll(/\[([^\]]*)\]/g, "$1")
+    .replaceAll("\r\n", "\n")
+    .trim();
+  return clean.length > limit ? `${clean.slice(0, limit - 1)}…` : clean;
+}
+
 const IDENTITY =
   "Patch/0.0.0 (Protocord; Node.js https; +https://github.com/mia-cx/patch)";
 export const WEB_AGENTS = [
@@ -220,6 +242,35 @@ export class WebClient {
         offset + PAGE_CHARS < page.text.length ? offset + PAGE_CHARS : null,
       user_agent: page.agent,
       sources: [{ title: page.title, url: page.url, kind: "page" as const }],
+    };
+  }
+
+  /**
+   * Urban Dictionary's first definitions of `term`, in its own order (its API reports no votes).
+   * Definitions are crowd-written; the word's use in the conversation picks the sense.
+   */
+  async slang(term: string, signal?: AbortSignal) {
+    if (!term.trim() || term.length > 100)
+      throw new Error("Slang term must contain 1–100 characters");
+    const url = new URL("https://api.urbandictionary.com/v0/define");
+    url.searchParams.set("term", term.trim());
+    const { list } = Schema.decodeUnknownSync(UrbanDictionary)(
+      JSON.parse((await this.load(url, signal)).body),
+    );
+    const definitions = list.slice(0, SLANG_DEFINITIONS).map((entry) => ({
+      word: entry.word,
+      definition: plain(entry.definition, 600),
+      example: plain(entry.example, 300),
+      url: this.validateURL(entry.permalink).href,
+    }));
+    return {
+      term,
+      definitions,
+      sources: definitions.map(({ word, url }) => ({
+        title: `${word} on Urban Dictionary`,
+        url,
+        kind: "page" as const,
+      })),
     };
   }
 

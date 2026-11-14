@@ -37,7 +37,7 @@ export function toolResultMessage(
       !result.completed ||
       result.truncated ||
       !record(result.output) ||
-      !["web_fetch", "web_search"].includes(result.name)
+      !["web_fetch", "web_search", "urban_dictionary"].includes(result.name)
     ) {
       unknownPaths.add(JSON.stringify([index, "output"]));
       continue;
@@ -99,6 +99,15 @@ export function toolResultMessage(
                 row.url,
               );
     }
+    if (result.name === "urban_dictionary" && Array.isArray(output.definitions))
+      for (const [rowIndex, row] of output.definitions.entries())
+        if (record(row))
+          for (const key of ["word", "definition", "example"])
+            add(
+              [index, "output", "definitions", rowIndex, key],
+              row[key],
+              row.url,
+            );
     if (Array.isArray(output.sources))
       for (const [rowIndex, row] of output.sources.entries())
         if (record(row))
