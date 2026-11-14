@@ -1,5 +1,10 @@
 # Patch
 
+<a href="https://0rwx.com"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://0rwx.com/static/AI-W-dark.svg">
+  <img alt="AI:W" src="https://0rwx.com/static/AI-W-light.svg" height="48">
+</picture></a>
+
 A Discord conversation harness for a locally hosted model.
 Product behavior is described in [SPEC.md](SPEC.md); current project decisions
 are in [DIRECTION.md](DIRECTION.md).
@@ -29,7 +34,7 @@ Patch's Protocord actions now include:
 
 - Reactions and removal of her own reactions; edits/deletion of her own messages.
 - Starting/joining/leaving threads, native polls, poll results and server emoji/stickers.
-- Durable fixed-text follow-ups: schedule, inspect and cancel, without another model call.
+- Durable fixed-text follow-ups: one-off or cron with an explicit IANA timezone, inspect and cancel, without another model call.
 - DuckDuckGo search and readable public HTTPS pages, with real source links.
 - Persistent conversation-scoped text notes: list, read, write and delete with revisions.
 
@@ -52,6 +57,8 @@ virtual text names, never host paths or a shell. Ordinary context resets retain
 notes. A memory-deletion fence clears **all notes and queued follow-up text under
 Patch's API credential**, conservatively preventing forgotten facts surviving there.
 An uncertain Discord delivery is held for reconciliation rather than resent.
+Recurring jobs retain their next occurrence across restarts and skip missed ticks.
+See [recurring follow-ups](spec/recurring-followups.md) for DST, limits and synthetic contracts.
 
 Games remain deferred. These paths are tested through the actual Discord SDK
 with invented network responses; actual Remora tool selection is not yet qualified.
@@ -145,8 +152,9 @@ See [Remora's active-recall guide](https://github.com/mia-cx/remora/blob/28216a6
 
 `REMORA_DM_ENABLED=true` enables memory for text turns in one-to-one DMs. Point
 the existing `LLM_BASE_URL`, `LLM_MODEL`, and `LLM_API_KEY` at an isolated Remora
-service. The validated profiles require `LLM_TEMPERATURE=0`, thinking disabled,
-and activity updates disabled. Memory remains off by default.
+service. Thinking must be disabled. A backend that does not advertise
+`features.sampling` also requires `LLM_TEMPERATURE=0` and activity updates
+disabled. Memory remains off by default.
 
 Set `DISCORD_TRIAL_DM_CHANNEL_ID` for a trial confined to one DM. Patch then
 subscribes only to DM events, confines conversation replies to that DM, and skips

@@ -2,11 +2,64 @@ import { lookup } from "node:dns/promises";
 import { request } from "node:https";
 import { isIP } from "node:net";
 import { createBrotliDecompress, createUnzip } from "node:zlib";
+import { Schema } from "effect";
 import ipaddr from "ipaddr.js";
-import { parseHTML } from "linkedom";
+import { DOMParser, parseHTML } from "linkedom";
 
 const MAX_BYTES = 2_000_000;
 const PAGE_CHARS = 4_000;
+/** Redirect targets that are cookie/privacy gates rather than the requested page. */
+const CONSENT_WALL = /consent|privacy-gate|cookie-?wall|gdpr/i;
+const FEED_TYPES = new Set([
+  "application/rss+xml",
+  "application/atom+xml",
+  "application/xml",
+  "text/xml",
+]);
+
+/** An RSS or Atom feed as one headline per line, or undefined when the XML is not a feed. */
+function feedText(xml: string) {
+  const document = new DOMParser().parseFromString(xml, "text/xml");
+  const items = [...document.querySelectorAll("item, entry")];
+  if (!items.length) return undefined;
+  type Scope = NonNullable<ReturnType<typeof document.querySelector>>;
+  const text = (node: Scope, selector: string) =>
+    node.querySelector(selector)?.textContent?.trim() ?? "";
+  return {
+    title: text(document.documentElement, "title"),
+    text: items
+      .map((item) => {
+        const link =
+          text(item, "link") ||
+          item.querySelector("link")?.getAttribute("href") ||
+          "";
+        const date = text(item, "pubDate") || text(item, "updated");
+        return `- ${text(item, "title")}${link ? ` (${link})` : ""}${date ? ` — ${date}` : ""}`;
+      })
+      .join("\n"),
+  };
+}
+const SLANG_DEFINITIONS = 3;
+const UrbanDictionary = Schema.Struct({
+  list: Schema.Array(
+    Schema.Struct({
+      word: Schema.String,
+      definition: Schema.String,
+      example: Schema.String,
+      permalink: Schema.String,
+    }),
+  ),
+});
+
+/** Urban Dictionary text without its [cross-link] brackets or CRLFs, cut to `limit` characters. */
+function plain(text: string, limit: number) {
+  const clean = text
+    .replaceAll(/\[([^\]]*)\]/g, "$1")
+    .replaceAll("\r\n", "\n")
+    .trim();
+  return clean.length > limit ? `${clean.slice(0, limit - 1)}…` : clean;
+}
+
 const IDENTITY =
   "Patch/0.0.0 (Protocord; Node.js https; +https://github.com/mia-cx/patch)";
 export const WEB_AGENTS = [
@@ -157,6 +210,11 @@ export class WebClient {
           }
         }
         text = main.innerText;
+      } else if (FEED_TYPES.has(type ?? "")) {
+        const feed = feedText(text);
+        if (!feed) throw new Error(`Unsupported page format: ${type}`);
+        title = feed.title || title;
+        text = feed.text;
       } else if (!type?.startsWith("text/plain") && type !== "text/markdown")
         throw new Error(`Unsupported page format: ${type || "unknown"}`);
       text = text
@@ -184,6 +242,35 @@ export class WebClient {
         offset + PAGE_CHARS < page.text.length ? offset + PAGE_CHARS : null,
       user_agent: page.agent,
       sources: [{ title: page.title, url: page.url, kind: "page" as const }],
+    };
+  }
+
+  /**
+   * Urban Dictionary's first definitions of `term`, in its own order (its API reports no votes).
+   * Definitions are crowd-written; the word's use in the conversation picks the sense.
+   */
+  async slang(term: string, signal?: AbortSignal) {
+    if (!term.trim() || term.length > 100)
+      throw new Error("Slang term must contain 1–100 characters");
+    const url = new URL("https://api.urbandictionary.com/v0/define");
+    url.searchParams.set("term", term.trim());
+    const { list } = Schema.decodeUnknownSync(UrbanDictionary)(
+      JSON.parse((await this.load(url, signal)).body),
+    );
+    const definitions = list.slice(0, SLANG_DEFINITIONS).map((entry) => ({
+      word: entry.word,
+      definition: plain(entry.definition, 600),
+      example: plain(entry.example, 300),
+      url: this.validateURL(entry.permalink).href,
+    }));
+    return {
+      term,
+      definitions,
+      sources: definitions.map(({ word, url }) => ({
+        title: `${word} on Urban Dictionary`,
+        url,
+        kind: "page" as const,
+      })),
     };
   }
 
@@ -276,7 +363,13 @@ export class WebClient {
           const location = response.headers.location;
           if (typeof location !== "string")
             throw new Error("Redirect has no location");
-          url = this.validateURL(new URL(location, url).href);
+          const next = this.validateURL(new URL(location, url).href);
+          // A consent gate holds no page content; say so instead of returning the gate.
+          if (CONSENT_WALL.test(`${next.hostname}${next.pathname}`))
+            throw new Error(
+              `${initial.hostname} redirects to a cookie consent page (${next.hostname}), so its content is unavailable. Try the site's RSS feed (often /rss) or another source.`,
+            );
+          url = next;
           continue;
         }
         if (response.status === 403 || response.status === 406) break;

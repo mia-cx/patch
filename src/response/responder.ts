@@ -22,20 +22,18 @@ import {
   observationNamespace,
 } from "../conversation/observations.js";
 import { buildRemoraRequest } from "../conversation/remora.js";
+import { MESSAGE_SPLIT } from "../conversation/reserved-tokens.js";
 import type { ConversationContextStore } from "../conversation/store.js";
 import {
   buildTranscript,
-  formatTranscript,
   formatTranscriptMessages,
 } from "../conversation/transcript.js";
 import type { ConversationMessage } from "../conversation/types.js";
 import type { DiscordAdapter } from "../discord/adapter.js";
+import { repairMentions } from "../discord/mentions.js";
 import { stripUnicodeEmoji } from "../discord/no-emoji.js";
 import type { PronounProvider } from "../discord/pronouns.js";
-import {
-  needsSplitHintRepair,
-  splitDiscordResponse,
-} from "../discord/split.js";
+import { splitDiscordResponse } from "../discord/split.js";
 import type {
   LlmClient,
   LlmMessage,
@@ -47,7 +45,6 @@ import type { RemoraRequest } from "../llm/remora.js";
 import type { Logger } from "../logger.js";
 import {
   RESPONSE_TEMPLATE_TOKEN_MARGIN,
-  type ResponseTranscriptMode,
   buildResponseContextBudget,
   buildResponseMessages,
   buildResponseSystemPrompt,
@@ -58,6 +55,7 @@ import {
   WEB_TURN_INSTRUCTIONS,
 } from "../tools/output.js";
 import { runToolTurn } from "../tools/turn.js";
+import { findBrokenLinks, findBrokenReplyLinks } from "./reply-links.js";
 
 const FAILURE_MESSAGE =
   "sorry, brain fog. couldn't get my thoughts into a usable shape. try that again?";
@@ -65,6 +63,7 @@ const TYPING_WORDS_PER_MINUTE = 180;
 const AVERAGE_WORD_CHARS = 5;
 const MIN_FOLLOWUP_TYPING_DELAY_MS = 150;
 const MAX_FOLLOWUP_TYPING_DELAY_MS = 12_000;
+const MAX_LINK_REGENERATIONS = 2;
 
 export type RespondOptions = {
   adapter: DiscordAdapter;
@@ -117,7 +116,13 @@ export async function respond(options: RespondOptions): Promise<void> {
     );
     const remora = options.remoraScope
       ? options.remoraScope(message)
-      : buildRemoraRequest(config, message);
+      : buildRemoraRequest(
+          config,
+          message,
+          message.guildId
+            ? actionContext?.settings.getMemberRole(message.guildId)
+            : undefined,
+        );
     let observations: ConversationObservations | undefined;
     if (remora && llm.observationLimits) {
       const store = actionContext?.harness?.store;
@@ -137,7 +142,11 @@ export async function respond(options: RespondOptions): Promise<void> {
     }
     observationAttempt = observations;
     const scopedActionContext = actionContext
-      ? { ...actionContext, readBanks: remora?.read_banks ?? [] }
+      ? {
+          ...actionContext,
+          readBanks: remora?.read_banks ?? [],
+          writeBank: remora?.write_bank,
+        }
       : undefined;
     const availableActions = await buildAvailableActions({
       message,
@@ -169,8 +178,6 @@ export async function respond(options: RespondOptions): Promise<void> {
     if (remora) contextStore.recordMemoryContext(message.channelId);
     const budget = buildResponseContextBudget(
       config,
-      getResponseTranscriptMode(message),
-      remora !== undefined,
       availableActionsPrompt,
       tools,
       currentTurnInstructions,
@@ -200,58 +207,37 @@ export async function respond(options: RespondOptions): Promise<void> {
     }
     if (chain.length === 0) return;
     const transcript = buildTranscript(chain, botUserId);
-    const history = remora
-      ? {
-          ...transcript,
-          blocks: transcript.blocks.filter((block) => block.id !== message.id),
-        }
-      : transcript;
-    const transcriptText = withClassifierDecisionBlock(
-      formatTranscript(history),
-      classifierDecision,
-    );
-
-    if (config.debugLogging) {
-      log.debug({ transcript: transcriptText }, "built transcript");
-    }
-
-    const promptTranscript = remora
-      ? formatTranscriptMessages(
-          transcript,
-          message.id,
-          observations ? (block) => observations.humanSource(block) : undefined,
-          observations
-            ? (block) => observations.assistantBody(block)
-            : undefined,
-          currentTurnInstructions,
-        )
-      : transcriptText;
-    if (Array.isArray(promptTranscript) && classifierDecision) {
-      promptTranscript.push({
-        role: "user",
-        content: withClassifierDecisionBlock("", classifierDecision),
-        observationUnknown: [
-          {
-            start: 0,
-            end: withClassifierDecisionBlock("", classifierDecision).length,
-          },
-        ],
-      });
-    }
+    // Remora's legacy source mode binds the raw final message, which cannot carry the speaker prefix.
+    const legacyTurn = observations ? undefined : remora?.turn;
     const promptMessages = buildResponseMessages(
-      promptTranscript,
-      getResponseTranscriptMode(message),
+      formatTranscriptMessages(
+        legacyTurn
+          ? {
+              ...transcript,
+              blocks: transcript.blocks.filter(
+                (block) => block.id !== message.id,
+              ),
+            }
+          : transcript,
+        message.id,
+        observations ? (block) => observations.humanSource(block) : undefined,
+        observations ? (block) => observations.assistantBody(block) : undefined,
+        [
+          classifierDecision
+            ? formatClassifierDecision(classifierDecision)
+            : "",
+          currentTurnInstructions,
+        ].filter(Boolean),
+      ),
       availableActionsPrompt,
-      remora?.turn?.text,
     );
-    if (observations)
-      promptMessages[promptMessages.length - 1] = observations.currentMessage();
+    if (legacyTurn)
+      promptMessages.push({ role: "user", content: legacyTurn.text });
 
     if (config.llmTraceLogging) {
       log.debug(
         {
           context: summarizeContext(chain),
-          transcript: transcriptText,
           availableActions,
           nativeTools: tools.map((tool) => tool.function.name),
           promptMessages,
@@ -262,6 +248,7 @@ export async function respond(options: RespondOptions): Promise<void> {
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.llmTimeoutMs);
+    const rejectedLinks = new Set<string>();
 
     try {
       const generated = await runToolTurn({
@@ -275,6 +262,7 @@ export async function respond(options: RespondOptions): Promise<void> {
             .filter((item) => item.channelId === message.channelId)
             .map((item) => item.id),
         ]),
+        ...ownMessageId(chain, message.channelId, botUserId),
         allowedTools: new Set(
           actionTools
             .map((tool) => tool.function.name)
@@ -285,7 +273,8 @@ export async function respond(options: RespondOptions): Promise<void> {
         maxCalls: config.maxToolCalls ?? 3,
         maxInputChars: Math.max(
           0,
-          (budget.contextTokens -
+          (budget.contextTokens +
+            config.llmToolContextTokens -
             (budget.responseTokens ?? 0) -
             RESPONSE_TEMPLATE_TOKEN_MARGIN) *
             4,
@@ -293,6 +282,52 @@ export async function respond(options: RespondOptions): Promise<void> {
         nativeTools: tools,
         native: !tagged,
         signal: controller.signal,
+        maxDraftRetries: MAX_LINK_REGENERATIONS,
+        // Check the exact text Discord will show. A plausible URL is not a page:
+        // confirmed 404s and missing DNS names never reach Discord.
+        present: async ({ content, sources, generatedSource }) => {
+          // A casual multi-line burst is split per line when sent (`splitDiscordResponse`).
+          const repaired = {
+            content: stripUnicodeEmoji(content.trim()),
+            source: generatedSource,
+          };
+          observations?.assertCurrent();
+          const broken = await findBrokenReplyLinks(
+            repaired.content,
+            controller.signal,
+          );
+          if (broken.length) {
+            for (const { url } of broken) rejectedLinks.add(url);
+            log.debug(
+              { brokenLinkCount: broken.length },
+              "withholding reply with broken links",
+            );
+            return {
+              feedback: `The harness checked links in your unsent draft and found missing destinations: ${JSON.stringify(broken)}. The draft was not sent. Rewrite your reply to the original message: remove the broken links or use a source from the conversation or your tools. Do not guess replacement URLs.`,
+            };
+          }
+          // Sources the model did not write are appended by the harness; drop dead ones silently.
+          const appended = sources.filter(
+            ({ url }) =>
+              !repaired.content.includes(url) && !rejectedLinks.has(url),
+          );
+          const missing = new Set(
+            (
+              await findBrokenLinks(
+                appended.map(({ url }) => url),
+                controller.signal,
+              )
+            ).map(({ url }) => url),
+          );
+          return {
+            content: withSources(
+              repaired.content,
+              appended.filter(({ url }) => !missing.has(url)),
+            ),
+            sources,
+            generatedSource: repaired.source,
+          };
+        },
         ...(observations
           ? { assertCurrent: () => observations.assertCurrent() }
           : {}),
@@ -303,11 +338,10 @@ export async function respond(options: RespondOptions): Promise<void> {
                 {
                   role: "system",
                   content: buildResponseSystemPrompt(
-                    getResponseTranscriptMode(message),
                     remainingCalls
                       ? availableActionsPrompt
                       : OUTPUT_INSTRUCTIONS,
-                    "before-tools",
+                    true,
                   ),
                 },
                 ...messages.slice(1),
@@ -317,7 +351,7 @@ export async function respond(options: RespondOptions): Promise<void> {
             ? observations.request(requestMessages)
             : continuation && remora
               ? readOnlyRemora(remora)
-              : remora;
+              : remora && withoutLayers(remora);
           const result = await generateResponse({
             llm,
             promptMessages: requestMessages,
@@ -353,22 +387,22 @@ export async function respond(options: RespondOptions): Promise<void> {
         },
       });
       if (!generated.content) return;
-
-      const repaired = await repairMissingSplitHints({
-        llm,
-        content: stripUnicodeEmoji(generated.content.trim()),
-        signal: controller.signal,
-        log,
-        ...(observations ? { observations } : {}),
-        ...(generated.generatedSource
-          ? { source: generated.generatedSource }
-          : {}),
-      });
-      observations?.assertCurrent();
-      const content = repaired.content;
+      if ("memoryControl" in generated && generated.memoryControl) {
+        if (
+          generated.memoryEpoch !== actionContext?.harness?.store.privacyEpoch()
+        )
+          return;
+        await adapter.sendMessage(message.channelId, generated.content, {
+          allowedMentionUsers: [],
+        });
+        return;
+      }
 
       if (config.llmTraceLogging) {
-        log.debug({ sanitizedContent: content }, "llm response trace");
+        log.debug(
+          { sanitizedContent: generated.content },
+          "llm response trace",
+        );
       } else {
         log.debug(
           { sourceCount: generated.sources.length },
@@ -376,12 +410,12 @@ export async function respond(options: RespondOptions): Promise<void> {
         );
       }
 
-      const displayedParent = repaired.source;
+      const displayedParent = generated.generatedSource;
       await sendChunks(
         adapter,
         message,
-        withSources(content, generated.sources),
-        [...transcript.participantUserIds],
+        repairMentions(generated.content, transcript.participants),
+        transcript.participants.map(({ id }) => id),
         log,
         generated.replyTo,
         observations && displayedParent
@@ -425,73 +459,12 @@ function buildAvailableActions(options: {
   });
 }
 
-async function repairMissingSplitHints(options: {
-  llm: LlmClient;
-  content: string;
-  signal: AbortSignal;
-  log: Logger;
-  observations?: ConversationObservations;
-  source?: CompletedGeneration;
-}): Promise<{ content: string; source?: CompletedGeneration }> {
-  if (!needsSplitHintRepair(options.content))
-    return {
-      content: options.content,
-      ...(options.source ? { source: options.source } : {}),
-    };
-
-  options.log.debug(
-    { contentLength: options.content.length },
-    "repairing missing split hints",
-  );
-
-  const messages: LlmMessage[] = [
-    {
-      role: "system",
-      content:
-        "Repair Discord output formatting only. Preserve the exact words, order, casing, and punctuation. Replace casual message-separating line breaks or blank lines with literal <split />. If the text is a poem, list, quote, code, or structured markdown, return it unchanged. Output only the repaired text.",
-    },
-    { role: "user", content: options.content },
-  ];
-  const remora = options.observations
-    ? options.observations.transformation(messages, options.source)
-    : undefined;
-  const response = await options.llm.complete({
-    messages,
-    temperature: 0,
-    maxTokens: 768,
-    enableThinking: false,
-    signal: options.signal,
-    ...(options.observations
-      ? { beforeRequest: () => options.observations?.assertCurrent() }
-      : {}),
-    ...(remora
-      ? {
-          remora,
-          onResponse: (reply: LlmResponse) => {
-            options.observations?.capture(reply, remora.observations);
-          },
-        }
-      : {}),
-  });
-
-  const repaired = stripUnicodeEmoji(response.content.trim());
-  if (!repaired)
-    return {
-      content: options.content,
-      ...(options.source ? { source: options.source } : {}),
-    };
-
-  options.log.debug(
-    {
-      repaired: repaired !== options.content,
-      stillNeedsRepair: needsSplitHintRepair(repaired),
-      finishReason: response.finishReason,
-      timings: response.timings,
-    },
-    "split hint repair complete",
-  );
-  const source = remora ? options.observations?.capture(response) : undefined;
-  return { content: repaired, ...(source ? { source } : {}) };
+/** Legacy turn writes have one destination; layers exist only inside an observation batch. */
+function withoutLayers({
+  also_banks: _,
+  ...remora
+}: RemoraRequest): RemoraRequest {
+  return remora;
 }
 
 /** Follow-up reads retain speaker and recall policy without re-observing the human source. */
@@ -512,24 +485,21 @@ function withSources(
   content: string,
   sources: Array<{ title: string; url: string; kind: string }>,
 ) {
-  const missing = sources.filter((source) => !content.includes(source.url));
-  if (!missing.length) return content;
-  const links = missing.map(
-    (source) =>
-      `[${source.title.replaceAll(/[\[\]\\\r\n]/g, " ").slice(0, 90)}](${source.url.replaceAll("(", "%28").replaceAll(")", "%29")})${source.kind === "search" ? " (search)" : ""}`,
-  );
-  return `${content}\n\nSources: ${links.join(" · ")}`;
+  if (!sources.length) return content;
+  // One subtext line of hostnames: tiny, one link per site.
+  const sites = new Map<string, string>();
+  for (const { url } of sources) {
+    const host = new URL(url).hostname.replace(/^www\./, "");
+    if (!sites.has(host))
+      sites.set(host, url.replaceAll("(", "%28").replaceAll(")", "%29"));
+  }
+  const links = [...sites].map(([host, url]) => `[${host}](${url})`);
+  return `${content}\n-# ${links.join(" · ")}`;
 }
 
-function withClassifierDecisionBlock(
-  transcript: string,
-  decision: ClassifierDecision | undefined,
-): string {
-  if (!decision) return transcript;
-
-  const block = `<classifier_decision should_respond="${String(decision.shouldRespond)}" confidence="${escapeAttribute(String(decision.confidence))}">\n${escapeTranscriptText(decision.reason)}\n</classifier_decision>`;
-  // Per-turn guidance follows history so it cannot invalidate its cached prefix.
-  return `${transcript}\n\n${block}`;
+// Per-turn guidance follows history so it cannot invalidate its cached prefix.
+function formatClassifierDecision(decision: ClassifierDecision): string {
+  return `<classifier_decision should_respond="${String(decision.shouldRespond)}" confidence="${escapeAttribute(String(decision.confidence))}">\n${escapeTranscriptText(decision.reason)}\n</classifier_decision>`;
 }
 
 async function generateResponse(options: {
@@ -652,6 +622,18 @@ function withTimeoutSignal(parent: AbortSignal, timeoutMs: number) {
       parent.removeEventListener("abort", abort);
     },
   };
+}
+
+/** Patch's latest message in this conversation, the default target for edits and deletion. */
+function ownMessageId(
+  chain: readonly ConversationMessage[],
+  channelId: string,
+  botUserId: string,
+): { ownMessageId?: string } {
+  const own = chain.findLast(
+    (item) => item.authorId === botUserId && item.channelId === channelId,
+  );
+  return own ? { ownMessageId: own.id } : {};
 }
 
 function isAbortError(error: unknown): boolean {
@@ -783,12 +765,6 @@ function clamp(value: number, min: number, max: number): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function getResponseTranscriptMode(message: Message): ResponseTranscriptMode {
-  if (!message.inGuild()) return "dm";
-  if (message.channel.isThread()) return "thread";
-  return "global";
 }
 
 function keepTyping(adapter: DiscordAdapter, channelId: string, log: Logger) {

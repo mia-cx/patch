@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { CompletedGeneration } from "../llm/evidence.js";
+import { nextFollowup, validateFollowupTime } from "./followup-schedule.js";
 
 type Note = { path: string; text: string; revision: string };
 export type ObservationContext = {
@@ -24,6 +25,8 @@ export type Followup = {
   text: string;
   status: "pending" | "sending" | "delivered" | "uncertain" | "cancelled";
   message_id: string | null;
+  cron: string | null;
+  timezone: string | null;
 };
 const MAX_NOTE_BYTES = 16_384;
 const MAX_SCOPE_BYTES = 262_144;
@@ -84,6 +87,17 @@ export class HarnessStore {
         PRIMARY KEY(namespace, bank, id, revision)
       ) STRICT;
     `);
+    // Additive migration keeps existing one-off jobs and their delivery state intact.
+    const followupColumns = this.db
+      .prepare("PRAGMA table_info(harness_followups)")
+      .all();
+    for (const column of ["cron", "timezone"]) {
+      if (!followupColumns.some((field) => field.name === column))
+        this.db.exec(`ALTER TABLE harness_followups ADD COLUMN ${column} TEXT`);
+    }
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS harness_followups_due ON harness_followups(status, at)",
+    );
     // A process can disappear after Discord accepts a message. Never blindly resend it.
     this.db
       .prepare(
@@ -509,25 +523,55 @@ export class HarnessStore {
     return { result, replayed: false };
   }
 
+  /** Store a one-off without changing the original timestamp/text calling convention. */
   schedule(scope: string, at: number, text: string, now = Date.now()) {
-    if (!Number.isSafeInteger(at) || at <= now || at > now + 366 * 86_400_000)
-      throw new Error("Follow-up must be within the next year");
+    validateFollowupTime(at, now);
+    return this.insertFollowup(scope, at, text);
+  }
+
+  /** Store the exact text and next occurrence; a recurring schedule occupies one active slot. */
+  scheduleRecurring(
+    scope: string,
+    cron: string,
+    timezone: string,
+    text: string,
+    now = Date.now(),
+  ) {
+    const at = nextFollowup(cron, timezone, now);
+    validateFollowupTime(at, now);
+    return this.insertFollowup(scope, at, text, cron, timezone);
+  }
+
+  private insertFollowup(
+    scope: string,
+    at: number,
+    text: string,
+    cron: string | null = null,
+    timezone: string | null = null,
+  ) {
     if (!text.trim() || text.length > 2000)
       throw new Error("Follow-up text must contain 1–2000 characters");
-    const count = this.db
-      .prepare(
-        "SELECT count(*) AS count FROM harness_followups WHERE scope = ? AND status = 'pending'",
-      )
-      .get(scope);
-    if (Number(count?.count) >= 20)
-      throw new Error("This conversation already has 20 pending follow-ups");
-    const id = randomUUID();
-    this.db
-      .prepare(
-        "INSERT INTO harness_followups(id, scope, at, text) VALUES (?, ?, ?, ?)",
-      )
-      .run(id, scope, at, text);
-    return { id, at: new Date(at).toISOString(), status: "pending" };
+    return this.transaction(() => {
+      const count = this.db
+        .prepare(
+          "SELECT count(*) AS count FROM harness_followups WHERE scope = ? AND status IN ('pending', 'sending', 'uncertain')",
+        )
+        .get(scope);
+      if (Number(count?.count) >= 20)
+        throw new Error("This conversation already has 20 active follow-ups");
+      const id = randomUUID();
+      this.db
+        .prepare(
+          "INSERT INTO harness_followups(id, scope, at, text, cron, timezone) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .run(id, scope, at, text, cron, timezone);
+      return {
+        id,
+        at: new Date(at).toISOString(),
+        status: "pending",
+        ...(cron === null ? {} : { cron, timezone }),
+      };
+    });
   }
 
   followups(scope: string): Followup[] {
@@ -541,7 +585,7 @@ export class HarnessStore {
   cancel(scope: string, id: string) {
     const result = this.db
       .prepare(
-        "UPDATE harness_followups SET status = 'cancelled', text = '' WHERE scope = ? AND id = ? AND status IN ('pending', 'uncertain')",
+        "UPDATE harness_followups SET status = 'cancelled', text = '' WHERE scope = ? AND id = ? AND status IN ('pending', 'sending', 'uncertain')",
       )
       .run(scope, id);
     if (result.changes !== 1)
@@ -557,27 +601,59 @@ export class HarnessStore {
       .all(now) as Followup[];
   }
 
-  claim(id: string) {
+  /** Compare the occurrence as well as its ID, so stale queued work cannot claim a later tick. */
+  claim(id: string, at?: number, now = Date.now()) {
     return (
       this.db
         .prepare(
-          "UPDATE harness_followups SET status = 'sending' WHERE id = ? AND status = 'pending'",
+          "UPDATE harness_followups SET status = 'sending' WHERE id = ? AND status = 'pending' AND at <= ? AND (? IS NULL OR at = ?)",
         )
-        .run(id).changes === 1
+        .run(id, now, at ?? null, at ?? null).changes === 1
     );
   }
 
-  finish(id: string, messageId?: string) {
-    this.db
-      .prepare(
-        "UPDATE harness_followups SET status = ?, message_id = ?, text = CASE WHEN ? IS NOT NULL THEN '' ELSE text END WHERE id = ? AND status = 'sending'",
-      )
-      .run(
-        messageId ? "delivered" : "uncertain",
-        messageId ?? null,
-        messageId ?? null,
-        id,
-      );
+  /** Recheck after Discord lookup, allowing cancellation and privacy fences to stop queued sends. */
+  sending(id: string, at: number) {
+    return Boolean(
+      this.db
+        .prepare(
+          "SELECT 1 FROM harness_followups WHERE id = ? AND at = ? AND status = 'sending'",
+        )
+        .get(id, at),
+    );
+  }
+
+  /** Advance once after success, skipping missed ticks. Ambiguous delivery pauses the entire schedule. */
+  finish(id: string, messageId?: string, now = Date.now(), at?: number) {
+    this.transaction(() => {
+      const job = this.db
+        .prepare(
+          "SELECT * FROM harness_followups WHERE id = ? AND status = 'sending' AND (? IS NULL OR at = ?)",
+        )
+        .get(id, at ?? null, at ?? null) as Followup | undefined;
+      if (!job) return;
+      if (messageId && job.cron && job.timezone) {
+        // Start from the persisted occurrence to preserve cron-parser's DST fold traversal.
+        let next = nextFollowup(job.cron, job.timezone, job.at);
+        if (next <= now) next = nextFollowup(job.cron, job.timezone, now);
+        this.db
+          .prepare(
+            "UPDATE harness_followups SET status = 'pending', at = ?, message_id = ? WHERE id = ?",
+          )
+          .run(next, messageId, id);
+        return;
+      }
+      this.db
+        .prepare(
+          "UPDATE harness_followups SET status = ?, message_id = ?, text = CASE WHEN ? IS NOT NULL THEN '' ELSE text END WHERE id = ? AND status = 'sending'",
+        )
+        .run(
+          messageId ? "delivered" : "uncertain",
+          messageId ?? null,
+          messageId ?? null,
+          id,
+        );
+    });
   }
 
   private checkPath(path: string) {

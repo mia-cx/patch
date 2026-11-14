@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { escapeJsonMessageSplit } from "../conversation/escape.js";
 import type { LlmMessage } from "../llm/client.js";
 import type {
   CompletedGeneration,
@@ -36,7 +37,7 @@ export function toolResultMessage(
       !result.completed ||
       result.truncated ||
       !record(result.output) ||
-      !["web_fetch", "web_search"].includes(result.name)
+      !["web_fetch", "web_search", "urban_dictionary"].includes(result.name)
     ) {
       unknownPaths.add(JSON.stringify([index, "output"]));
       continue;
@@ -98,6 +99,15 @@ export function toolResultMessage(
                 row.url,
               );
     }
+    if (result.name === "urban_dictionary" && Array.isArray(output.definitions))
+      for (const [rowIndex, row] of output.definitions.entries())
+        if (record(row))
+          for (const key of ["word", "definition", "example"])
+            add(
+              [index, "output", "definitions", rowIndex, key],
+              row[key],
+              row.url,
+            );
     if (Array.isArray(output.sources))
       for (const [rowIndex, row] of output.sources.entries())
         if (record(row))
@@ -112,11 +122,11 @@ export function toolResultMessage(
     const binding = bindings.get(key);
     if (unknownPaths.has(key)) {
       const start = content.length;
-      content += JSON.stringify(item);
+      content += json(item);
       observationUnknown.push({ start, end: content.length });
     } else if (typeof item === "string" && binding) {
       const start = content.length;
-      content += JSON.stringify(item);
+      content += json(item);
       observationSources.push({
         ...binding,
         start,
@@ -134,11 +144,11 @@ export function toolResultMessage(
       content += "{";
       Object.entries(item).forEach(([key, child], index) => {
         if (index) content += ",";
-        content += `${JSON.stringify(key)}:`;
+        content += `${json(key)}:`;
         append(child, [...path, key]);
       });
       content += "}";
-    } else content += JSON.stringify(item);
+    } else content += json(item);
   };
   append(value, []);
   return {
@@ -150,6 +160,10 @@ export function toolResultMessage(
   };
 }
 
+/** Tool text is untrusted, so a marker literal in it must not reach the tokenizer whole. */
+function json(value: Json): string {
+  return escapeJsonMessageSplit(JSON.stringify(value));
+}
 function hash(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }

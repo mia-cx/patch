@@ -4,12 +4,16 @@ export type Config = {
   discordToken: string;
   discordClientId: string;
   discordTrialDmChannelId: string;
-  discordTrialGuild: { guildId: string; channelId: string } | undefined;
+  discordTrialGuild:
+    | { guildId: string; channelIds: readonly string[] }
+    | undefined;
   llmBaseUrl: string;
   llmModel: string;
   llmApiKey: string;
   settingsDbPath: string;
   llmContextTokens: number;
+  /** Extra tokens for one turn's tool exchanges, on top of the conversation budget; never carried to later turns. */
+  llmToolContextTokens: number;
   llmEnableThinking: boolean;
   llmThinkingMaxTokens: number;
   llmThinkingTimeoutMs: number;
@@ -20,6 +24,8 @@ export type Config = {
   maxToolCalls: number;
   remoraDmEnabled: boolean;
   remoraReadBanks: readonly string[];
+  /** Token for Patch's self bank, used only by team-only `/self`; set to enable self memory. */
+  remoraSelfApiKey: string;
   remoraObservationStartId?: string;
   botOwnerUserIds: ReadonlySet<string>;
   debugLogging: boolean;
@@ -55,7 +61,10 @@ const ConfigSchema = Schema.Struct({
   discordTrialGuild: Schema.UndefinedOr(
     Schema.Struct({
       guildId: Schema.String.check(Schema.isPattern(/^\d{1,20}$/)),
-      channelId: Schema.String.check(Schema.isPattern(/^\d{1,20}$/)),
+      /** Opted-in channels, from a comma-separated DISCORD_TRIAL_GUILD_CHANNEL_ID. */
+      channelIds: Schema.Array(
+        Schema.String.check(Schema.isPattern(/^\d{1,20}$/)),
+      ).check(Schema.isMinLength(1)),
     }),
   ),
   llmBaseUrl: Schema.String.check(Schema.isMinLength(1)),
@@ -63,6 +72,7 @@ const ConfigSchema = Schema.Struct({
   llmApiKey: Schema.String.check(Schema.isMinLength(1)),
   settingsDbPath: Schema.String.check(Schema.isMinLength(1)),
   llmContextTokens: PositiveInteger,
+  llmToolContextTokens: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   llmEnableThinking: Schema.Boolean,
   llmThinkingMaxTokens: PositiveInteger,
   llmThinkingTimeoutMs: PositiveInteger,
@@ -73,6 +83,7 @@ const ConfigSchema = Schema.Struct({
   maxToolCalls: PositiveInteger,
   remoraDmEnabled: Schema.Boolean,
   remoraReadBanks: Schema.Array(Schema.String),
+  remoraSelfApiKey: Schema.String,
   remoraObservationStartId: Schema.String.check(
     Schema.isPattern(/^(?:|\d{1,20})$/),
   ),
@@ -111,7 +122,9 @@ export function loadConfigEffect(env: NodeJS.ProcessEnv = process.env) {
         env.DISCORD_TRIAL_GUILD_CHANNEL_ID?.trim()
           ? {
               guildId: env.DISCORD_TRIAL_GUILD_ID?.trim() ?? "",
-              channelId: env.DISCORD_TRIAL_GUILD_CHANNEL_ID?.trim() ?? "",
+              channelIds: (env.DISCORD_TRIAL_GUILD_CHANNEL_ID ?? "")
+                .split(",")
+                .map((id) => id.trim()),
             }
           : undefined,
       llmBaseUrl: trimTrailingSlash(
@@ -121,6 +134,7 @@ export function loadConfigEffect(env: NodeJS.ProcessEnv = process.env) {
       llmApiKey: env.LLM_API_KEY ?? "local",
       settingsDbPath: env.SETTINGS_DB_PATH ?? "data/patch.sqlite",
       llmContextTokens: integer(env.LLM_CONTEXT_TOKENS, 32_768),
+      llmToolContextTokens: integer(env.LLM_TOOL_CONTEXT_TOKENS, 16_384),
       llmEnableThinking: boolean(env.LLM_ENABLE_THINKING, false),
       llmThinkingMaxTokens: integer(env.LLM_THINKING_MAX_TOKENS, 1024),
       llmThinkingTimeoutMs: integer(env.LLM_THINKING_TIMEOUT_MS, 20_000),
@@ -131,6 +145,7 @@ export function loadConfigEffect(env: NodeJS.ProcessEnv = process.env) {
       maxToolCalls: Math.min(integer(env.MAX_TOOL_CALLS, 3), 8),
       remoraDmEnabled: boolean(env.REMORA_DM_ENABLED, false),
       remoraReadBanks: splitCsv(env.REMORA_READ_BANKS),
+      remoraSelfApiKey: env.REMORA_SELF_API_KEY?.trim() ?? "",
       remoraObservationStartId: env.REMORA_OBSERVATION_START_ID?.trim() ?? "",
       botOwnerUserIds: new Set(splitCsv(env.BOT_OWNER_USER_IDS)),
       debugLogging: boolean(env.DEBUG_LOGGING, false),

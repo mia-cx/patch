@@ -21,6 +21,9 @@ import type { WebClient } from "../tools/web.js";
 export type ActionPermission =
   | "owner"
   | "delete_messages"
+  | "manage_server"
+  /** Members of the Discord application's Developer Portal team. */
+  | "team"
   | {
       kind: "memory";
       scope: MemoryScope;
@@ -40,6 +43,8 @@ export type ActionContext = {
   config: Config;
   llm: LlmClient;
   memory: RemoraMemoryClient;
+  /** The only client allowed to write or forget Patch's self bank; set with REMORA_SELF_API_KEY. */
+  selfMemory?: RemoraMemoryClient;
   logger: Logger;
   queue: GenerationQueue;
   modelCatalog: ModelCatalog;
@@ -48,8 +53,14 @@ export type ActionContext = {
   harness?: { store: HarnessStore; web: WebClient };
   /** Caller-selected recall scope for this turn; model arguments cannot widen it. */
   readBanks?: readonly string[];
+  /** Sole destination chosen by the Discord adapter; read grants cannot widen it. */
+  writeBank?: string | undefined;
   toolScope?: {
     messageIds: ReadonlySet<string>;
+    /** The message being answered: the default target for reactions, threads and polls. */
+    currentMessageId: string;
+    /** Patch's latest message in the conversation: the default target for edits and deletion. */
+    ownMessageId?: string;
     signal: AbortSignal;
     nonce: string;
   };

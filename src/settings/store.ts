@@ -32,6 +32,21 @@ export class SettingsStore {
     this.set(LLM_MODEL_KEY, model.trim());
   }
 
+  /** The role whose access makes a channel public in this server; undefined means @everyone. */
+  getMemberRole(guildId: string): string | undefined {
+    return this.db
+      .prepare("SELECT value FROM settings WHERE key = ?")
+      .get(memberRoleKey(guildId))?.value as string | undefined;
+  }
+
+  setMemberRole(guildId: string, roleId: string | undefined): void {
+    if (roleId) this.set(memberRoleKey(guildId), roleId);
+    else
+      this.db
+        .prepare("DELETE FROM settings WHERE key = ?")
+        .run(memberRoleKey(guildId));
+  }
+
   close(): void {
     this.db.close();
   }
@@ -61,3 +76,5 @@ export class SettingsStore {
 }
 
 export type ModelSettingProvider = Pick<SettingsStore, "getLlmModel">;
+
+const memberRoleKey = (guildId: string) => `member_role:${guildId}`;

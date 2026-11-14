@@ -1,10 +1,16 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 export type QueuePriority = "leave" | "manual" | "passive" | "background";
 
 export type QueueOptions = {
   priority?: QueuePriority;
   bucketKey?: string;
   ttlMs?: number;
-  /** Wait for all active work, then block other jobs until this task settles. */
+  /**
+   * Wait for all active work, then block other jobs until this task settles.
+   * Called from inside a running job, the job itself is promoted instead of
+   * waiting for its own completion.
+   */
   exclusive?: boolean;
 };
 
@@ -41,6 +47,13 @@ export class GenerationQueue {
   private readonly tiers = new Map(
     PRIORITIES.map((priority) => [priority, new TierQueue()]),
   );
+  private readonly currentJob = new AsyncLocalStorage<AnyJob>();
+  /** Pending or active promotions; no job starts while any exist. */
+  private promotions = 0;
+  /** Running jobs waiting in `promote`, which therefore do no other work. */
+  private parked = 0;
+  private promoted = false;
+  private waiters: (() => void)[] = [];
 
   constructor(private readonly maxConcurrency: number) {}
 
@@ -48,6 +61,8 @@ export class GenerationQueue {
     task: () => Promise<T>,
     options: QueueOptions = {},
   ): Promise<T | undefined> {
+    if (options.exclusive && this.currentJob.getStore())
+      return this.promote(task);
     return new Promise<T | undefined>((resolve, reject) => {
       const priority = options.priority ?? DEFAULT_PRIORITY;
       const bucketKey = options.bucketKey ?? DEFAULT_BUCKET_KEY;
@@ -69,9 +84,37 @@ export class GenerationQueue {
     });
   }
 
+  /**
+   * Run `task` exclusively from inside the current job: block new starts, wait
+   * until every other running job has finished or is itself waiting to promote,
+   * and run one promotion at a time. Queuing an ordinary exclusive job here
+   * would deadlock, because it waits for the job that awaits it.
+   */
+  private async promote<T>(task: () => Promise<T>): Promise<T> {
+    this.promotions += 1;
+    this.parked += 1;
+    this.wake();
+    while (this.promoted || this.running > this.parked)
+      await new Promise<void>((resolve) => this.waiters.push(resolve));
+    this.parked -= 1;
+    this.promoted = true;
+    try {
+      return await task();
+    } finally {
+      this.promoted = false;
+      this.promotions -= 1;
+      this.wake();
+      this.schedule();
+    }
+  }
+
+  private wake(): void {
+    for (const resolve of this.waiters.splice(0)) resolve();
+  }
+
   private schedule(): void {
     while (this.running < this.maxConcurrency) {
-      if (this.exclusiveRunning) return;
+      if (this.exclusiveRunning || this.promotions > 0) return;
       if (this.exclusiveJobs.length > 0 && this.running > 0) return;
       const job = this.exclusiveJobs.shift() ?? this.nextJob();
       if (!job) return;
@@ -90,13 +133,14 @@ export class GenerationQueue {
 
   private async run(job: AnyJob): Promise<void> {
     try {
-      job.resolve(await job.task());
+      job.resolve(await this.currentJob.run(job, job.task));
     } catch (error) {
       job.reject(error);
     } finally {
       this.running -= 1;
       if (job.exclusive) this.exclusiveRunning = false;
       this.activeBuckets.delete(job.bucketKey);
+      this.wake();
       this.schedule();
     }
   }

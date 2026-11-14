@@ -4,7 +4,7 @@ Patch calls an independent `POST /v1/systemone` endpoint for reply timing. The t
 
 The prompt follows Laya's [typed-question guidance](https://nandhakishorm.github.io/laya/questions-and-answers/). Instructions describe the decision. Criteria describe each action. State contains recent dialogue, the latest message and resolved reply authors. It excludes Patch's response persona, slang examples and JSON-generation instructions. The [research note](laya-prompting-research.md) records the primary sources and known limitations.
 
-`prompts/20-classifier.md` owns the decision instructions. `src/prompts/classifier.ts` renders state and criteria. The API budget is 8192 total tokens and 512 question tokens. Oversized state, malformed results and transport failures produce silence without a response-model fallback. This budget is a transport ceiling, not proof of long-conversation accuracy. Patch logs the winning option's `answer_confidence`; it applies no uncalibrated confidence threshold.
+`prompts/20-classifier.md` owns the decision instructions. `src/prompts/classifier.ts` renders state and criteria. The API budget is 4096 total tokens and 512 question tokens: Laya's 1.5 GiB CUDA cap holds about 7k tokens, and longer states fall back to CPU. Oversized state, malformed results and transport failures produce silence without a response-model fallback. This budget is a transport ceiling, not proof of long-conversation accuracy. Patch logs the winning option's `answer_confidence`; it applies no uncalibrated confidence threshold.
 
 ## Measured results
 

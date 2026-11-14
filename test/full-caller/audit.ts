@@ -69,13 +69,7 @@ export async function auditFullCaller() {
     });
     const attempt = `generation-${String(++serial).padStart(32, "0")}`;
     let content = "so, what's next?";
-    if (
-      value.messages[0]?.content.startsWith(
-        "Repair Discord output formatting only.",
-      )
-    )
-      content = "first<split />second";
-    else if (toolRounds) {
+    if (toolRounds) {
       content =
         toolRounds === 3
           ? `<tool_call>web_fetch{url:${WEB_URL}}</tool_call>`
@@ -147,7 +141,7 @@ export async function auditFullCaller() {
     toolRounds = 3;
     await app.turn(BANKS[1], `Read ${WEB_URL}`);
     assert(
-      app.sent.some((message) => message.text.includes("Sources:")),
+      app.sent.some((message) => message.text.includes("\n-# [")),
       "Actual citation transformation was not exercised",
     );
     assert.equal(app.violations.length, 0);
@@ -175,13 +169,13 @@ export async function auditFullCaller() {
     const finalPersona = bodies.find(
       (body) =>
         body.bank === BANKS[0] &&
-        body.messages[0]?.content.startsWith("# Role") &&
+        body.messages[0]?.content.startsWith("# role") &&
         !body.messages[0].content.includes(TAGGED_TOOL_INSTRUCTIONS),
     )?.messages[0]?.content;
     const sharedFinalPersona = bodies.find(
       (body) =>
         body.bank === BANKS[1] &&
-        body.messages[0]?.content.startsWith("# Role") &&
+        body.messages[0]?.content.startsWith("# role") &&
         !body.messages[0].content.includes(TAGGED_TOOL_INSTRUCTIONS),
     )?.messages[0]?.content;
     assert(
@@ -189,14 +183,6 @@ export async function auditFullCaller() {
         sharedContinuationPersona &&
         finalPersona &&
         sharedFinalPersona,
-    );
-    assert(
-      bodies.some((body) =>
-        body.messages[0]?.content.startsWith(
-          "Repair Discord output formatting only.",
-        ),
-      ),
-      "Actual formatting fallback was not exercised",
     );
     return {
       persona,

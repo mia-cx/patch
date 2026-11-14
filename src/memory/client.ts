@@ -7,6 +7,18 @@ import {
   type EvidenceSnapshot,
   EvidenceSnapshotSchema,
 } from "./evidence.js";
+import {
+  type MemorySaveReceipt,
+  MemorySaveReceiptSchema,
+  type MemorySaveRequest,
+  MemorySaveRequestSchema,
+} from "./save.js";
+import {
+  type SelfStatementReceipt,
+  SelfStatementReceiptSchema,
+  type SelfStatementRequest,
+  SelfStatementRequestSchema,
+} from "./self.js";
 
 const SafeCount = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(0),
@@ -121,6 +133,7 @@ const MutationReceipt = Schema.Struct({
   cache_invalidated: Schema.Literal(true),
   reset_required: Schema.Literal(true),
 });
+export const MemoryMutationSchema = MutationReceipt;
 const ErrorBody = Schema.Struct({
   error: Schema.Struct({ code: Schema.NullOr(Schema.String) }),
 });
@@ -174,6 +187,28 @@ export class RemoraMemoryClient {
   private limits: MemoryLimits | undefined;
   private searchLimits: MemorySearchLimits | undefined;
   private evidence = false;
+  private saveChars: number | undefined;
+  private layers: number | undefined;
+  private statementChars: number | undefined;
+
+  /** Explicit writes require their own negotiated endpoint; automatic writes do not imply support. */
+  get supportsSave() {
+    return this.saveChars !== undefined;
+  }
+
+  /** Team statements about Patch herself have their own negotiated endpoint. */
+  get supportsSelfStatements() {
+    return this.statementChars !== undefined;
+  }
+
+  /** How many extra layers one save may name; 0 when the backend writes one bank only. */
+  get maxLayers() {
+    return this.layers ?? 0;
+  }
+
+  get supportsManagement() {
+    return this.limits !== undefined;
+  }
 
   /** Separate evidence namespace; fact-only endpoints never imply evidence access. */
   get supportsEvidence() {
@@ -188,6 +223,9 @@ export class RemoraMemoryClient {
     this.limits = undefined;
     this.searchLimits = undefined;
     this.evidence = false;
+    this.saveChars = undefined;
+    this.layers = undefined;
+    this.statementChars = undefined;
     const caps =
       capabilities ??
       parseRemoraCapabilities(await this.request("/remora/capabilities"));
@@ -232,6 +270,11 @@ export class RemoraMemoryClient {
     }
     this.initialized = true;
     this.evidence = caps.features.all_stream_evidence === true;
+    if (caps.features.explicit_memory_save)
+      this.saveChars = caps.limits.max_explicit_memory_chars;
+    if (caps.features.also_banks) this.layers = caps.limits.max_also_banks;
+    if (caps.features.assistant_statements)
+      this.statementChars = caps.limits.max_assistant_statement_chars;
     return caps;
   }
 
@@ -240,6 +283,83 @@ export class RemoraMemoryClient {
     if (!this.initialized) await this.initialize();
     if (!this.limits) throw new MemoryManagementError("unsupported_feature");
     return this.limits;
+  }
+
+  /** Save the authenticated adapter's literal human message, never model-written fact text. */
+  async save(request: MemorySaveRequest): Promise<MemorySaveReceipt> {
+    if (!this.initialized) await this.initialize();
+    if (this.saveChars === undefined)
+      throw new MemoryManagementError("unsupported_feature");
+    const input = Schema.decodeUnknownSync(MemorySaveRequestSchema, {
+      onExcessProperty: "error",
+    })(request);
+    const layers = input.also_banks ?? [];
+    if (
+      Array.from(input.source.text).length > this.saveChars ||
+      !Number.isFinite(Date.parse(input.source.observed_at)) ||
+      layers.length > this.maxLayers ||
+      new Set([input.bank, ...layers]).size !== layers.length + 1
+    )
+      throw new MemoryManagementError("invalid_parameter");
+    const receipt = await this.evidenceRequest(
+      MemorySaveReceiptSchema,
+      "/remora/memories/save",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    );
+    if (
+      receipt.bank !== input.bank ||
+      receipt.request_id !== input.request_id ||
+      receipt.source.id !== input.source.id ||
+      receipt.source.revision !== input.source.revision ||
+      receipt.source.origin !== "human_input" ||
+      receipt.source.actor?.actor?.bank !== input.bank ||
+      receipt.source.actor.actor.id !== input.source.actor_id ||
+      receipt.source.actor.actor.role !== "human" ||
+      receipt.source.tool !== null ||
+      receipt.source.url !== null ||
+      (receipt.status === "saved"
+        ? JSON.stringify(receipt.active_ids) !==
+          JSON.stringify(receipt.saved_ids)
+        : receipt.active_ids.length !== 0) ||
+      JSON.stringify(receipt.copies?.map((copy) => copy.bank) ?? []) !==
+        JSON.stringify(layers)
+    )
+      throw new MemoryManagementError("invalid_response");
+    return receipt;
+  }
+
+  /** Save a team member's statement about Patch; Remora keeps only atoms that name her. */
+  async saveStatement(
+    request: SelfStatementRequest,
+  ): Promise<SelfStatementReceipt> {
+    if (!this.initialized) await this.initialize();
+    if (this.statementChars === undefined)
+      throw new MemoryManagementError("unsupported_feature");
+    const input = Schema.decodeUnknownSync(SelfStatementRequestSchema, {
+      onExcessProperty: "error",
+    })(request);
+    if (
+      Array.from(input.source.text).length > this.statementChars ||
+      !Number.isFinite(Date.parse(input.source.observed_at))
+    )
+      throw new MemoryManagementError("invalid_parameter");
+    const receipt = await this.evidenceRequest(
+      SelfStatementReceiptSchema,
+      "/remora/memories/assistant",
+      { method: "POST", body: JSON.stringify(input) },
+    );
+    if (
+      receipt.bank !== input.bank ||
+      receipt.request_id !== input.request_id ||
+      receipt.source.id !== input.source.id ||
+      receipt.source.origin !== "assistant_output" ||
+      receipt.source.actor?.entity !== input.source.entity_id
+    )
+      throw new MemoryManagementError("invalid_response");
+    return receipt;
   }
 
   /** Availability without an HTTP request while assembling the model's tool catalogue. */

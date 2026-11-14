@@ -101,7 +101,7 @@ describe("System 1 response classification", () => {
         "dont respond",
       ]);
       expect(body.model).toBe("english");
-      expect(body.max_len).toBe(8192);
+      expect(body.max_len).toBe(4096);
       expect(body.head_max_len).toBe(512);
       expect(body.questions.response.instructions).toContain(
         "latest Discord message",

@@ -3,6 +3,7 @@ import {
   type ChatInputCommandInteraction,
   PermissionsBitField,
 } from "discord.js";
+import { userBank } from "../conversation/remora.js";
 
 export const memoryScopes = ["personal", "channel", "server"] as const;
 export type MemoryScope = (typeof memoryScopes)[number];
@@ -37,7 +38,7 @@ type BankContext = {
   guildId: string | null;
   channelId: string;
   channel: { type: ChannelType } | null;
-  user: { createDM(): Promise<{ id: string }> };
+  user: { id: string; createDM(): Promise<{ id: string }> };
 };
 
 /** Resolve banks from the signed invocation, never a caller-supplied opaque bank ID. */
@@ -50,9 +51,10 @@ export async function resolveMemoryBank(
       interaction.channel?.type === ChannelType.DM
         ? interaction.channelId
         : (await interaction.user.createDM()).id;
+    // Personal memory is the user's own layer: their DMs and their server messages.
     return {
       scope,
-      bank: `discord:dm:${channelId}`,
+      bank: userBank(interaction.user.id),
       label: "your personal memories",
       channelId,
     };

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { toolResultMessage } from "./observations.js";
 import { WEB_AGENTS, WebClient } from "./web.js";
 
 const publicDNS = async () => [{ address: "93.184.216.34", family: 4 }];
@@ -205,5 +206,90 @@ describe("public web reading", () => {
       "non-public",
     );
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  // Proves news feeds read as headlines with links, so a gated site's RSS still answers "what's new".
+  it.each([
+    [
+      "application/rss+xml",
+      "<rss><channel><title>NU - Algemeen</title><item><title>Zorgpremie stijgt</title><link>https://www.nu.nl/a</link><pubDate>Fri, 13 Nov 2026 00:10:00 +0100</pubDate></item></channel></rss>",
+      "- Zorgpremie stijgt (https://www.nu.nl/a) — Fri, 13 Nov 2026 00:10:00 +0100",
+    ],
+    [
+      "application/atom+xml",
+      '<feed><title>Atom news</title><entry><title>Tram stops</title><link href="https://example.com/t"/><updated>2026-11-13T00:00:00Z</updated></entry></feed>',
+      "- Tram stops (https://example.com/t) — 2026-11-13T00:00:00Z",
+    ],
+  ])("reads %s feeds as headlines", async (type, body, line) => {
+    const request = vi.fn(async () => ({
+      status: 200,
+      headers: { "content-type": `${type}; charset=utf-8` },
+      body,
+    }));
+    const web = new WebClient({ resolve: publicDNS, request });
+    const page = await web.fetch("https://example.com/rss");
+    expect(page.text).toBe(line);
+    expect(page.title).not.toBe("https://example.com/rss");
+  });
+
+  // Proves a site that redirects to its cookie gate reports that instead of the gate's text.
+  it("reports a consent-wall redirect as unavailable content", async () => {
+    const request = vi.fn(async () => ({
+      status: 302,
+      headers: {
+        location: "https://myprivacy.dpgmedia.nl/consent?siteKey=x",
+      },
+      body: "",
+    }));
+    const web = new WebClient({ resolve: publicDNS, request });
+    await expect(web.fetch("https://nu.nl/")).rejects.toThrow(
+      "nu.nl redirects to a cookie consent page (myprivacy.dpgmedia.nl), so its content is unavailable. Try the site's RSS feed",
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  // Proves a slang lookup returns Urban Dictionary's first three senses, cleaned, each cited by its permalink so memory can keep it.
+  it("looks up slang and cites each definition by its permalink", async () => {
+    const entry = (n: number) => ({
+      word: "clocked",
+      definition: `To [realise], to catch on (${n}).\r\nUsed in [London].`,
+      example: "she [clocked] it",
+      permalink: `https://www.urbandictionary.com/define.php?term=clocked&defid=${n}`,
+      thumbs_up: 0,
+    });
+    const request = vi.fn(async (url: URL) => ({
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        list: [1, 2, 3, 4].map(entry),
+        term: url.searchParams.get("term"),
+      }),
+    }));
+    const web = new WebClient({ resolve: publicDNS, request });
+    const output = await web.slang("clocked");
+    expect(request.mock.calls[0]?.[0].href).toBe(
+      "https://api.urbandictionary.com/v0/define?term=clocked",
+    );
+    expect(output.definitions).toHaveLength(3);
+    expect(output.definitions[0]).toEqual({
+      word: "clocked",
+      definition: "To realise, to catch on (1).\nUsed in London.",
+      example: "she clocked it",
+      url: "https://www.urbandictionary.com/define.php?term=clocked&defid=1",
+    });
+    const rendered = toolResultMessage(
+      [{ name: "urban_dictionary", completed: true, output }],
+      "",
+      "turn",
+    );
+    const cited = (rendered.observationSources ?? []).filter(({ start, end }) =>
+      rendered.content.slice(start, end).includes("catch on (2)"),
+    );
+    expect(cited.map(({ source }) => [source.tool, source.url])).toEqual([
+      [
+        "urban_dictionary",
+        "https://www.urbandictionary.com/define.php?term=clocked&defid=2",
+      ],
+    ]);
   });
 });

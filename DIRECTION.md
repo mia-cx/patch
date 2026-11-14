@@ -1,16 +1,36 @@
 # Direction
-
 Patch is a Discord persona and conversation partner with her own voice, taste,
 boundaries, and timing. Build the simplest useful conversation path before
 expanding the assistant features in the versioned specs.
 
-Patch's runtime stays JavaScript/TypeScript. Remora provides an OpenAI-compatible
-inference API with optional memory-bank selection and fact-level recall controls.
-Remora can keep its Python core; Patch consumes the API and remains independent
-of the inference backend. Bank selection and write destinations are distinct,
-and Remora enforces which facts may enter recall. For service setup and supported
-trial behavior, read the [final Remora serving guide](https://github.com/mia-cx/remora/blob/242fae2c141a7d0c5ebf8ec8dcebaec6ffc1351c/docs/api/serving.md)
-and [entity identity handback](https://github.com/mia-cx/remora/blob/242fae2c141a7d0c5ebf8ec8dcebaec6ffc1351c/docs/api/entity-identity.md).
+The voice LoRA carries how Patch talks, so the system prompt holds no style guide:
+only role, identity, output, safety, helpfulness, splitting, mentions and tools
+(about 1.1k Gemma tokens before tools). Long rule lists made her rigid.
+History uses the LoRA's training format with no explaining prompt: each human
+or bot message is a `user` turn `DisplayName [username]: text`, and Patch's
+messages are plain `assistant` turns. No IDs, timestamps, pronouns or reply markers.
+Her identity is name, pronouns and background only. Tastes and opinions grow
+through Remora from her conversations. Later, Tastebase gives her Mia's music
+taste: a read-only store, like Remora but never written by Patch, filled by
+importing Mia's last.fm history with an embedding per song.
+
+This repo is the whole harness: the Discord runtime (TypeScript), Protocord,
+Patch's tools, and the self-hosted services she runs on, Remora (memory and
+local inference) and Laya (reply timing). Inference is pluggable:
+- **Local (now):** Gemma 4 E4B with the voice and atomiser LoRAs on Remora; memory
+  reaches the model through its context, and her voice runs at temperature 0.7.
+- **Cloud (later):** if Gemma's conversation isn't good enough, a much larger hosted
+  model with written instructions. Remora then does memory only: it still recalls,
+  atomises and saves, and Patch puts recalled memories into the model's text input
+  as `memory:` messages. The memory tools stay available either way.
+When Remora saves something from the current message, the model is told so
+(`memory: saved just now: …`) so it never saves the same thing again with a tool.
+Never compact or summarise conversations. History rolls forward in large jumps so
+the prompt prefix stays cacheable, and Remora recalls anything older or from other
+conversations. On cloud models, design for prompt caching: stable instructions and
+history first, per-turn `memory:` messages after the cached prefix, next to the
+current message.
+Remora keeps its own repo and Python core; Patch consumes its HTTP API.
 
 Protocord is the shared Discord action framework. Its canonical source is
 `mia-cx/protocord`, extracted from Prod with the core, settings, permissions,
@@ -18,8 +38,12 @@ and AI scaffold. Patch consumes it as a pinned submodule at `vendor/protocord`
 through pnpm workspace dependencies. Publishing packages is deferred.
 
 Patch actions use Protocord's shared validation, authorization and trigger lifecycle.
-Plain model text sends normally; optional reply metadata targets a visible message ID.
+A casual reply of up to four short lines, with no markdown structure, sends one Discord message per line, matching how the voice adapter learned bursts. Other text splits at `<|message_split|>` outside code; legacy `<split />` remains accepted. Lists, quotes, headings and code keep their newlines. The persona prompt is written in Patch's own lowercase register. An optional `<reply />` replies to the message being answered.
+Patch mentions people as `@username`; the send path turns participants into pings and drops other IDs and roles.
 Reactions, own-message edits/deletion, threads, polls, stickers and fixed-text follow-ups are implemented.
+Every link Patch shows passes a link check before any chunk is sent, including text after actions. A confirmed 404 (HEAD confirmed by GET) or definite DNS absence withholds the draft and asks for at most two rewrites through the tool loop; dead or rejected appended sources are dropped. Auth, server and timeout results are inconclusive and send. Checks follow bounded redirects and never reach private networks. Rejected drafts never post.
+Follow-ups support one-off timestamps or cron with explicit IANA timezone, persisted next occurrences and bounded missed-tick coalescing.
+Ambiguous sends pause the schedule. Recurring delivery is synthetically qualified, without deployment or real scheduled messages.
 DDG search/fetch identifies Patch/Protocord; persistent scoped notes offer no code execution.
 All model inputs and outputs should be eligible for passive memory, preserving each source's origin.
 Live evidence transport uses Remora `9062f61`/`8e04001`; see [caller mapping](spec/all-stream-evidence.md).
@@ -30,15 +54,18 @@ Preserve all old Discord/history records and bank data, without re-extraction or
 Caller mechanics pass 360 tests; full-persona E4B qualification supports bounded recall/correction/erasure/isolation and fetched-page meaning.
 Immutable caller `209603b`/`51eb418` is live with the existing durable cutoffs and principal-wide context boundary.
 Assistant history stays literal; tagged web calls pass the actual E4B caller journey. The earlier E2B search-only failure remains recorded in the [diagnosis](spec/quotes-and-web-diagnosis.md).
-Causal tool exchanges and completed-read reuse keep the three-call ceiling; games remain deferred. See [v2](spec/v2.md).
+A turn allows up to `MAX_TOOL_CALLS` (6) calls in its own `LLM_TOOL_CONTEXT_TOKENS` budget; running out asks for an answer instead of failing. Games remain deferred. See [v2](spec/v2.md).
 
-Mia added only guild `1559060271404945512`, channel `1561529690953490442`, alongside the owner DM.
-Read channel/server banks and write only the channel; the approved DM and exact shared scope are enabled.
+Patch runs in the owner DM and the listed channels of guild `1559060271404945512`.
+Memory is layered. A server message is written to its channel, the speaker's user bank and, only when the
+channel is public, the server bank. Public means the server's member role (default @everyone, set by admins
+with `/member-role`) can view it; private threads never are. Channels read channel + server banks; DMs read
+the speaker's user bank, so DM facts never surface in public. Forgetting a source erases every copy.
 
 Patch's Remora client supports the approved DM and shared scope. Caller-owned history uses real
-user/assistant roles. Incoming turns retain author IDs, names, pronouns, and reply
-targets in readable labels; Patch replies remain plain assistant text. Separate
-metadata retains Patch reply references and identifies the raw final user turn.
+user/assistant roles. Incoming turns keep their exact text after a
+`DisplayName [username]: ` prefix, which memory evidence treats as frame text.
+Remora's legacy `turn` mode still ends on the raw final user message.
 Stable source IDs and edit revisions survive generation retries. Read-bank
 selection never adds write destinations or grants.
 Runtime capabilities bound context/output; receipts/cache reuse are validated. Classifier/activity calls have no memory access.
@@ -50,8 +77,8 @@ not whole-history continuity. Native CPU qualification is limited to its exact B
 see the released guides at `865ade5`. It does not establish GPU or broad HF parity.
 The HF trial uses separate SQLite settings and skips automatic global registration.
 Attributed chat roles pass both original failed follow-ups cold and cached, preserving receipts and bank rows.
-Keep assistant dialogue literal and reference metadata beside its reply. XML wrappers leak into output;
-cumulative metadata footers obscure recent dialogue in Gemma's 512-token local attention.
+Keep assistant dialogue literal. XML wrappers leak into output; cumulative
+metadata footers obscure recent dialogue in Gemma's 512-token local attention.
 llama.cpp qualification does not gate this HF trial.
 Mia approved evidence formation, replacing narrow passive writer/dreaming with attributed quotations on the same HF API.
 The scoped trial is online with tagged tools (three calls per turn); general semantic concept formation/dreaming remains open.
@@ -95,6 +122,8 @@ The 18-completion full-persona journey passes bounded gates with Laya resident. 
 Memory inspection and forgetting belong to Protocord slash commands backed by
 deterministic Remora management endpoints. Users control their personal DM bank;
 shared channel/server banks follow Discord access and management permissions.
+Explicit remember/forget tools preserve human evidence, exact authorized IDs and confirmed receipts.
+Their separate Remora save API is implemented but undeployed; see [explicit controls](spec/explicit-memory-tools.md).
 Show actual authorized records and storage receipts. Explicit forgetting must
 invalidate memory caches and affected caller history; a model reply is not proof
 of deletion. Keep Remora's API generic and require separate deletion grants.

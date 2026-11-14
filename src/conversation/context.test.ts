@@ -64,6 +64,7 @@ function message(id: string, context: TranscriptContext): ConversationMessage {
     channelId: "channel",
     authorId: `author-${id}`,
     authorName: `author-${id}`,
+    authorUsername: `author-${id}`,
     authorIsBot: false,
     content: "x",
     timestamp: new Date(`2026-01-01T00:00:0${Math.min(id.length, 9)}.000Z`),

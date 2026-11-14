@@ -62,6 +62,10 @@ const settings = new SettingsStore(config.settingsDbPath, {
 const contextStore = new ConversationContextStore(config.settingsDbPath);
 const llm = new LlmClient(config, settings);
 const memory = new RemoraMemoryClient(config);
+// Patch's self bank has its own token: conversations can only read it.
+const selfMemory = config.remoraSelfApiKey
+  ? new RemoraMemoryClient({ ...config, llmApiKey: config.remoraSelfApiKey })
+  : undefined;
 if (config.remoraDmEnabled || config.discordTrialGuild) {
   const capabilities = await llm.initializeRemora();
   if (llm.observationLimits && !config.remoraObservationStartId)
@@ -75,8 +79,8 @@ if (config.remoraDmEnabled || config.discordTrialGuild) {
   await memory.initialize(capabilities);
   if (config.discordTrialDmChannelId)
     contextStore.recordMemoryContext(config.discordTrialDmChannelId);
-  if (config.discordTrialGuild)
-    contextStore.recordMemoryContext(config.discordTrialGuild.channelId);
+  for (const channelId of config.discordTrialGuild?.channelIds ?? [])
+    contextStore.recordMemoryContext(channelId);
   const budget = buildResponseContextBudget(
     config,
     config.discordTrialGuild ? "global" : "dm",
@@ -109,6 +113,7 @@ const actionContext = {
   config,
   llm,
   memory,
+  ...(selfMemory ? { selfMemory } : {}),
   logger,
   queue,
   modelCatalog,
@@ -125,9 +130,9 @@ if (llm.observationLimits) {
     ...(config.discordTrialDmChannelId && config.remoraDmEnabled
       ? [`discord:dm:${config.discordTrialDmChannelId}`]
       : []),
-    ...(config.discordTrialGuild
-      ? [`discord:channel:${config.discordTrialGuild.channelId}`]
-      : []),
+    ...(config.discordTrialGuild?.channelIds ?? []).map(
+      (channelId) => `discord:channel:${channelId}`,
+    ),
   ];
   for (const bank of banks)
     actionContext.harness.store.observationCutoff(
@@ -194,7 +199,11 @@ client.on(Events.InteractionCreate, (interaction) => {
       channelId: interaction.channelId ?? "",
       guildId: interaction.guildId,
     }) &&
-    !(interaction.isChatInputCommand() && interaction.commandName === "memory")
+    // Memory and self controls carry their own access checks and work anywhere.
+    !(
+      interaction.isChatInputCommand() &&
+      ["memory", "self"].includes(interaction.commandName)
+    )
   )
     return;
   void dispatchInteraction({

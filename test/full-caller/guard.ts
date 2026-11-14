@@ -70,12 +70,7 @@ export class CallerHttpGuard {
     // Observed audit maxima describe the fixture, not a smaller runtime ceiling.
     // validateObservationBatch enforces the negotiated combined 128/512 limits.
     // Ordinary, continuation and final SYSTEM variants retain the full persona and are byte-bound by the contract.
-    if (
-      !this.persona.has(body.messages[0]?.content ?? "") &&
-      !body.messages[0]?.content.startsWith(
-        "Repair Discord output formatting only. Preserve the exact words",
-      )
-    )
+    if (!this.persona.has(body.messages[0]?.content ?? ""))
       throw new Error("Full assembled persona differs from the frozen caller");
     return { body, observations };
   }

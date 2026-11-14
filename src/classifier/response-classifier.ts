@@ -9,7 +9,8 @@ import {
   buildClassifierQuestion,
 } from "../prompts/classifier.js";
 
-const CLASSIFIER_CONTEXT_TOKENS = 8192;
+// Laya's 1.5 GiB CUDA cap holds about 7k tokens; past that it falls back to CPU.
+const CLASSIFIER_CONTEXT_TOKENS = 4096;
 const CLASSIFIER_QUESTION_TOKENS = 512;
 const SystemOneResponse = Schema.Struct({
   answers: Schema.Struct({

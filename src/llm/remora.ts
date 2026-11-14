@@ -33,6 +33,11 @@ export type RemoraRequest = {
   identity?: RemoraIdentity;
   /** Separate source-view persistence, negotiated independently from legacy turn writes. */
   observations?: ObservationBatch;
+  /**
+   * Layers that also receive what this turn's batch admits; moved into the batch,
+   * never sent beside it. A `{ bank, actor }` layer takes only that actor's words.
+   */
+  also_banks?: ObservationBatch["also_banks"];
   turn?: {
     id: string;
     revision: number;
@@ -62,6 +67,16 @@ const RemoraResponseSchema = Schema.Struct({
   read_banks: Schema.Array(Schema.String),
   selected: Schema.Array(FactRef),
   observations: Schema.optional(Schema.NullOr(ObservationResponseSchema)),
+  /** What the current message was saved as, so a model that renders its own prompt needs no memory_save. */
+  saved_now: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        bank: Schema.String,
+        record_id: PositiveInteger,
+        atoms: Schema.Array(Schema.String),
+      }),
+    ),
+  ),
   writes: Schema.NullOr(
     Schema.Struct({
       bank: Schema.String,
@@ -184,8 +199,14 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     harness_names: Schema.optional(Schema.Boolean),
     memory_management: Schema.optional(Schema.Boolean),
     memory_search: Schema.optional(Schema.Boolean),
+    explicit_memory_save: Schema.optional(Schema.Boolean),
+    also_banks: Schema.optional(Schema.Boolean),
+    assistant_statements: Schema.optional(Schema.Boolean),
     all_stream_evidence: Schema.optional(Schema.Boolean),
     source_references: Schema.optional(Schema.Boolean),
+    observation_labels: Schema.optional(Schema.Boolean),
+    /** Replies may use a nonzero temperature; otherwise Remora decodes greedily only. */
+    sampling: Schema.optional(Schema.Boolean),
     streaming: Schema.Boolean,
     tools: Schema.Boolean,
     thinking: Schema.Boolean,
@@ -194,6 +215,21 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     context_tokens: PositiveInteger,
     max_output_tokens: PositiveInteger,
     max_read_banks: Schema.Literal(8),
+    max_assistant_statement_chars: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(4096)),
+    ),
+    max_assistant_aliases: Schema.optional(
+      Schema.Int.check(
+        Schema.isGreaterThanOrEqualTo(0),
+        Schema.isLessThanOrEqualTo(8),
+      ),
+    ),
+    max_also_banks: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(4)),
+    ),
+    max_explicit_memory_chars: Schema.optional(
+      PositiveInteger.check(Schema.isLessThanOrEqualTo(4096)),
+    ),
     max_identity_bindings: Schema.optional(
       PositiveInteger.check(Schema.isLessThanOrEqualTo(16)),
     ),
@@ -251,6 +287,10 @@ const RemoraCapabilitiesSchema = Schema.Struct({
     max_observation_id_chars: Schema.optional(
       ObservationLimitsSchema.fields.max_observation_id_chars,
     ),
+    max_observation_labels:
+      ObservationLimitsSchema.fields.max_observation_labels,
+    max_observation_label_chars:
+      ObservationLimitsSchema.fields.max_observation_label_chars,
   }),
 });
 
@@ -299,6 +339,23 @@ export function parseRemoraCapabilities(value: unknown) {
       capabilities.limits.max_memory_request_id_chars === undefined)
   )
     throw new Error("Remora memory management requires all three limits");
+  if (
+    capabilities.features.explicit_memory_save &&
+    (!capabilities.features.all_stream_evidence ||
+      capabilities.limits.max_explicit_memory_chars === undefined)
+  )
+    throw new Error(
+      "Remora explicit save requires evidence support and its limit",
+    );
+  if (
+    capabilities.features.observation_labels &&
+    (!capabilities.features.all_stream_evidence ||
+      capabilities.limits.max_observation_labels === undefined ||
+      capabilities.limits.max_observation_label_chars === undefined)
+  )
+    throw new Error(
+      "Remora observation labels require evidence support and both limits",
+    );
   if (
     capabilities.features.memory_search &&
     (capabilities.limits.max_search_results === undefined ||

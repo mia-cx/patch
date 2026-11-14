@@ -21,6 +21,6 @@ export function allowsConversation(
     return location.channelId === config.discordTrialDmChannelId;
   return (
     location.guildId === config.discordTrialGuild?.guildId &&
-    location.channelId === config.discordTrialGuild.channelId
+    config.discordTrialGuild.channelIds.includes(location.channelId)
   );
 }

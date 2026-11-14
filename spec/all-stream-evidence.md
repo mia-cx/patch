@@ -22,6 +22,30 @@ Requests carry `read_banks`, scoped `speaker` and `observations`. Legacy `turn`,
 `write_bank` and identity declarations are absent. Remora derives the principal.
 The older base fact/search/name contract remains unchanged.
 
+## Layered banks
+
+A server-channel message is written to `discord:channel:<id>`, `discord:guild:<id>` and
+the speaker's `discord:user:<id>`, and reads only the channel and server banks, so a DM
+fact never surfaces in public. The batch runs in the channel bank and names the other
+layers in `observations.also_banks` (Remora `features.also_banks`); the user layer is
+`{bank, actor}`, so it receives only that speaker's own words. A DM reads and writes the
+speaker's user bank; the trial DM also reads its earlier `discord:dm:<channel>` bank,
+which receives nothing new. `/memory` personal scope is the user bank. Explicit saves
+name the same layers, and forgetting a source in any layer erases every copy in Remora.
+
+## Patch's self
+
+`patch:self` holds facts about Patch alone: her tastes, opinions, history, habits.
+Every DM and server conversation reads it; none writes it. Only members of the
+Discord application's Developer Portal team change it, through `/self add`, `/self
+list` and `/self forget`. The command is guild-only and hidden behind Administrator
+by default, and both authorization and the handler check team membership. `/self add`
+calls Remora's assistant statements with `REMORA_SELF_API_KEY`, a token whose policy
+alone may write and forget the bank; the conversation token only reads it. Remora reads
+the statement as Patch speaking, keeps only atoms that name her, and binds each to her
+self entity by her bot user ID, so "Patch", "patch", "she" and later renames are one
+identity. Recall reads those facts as about her wherever the bank is read.
+
 ## Source identity and rendering
 
 Actual SDK text supplies `discord:message:<id>` at its edited timestamp or zero.

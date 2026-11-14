@@ -5,11 +5,14 @@ import {
   type APIChatInputApplicationCommandInteraction,
   ApplicationCommandOptionType,
   ApplicationCommandType,
+  ApplicationIntegrationType,
   AutocompleteInteraction,
   ChannelType,
   ChatInputCommandInteraction,
   Client,
+  ClientApplication,
   ClientUser,
+  InteractionContextType,
   InteractionResponseType,
   InteractionType,
   Locale,
@@ -17,6 +20,7 @@ import {
   MessageType,
   PermissionsBitField,
 } from "discord.js";
+import { getDiscordCommandRegistration } from "protocord";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   evidenceCapabilities,
@@ -36,6 +40,7 @@ import { buildModelVisibleActions, toLlmTools } from "./action-context.js";
 import type { ActionContext } from "./context.js";
 import { registerDefaultActions } from "./defaults.js";
 import { createPatchActionRegistry } from "./registry.js";
+import { selfAction } from "./self.js";
 import { dispatchToolCall } from "./tool-calls.js";
 
 const CHANNEL = "1000000000000000001";
@@ -360,10 +365,7 @@ describe("Patch's Protocord integration", () => {
       allowed_mentions: { parse: [], replied_user: false },
     });
     expect(body).toMatchObject({
-      content: expect.stringContaining("evidence #1"),
-    });
-    expect(body).toMatchObject({
-      content: expect.stringContaining("subjects unresolved"),
+      content: expect.stringContaining('#1 "my dog"'),
     });
     expect(app.rest.post.mock.calls[0]?.[1]?.body).toMatchObject({
       data: { flags: MessageFlags.Ephemeral },
@@ -371,8 +373,8 @@ describe("Patch's Protocord integration", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  // Proves short external quotations expose both main/context provenance and a complete source export.
-  it("preserves external provenance even when the evidence fits inline", async () => {
+  // Proves a web memory shows its page URL inline while the attached file keeps every source and context.
+  it("lists a web memory with its URL and exports its full provenance", async () => {
     const app = await runtime(false);
     const bank = `discord:guild:${GUILD}`;
     await app.context.memory.initialize(
@@ -447,14 +449,6 @@ describe("Patch's Protocord integration", () => {
       content: expect.stringContaining("https://page.test/release"),
       allowed_mentions: { parse: [], replied_user: false },
     });
-    for (const field of [
-      "web\\_fetch",
-      "web\\_search",
-      "https://search.test/source",
-    ])
-      expect(response?.body).toMatchObject({
-        content: expect.stringContaining(field),
-      });
     expect(response?.files).toHaveLength(1);
     const file = response?.files?.[0];
     expect(file?.name).toBe("memories.json");
@@ -619,8 +613,8 @@ describe("Patch's Protocord integration", () => {
     },
   );
 
-  // Proves an ordinary member can inspect a readable server bank without clipping long facts.
-  it("exports complete server memories privately when the list exceeds a Discord message", async () => {
+  // Proves an ordinary member can inspect a readable server bank without clipping long facts: they continue on the next page.
+  it("pages complete server memories privately when the list exceeds a Discord message", async () => {
     const app = await runtime(false);
     const data = [
       {
@@ -656,16 +650,29 @@ describe("Patch's Protocord integration", () => {
         READ_ACCESS,
       ),
     );
-    const file = app.rest.patch.mock.calls.at(-1)?.[1]?.files?.[0];
-    expect(file?.name).toBe("memories.json");
-    expect(file?.data.toString()).toBe(JSON.stringify(data, null, 2));
+    // The label page, then the 5,003-character fact across three full pages.
+    const pages = Math.ceil(`#2 ${data[0]?.text}`.length / 1_900) + 1;
+    expect(app.rest.patch.mock.calls.at(-1)?.[1]?.body).toMatchObject({
+      content: "this server's memories\n",
+      components: [
+        {
+          components: [
+            { custom_id: "page:first", disabled: true },
+            { custom_id: "page:previous", disabled: true },
+            { custom_id: "page:at", label: `1 / ${pages}`, disabled: false },
+            { custom_id: "page:next", disabled: false },
+            { custom_id: "page:last", disabled: false },
+          ],
+        },
+      ],
+    });
     expect(app.rest.post).toHaveBeenCalledTimes(1);
     expect(app.rest.post.mock.calls[0]?.[1]?.body).toMatchObject({
       data: { flags: MessageFlags.Ephemeral },
     });
   });
 
-  // Proves a private guild invocation resolves only the caller's DM and never posts memory content publicly.
+  // Proves a private guild invocation resolves only the caller's own bank and never posts memory content publicly.
   it("inspects personal memories from a guild through the actual SDK's own-DM lookup", async () => {
     const app = await runtime(false);
     const dm = "1000000000000000020";
@@ -687,11 +694,13 @@ describe("Patch's Protocord integration", () => {
     });
     const fetch = vi.fn(async (url: string) => {
       if (url.endsWith("/capabilities")) return Response.json(managementCaps);
-      expect(new URL(url).searchParams.get("bank")).toBe(`discord:dm:${dm}`);
+      expect(new URL(url).searchParams.get("bank")).toBe(
+        `discord:user:${MEMBER}`,
+      );
       return Response.json({
         object: "remora.memory.list",
         version: 1,
-        bank: `discord:dm:${dm}`,
+        bank: `discord:user:${MEMBER}`,
         revision: REVISION,
         data: [
           {
@@ -1161,5 +1170,283 @@ describe("Patch's Protocord integration", () => {
       }),
     ).rejects.toThrow("Discord unavailable");
     expect(app.rest.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe("Patch's self memory", () => {
+  const TEAM = { id: "1000000000000000099", name: "patch team" };
+  const selfCaps = {
+    ...evidenceCapabilities,
+    features: { ...evidenceCapabilities.features, assistant_statements: true },
+    limits: {
+      ...evidenceCapabilities.limits,
+      max_assistant_statement_chars: 4096,
+      max_assistant_aliases: 8,
+    },
+  };
+
+  /** The runtime with a team-owned application (OWNER on the team) and a self client. */
+  async function selfRuntime(receipt: Record<string, unknown> = {}) {
+    const app = await runtime();
+    const original = app.rest.get.getMockImplementation();
+    app.rest.get.mockImplementation(async (route, options) => {
+      if (route === "/applications/@me")
+        return {
+          id: BOT,
+          name: "Patch",
+          icon: null,
+          description: "",
+          bot_public: false,
+          bot_require_code_grant: false,
+          verify_key: "",
+          flags: 0,
+          team: {
+            id: TEAM.id,
+            icon: null,
+            name: TEAM.name,
+            owner_user_id: OWNER,
+            members: [
+              {
+                membership_state: 2,
+                permissions: ["*"],
+                team_id: TEAM.id,
+                role: "admin",
+                user: {
+                  id: OWNER,
+                  username: "mia",
+                  discriminator: "0",
+                  avatar: null,
+                },
+              },
+            ],
+          },
+        };
+      return original?.(route, options);
+    });
+    // discord.js builds this on READY; its constructor is private to the library.
+    const application: ClientApplication = Reflect.construct(
+      ClientApplication,
+      [app.client, { id: BOT, name: "Patch" }],
+    );
+    Object.assign(app.client, { application });
+    const selfMemory = new RemoraMemoryClient({
+      ...app.context.config,
+      llmApiKey: "self-token",
+    });
+    await selfMemory.initialize(parseRemoraCapabilities(selfCaps));
+    app.context.selfMemory = selfMemory;
+    const requests: Array<{ url: string; body: unknown; auth: string | null }> =
+      [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        const body = init.body ? JSON.parse(String(init.body)) : undefined;
+        requests.push({
+          url,
+          body,
+          auth: new Headers(init.headers).get("authorization"),
+        });
+        return Response.json({
+          object: "remora.memory.assistant",
+          version: 1,
+          bank: "patch:self",
+          request_id: body.request_id,
+          kind: "evidence",
+          source: {
+            id: body.source.id,
+            revision: 0,
+            origin: "assistant_output",
+            actor: {
+              principal: "patch-trial",
+              actor: null,
+              entity: body.source.entity_id,
+              unknown: null,
+              description: null,
+            },
+            tool: null,
+            url: null,
+          },
+          saved_ids: [7],
+          active_ids: [7],
+          status: "saved",
+          atoms: ["Patch likes teal."],
+          context: ["Teal is a blue-green colour."],
+          attached: [],
+          subject: "c".repeat(64),
+          linked: [],
+          replayed: false,
+          admission_identity:
+            "a56bb32e55d908ce8b66725051ecef1c7d23226b5bf5a924ee32c8e749a96bf8",
+          ...receipt,
+        });
+      }),
+    );
+    const add = (user: string, permissions = 0n) =>
+      app.command(
+        "self",
+        [
+          {
+            type: ApplicationCommandOptionType.Subcommand,
+            name: "add",
+            options: [
+              {
+                type: ApplicationCommandOptionType.String,
+                name: "statement",
+                value: "patch likes teal",
+              },
+            ],
+          },
+        ],
+        user,
+        permissions,
+      );
+    return { ...app, requests, add };
+  }
+
+  // Proves /self is a user-install command: server admins never see it, and it works in DMs and servers.
+  it("registers /self as a user-installed command everywhere", async () => {
+    const app = await runtime();
+    const command = getDiscordCommandRegistration(app.registry).find(
+      (item) => item.name === "self",
+    );
+    expect(command).toMatchObject({
+      integrationTypes: [ApplicationIntegrationType.UserInstall],
+      contexts: [
+        InteractionContextType.Guild,
+        InteractionContextType.BotDM,
+        InteractionContextType.PrivateChannel,
+      ],
+    });
+    expect(command).not.toHaveProperty("defaultMemberPermissions");
+  });
+
+  // Proves a server administrator who is not on the app's team is refused before anything reaches Remora.
+  it("refuses /self to anyone outside the application's team", async () => {
+    const app = await selfRuntime();
+    await app.dispatch(
+      app.add(MEMBER, PermissionsBitField.Flags.Administrator),
+    );
+    expect(app.requests).toEqual([]);
+    expect(app.rest.patch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        body: expect.objectContaining({
+          content: "nope, that's for Patch's team only.",
+        }),
+      }),
+    );
+  });
+
+  // Proves the handler checks the team itself, even if authorization were bypassed.
+  it("refuses a non-team caller inside the handler too", async () => {
+    const app = await selfRuntime();
+    const interaction = app.add(MEMBER);
+    const reply = await selfAction.execute(
+      {
+        input: { operation: "add", statement: "patch likes teal" },
+        rawEvent: interaction,
+        requester: { id: MEMBER },
+      } as never,
+      app.context,
+    );
+    expect(reply).toBe("nope, that's for Patch's team only.");
+    expect(app.requests).toEqual([]);
+  });
+
+  // Proves a team member's statement goes to the self bank with the self token, bound to Patch's stable ID.
+  it("saves a team statement in Patch's voice and shows its atoms", async () => {
+    const app = await selfRuntime();
+    await app.dispatch(app.add(OWNER));
+    expect(app.requests).toHaveLength(1);
+    const [request] = app.requests;
+    expect(new URL(request?.url ?? "").pathname).toBe(
+      "/v1/remora/memories/assistant",
+    );
+    expect(request?.auth).toBe("Bearer self-token");
+    expect(request?.body).toMatchObject({
+      bank: "patch:self",
+      source: {
+        entity_id: `discord:user:${BOT}`,
+        label: "Patch",
+        text: "patch likes teal",
+      },
+    });
+    expect(app.rest.patch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        body: expect.objectContaining({
+          content:
+            "saved #7:\n- Patch likes teal.\ncontext:\n- Teal is a blue-green colour.",
+        }),
+      }),
+    );
+  });
+
+  // Proves a statement with nothing about Patch is still saved, and says which of her facts it belongs with.
+  it("saves context-only statements and names the fact they attach to", async () => {
+    const app = await selfRuntime({
+      atoms: [],
+      context: ["underscores uses she/her pronouns."],
+      attached: [2],
+    });
+    await app.dispatch(app.add(OWNER));
+    expect(app.rest.patch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        body: expect.objectContaining({
+          content:
+            "saved #7:\ncontext:\n- underscores uses she/her pronouns.\nattached to #2",
+        }),
+      }),
+    );
+  });
+
+  // Proves /self list shows a context record under the fact it attaches to, not as a fact of its own.
+  it("lists attached context beneath its fact", async () => {
+    const app = await selfRuntime();
+    const record = (id: number, text: string, extra: object) => ({
+      ...makeEvidenceRecord("patch:self", id),
+      span: { start: 0, end: text.length },
+      text,
+      ...extra,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          object: "remora.evidence.list",
+          version: 1,
+          bank: "patch:self",
+          revision: REVISION,
+          data: [
+            record(2, "Patch loves underscores.", {
+              atoms: ["Patch loves underscores."],
+              atom_subjects: ["c".repeat(64)],
+            }),
+            record(4, "underscores uses she/her pronouns.", {
+              atoms: ["underscores uses she/her pronouns."],
+              attached_to: [2],
+            }),
+          ],
+          next_cursor: null,
+        }),
+      ),
+    );
+    await app.dispatch(
+      app.command(
+        "self",
+        [{ type: ApplicationCommandOptionType.Subcommand, name: "list" }],
+        OWNER,
+      ),
+    );
+    expect(app.rest.patch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        body: expect.objectContaining({
+          content:
+            "#2: Patch loves underscores.\n  - Patch loves underscores.\n  - #4: underscores uses she/her pronouns.",
+        }),
+      }),
+    );
   });
 });

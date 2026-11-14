@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Message } from "discord.js";
+import { getBotIdentity } from "../identity.js";
 import type { LlmMessage, LlmResponse } from "../llm/client.js";
 import {
   type CompletedGeneration,
@@ -8,6 +9,7 @@ import {
   type ObservationLimits,
   type ObservationReference,
   type ObservationSegment,
+  UNPRINTABLE,
   decodeObservationView,
   validateObservationBatch,
 } from "../llm/evidence.js";
@@ -17,9 +19,12 @@ import type {
   HarnessStore,
   ObservationContext,
 } from "../tools/store.js";
+import { escapeMessageSplit } from "./escape.js";
+import { MESSAGE_SPLIT } from "./reserved-tokens.js";
 import type { ConversationMessage, TranscriptBlock } from "./types.js";
 
 type Source = Omit<ObservationInput, "views" | "context">;
+type Actor = NonNullable<ObservationInput["actor"]>;
 type Candidate = {
   source: Source;
   digest: string;
@@ -40,6 +45,9 @@ export class ConversationObservations {
   private readonly namespace: string;
   private readonly sourceRevisions = new Map<string, number>();
   private consumed: readonly ConsumedSource[] = [];
+  /** Request-local speaker names and reply authors for the atomiser; never identity. */
+  private readonly labels = new Map<string, { actor: Actor; label: string }>();
+  private readonly authors = new Map<string, Actor>();
 
   constructor(
     private readonly options: {
@@ -59,10 +67,21 @@ export class ConversationObservations {
     this.namespace = options.namespace ?? "";
     this.cutoff = options.store.observationCutoff(bank, options.startId);
     this.epoch = options.store.privacyEpoch();
+    // Patch's own name, even with none of her messages in view, so recalled facts
+    // about her read as "you ...". Her visible messages may refine it.
+    const self: Actor = {
+      bank,
+      role: "assistant",
+      id: `discord:user:${options.botUserId}`,
+    };
+    const name = this.displayLabel(getBotIdentity().name);
+    if (this.labelChars && name)
+      this.labels.set(JSON.stringify(self), { actor: self, label: name });
   }
 
   /** Only actual new human messages in this destination can supply a human actor. */
   humanSource(block: TranscriptBlock): Source | undefined {
+    this.noteSpeaker(block);
     if (
       block.role === "human" &&
       block.id &&
@@ -80,7 +99,13 @@ export class ConversationObservations {
       !block.source.text.trim()
     )
       return;
-    return this.human(block.id, block.source.revision, block.authorId);
+    return this.human(
+      block.id,
+      block.source.revision,
+      block.authorId,
+      block.timestamp,
+      block.replyTo,
+    );
   }
 
   currentMessage(): LlmMessage {
@@ -98,6 +123,8 @@ export class ConversationObservations {
                   message.id,
                   message.editedTimestamp ?? 0,
                   message.author.id,
+                  message.createdAt,
+                  message.reference?.messageId,
                 ),
                 start: 0,
                 end: message.content.length,
@@ -110,6 +137,7 @@ export class ConversationObservations {
 
   /** Preserve each chunk's actual Discord identity even when transcript rendering merges replies. */
   assistantBody(block: TranscriptBlock): LlmMessage | undefined {
+    this.noteSpeaker(block);
     const pieces = block.displayMessages;
     if (!pieces?.length || pieces.length !== (block.messageIds?.length ?? 1))
       return;
@@ -130,14 +158,16 @@ export class ConversationObservations {
     for (const piece of pieces) {
       if (BigInt(piece.id) > this.cutoff)
         this.observeRevision(piece.id, piece.revision);
-      if (result.content) result.content += "\n<split />\n";
+      if (result.content) result.content += MESSAGE_SPLIT;
       const start = result.content.length;
       // HTTP serialization already escapes dialogue. Encoding it again here adds
       // literal quotation marks to the assistant's historical speech.
-      result.content += piece.text;
+      const text = escapeMessageSplit(piece.text);
+      result.content += text;
       const end = result.content.length;
+      // An escaped marker no longer equals its source text, so it claims no ancestry.
       const parent =
-        BigInt(piece.id) > this.cutoff
+        BigInt(piece.id) > this.cutoff && text === piece.text
           ? this.options.store.displayParent(
               this.namespace,
               this.bank,
@@ -535,6 +565,17 @@ export class ConversationObservations {
           id: `discord:user:${botUserId}`,
         },
       },
+      ...(limits.max_observation_label_chars && this.labels.size
+        ? {
+            labels: [...this.labels.values()].slice(
+              0,
+              limits.max_observation_labels,
+            ),
+          }
+        : {}),
+      ...(limits.max_also_banks && remora.also_banks?.length
+        ? { also_banks: remora.also_banks }
+        : {}),
     };
     validateObservationBatch(observations, messages, limits);
     this.consumed = this.consumedSources(observations);
@@ -592,13 +633,56 @@ export class ConversationObservations {
     );
   }
 
-  private human(id: string, revision: number, authorId: string): Source {
+  private human(
+    id: string,
+    revision: number,
+    authorId: string,
+    at: Date,
+    replyTo: string | undefined,
+  ): Source {
+    const repliedTo =
+      replyTo && this.labelChars ? this.authors.get(replyTo) : undefined;
     return {
       id: `discord:message:${id}`,
       revision,
       origin: "human_input",
       actor: { bank: this.bank, role: "human", id: `discord:user:${authorId}` },
+      at: at.toISOString(),
+      ...(repliedTo ? { replying_to: repliedTo } : {}),
     };
+  }
+
+  private get labelChars() {
+    return this.options.limits.max_observation_label_chars;
+  }
+
+  /** Remember who said each visible message and the name the conversation shows for them. */
+  noteSpeaker(block: TranscriptBlock) {
+    if (!this.labelChars || block.channelId !== this.options.message.channelId)
+      return;
+    if (block.role === "bot") return;
+    const actor: Actor = {
+      bank: this.bank,
+      role: block.role === "self" ? "assistant" : "human",
+      id: `discord:user:${block.role === "self" ? this.options.botUserId : block.authorId}`,
+    };
+    for (const id of [block.id, ...(block.messageIds ?? [])])
+      if (id) this.authors.set(id, actor);
+    const label = this.displayLabel(block.authorName);
+    if (label) this.labels.set(JSON.stringify(actor), { actor, label });
+  }
+
+  /** A name as one printable line within Remora's label limit. */
+  private displayLabel(name: string) {
+    return Array.from(
+      name
+        .replace(new RegExp(UNPRINTABLE, "gu"), " ")
+        .replace(/ +/g, " ")
+        .trim(),
+    )
+      .slice(0, this.labelChars)
+      .join("")
+      .trim();
   }
 }
 

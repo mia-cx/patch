@@ -169,17 +169,11 @@ export class LlmClient {
       throw new Error(
         "Remora backend does not support LLM_ENABLE_THINKING=true",
       );
-    if (
-      this.config.llmTemperature !== 0 &&
-      capabilities.backend === "transformers"
-    )
-      throw new Error("The Remora HF profile requires LLM_TEMPERATURE=0");
-    if (
-      this.config.activityUpdatesEnabled &&
-      capabilities.backend === "transformers"
-    )
+    if (this.config.llmTemperature !== 0 && !features.sampling)
+      throw new Error("This Remora backend requires LLM_TEMPERATURE=0");
+    if (this.config.activityUpdatesEnabled && !features.sampling)
       throw new Error(
-        "The Remora HF profile requires ACTIVITY_UPDATES_ENABLED=false; activity requests use sampling",
+        "This Remora backend requires ACTIVITY_UPDATES_ENABLED=false; activity requests use sampling",
       );
     const bankCount = Math.max(
       new Set(this.config.remoraReadBanks).size + 1,
@@ -194,6 +188,11 @@ export class LlmClient {
       this.config.llmContextTokens,
       limits.context_tokens,
     );
+    // Tool exchanges ride on top of the conversation budget inside one request.
+    this.config.llmToolContextTokens = Math.min(
+      this.config.llmToolContextTokens,
+      limits.context_tokens - this.config.llmContextTokens,
+    );
     this.maxOutputTokens = limits.max_output_tokens;
     this.config.llmMaxTokens = Math.min(
       this.config.llmMaxTokens,
@@ -205,10 +204,17 @@ export class LlmClient {
     );
     this.identityLimits = identityLimits;
     this.harnessNameLimits = harnessNameLimits;
-    if (features.all_stream_evidence)
-      this.evidenceLimits = Schema.decodeUnknownSync(ObservationLimitsSchema)(
-        limits,
-      );
+    if (features.all_stream_evidence) {
+      const {
+        max_observation_labels,
+        max_observation_label_chars,
+        ...evidence
+      } = Schema.decodeUnknownSync(ObservationLimitsSchema)(limits);
+      // Label limits mean label support only when the feature is advertised.
+      this.evidenceLimits = features.observation_labels
+        ? { ...evidence, max_observation_labels, max_observation_label_chars }
+        : evidence;
+    }
     this.supportsSourceReferences = features.source_references === true;
     return capabilities;
   }
@@ -232,6 +238,8 @@ export class LlmClient {
   }
 
   async complete(request: LlmRequest): Promise<LlmResponse> {
+    if (request.remora?.also_banks)
+      throw new Error("Remora layers travel inside the observation batch");
     if (
       this.evidenceLimits &&
       (request.remora?.turn ||

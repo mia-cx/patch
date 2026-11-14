@@ -7,14 +7,14 @@ import { Schema } from "effect";
 import { discordSlashCommandProviderId, slashCommand } from "protocord";
 import {
   buildTranscript,
-  formatTranscript,
+  formatTranscriptMessages,
 } from "../conversation/transcript.js";
 import { toConversationMessage } from "../discord/discord-js-adapter.js";
 import { stripUnicodeEmoji } from "../discord/no-emoji.js";
 import { splitDiscordResponse } from "../discord/split.js";
 import { getBotIdentity } from "../identity.js";
 import { askLlm } from "../llm/ask.js";
-import type { LlmResponse } from "../llm/client.js";
+import type { LlmMessage, LlmResponse } from "../llm/client.js";
 import type { Logger } from "../logger.js";
 import { buildLeaveMessages } from "../prompts/leave.js";
 import {
@@ -38,7 +38,7 @@ const NO_MENTIONS: MessageMentionOptions = {
 
 const Farewell = Schema.String.annotate({
   description:
-    "Exact Discord-visible farewell to send before leaving. May include <split /> for multiple Discord messages.",
+    "Exact Discord-visible farewell to send before leaving. May include <|message_split|> between multiple Discord messages.",
 });
 const LeaveThreadArgs = Schema.Struct({ farewell: Schema.optional(Farewell) });
 type LeaveInvocation = ActionInvocation<typeof LeaveThreadArgs.Type>;
@@ -137,7 +137,7 @@ async function generateSlashFarewell(
     guildId: thread.guildId,
     operation: "leave-thread-farewell",
   });
-  const transcript = await buildLeaveTranscript(
+  const history = await buildLeaveHistory(
     thread,
     options.botUserId,
     cutoffTimestamp(options.invocation),
@@ -146,7 +146,7 @@ async function generateSlashFarewell(
   );
   return generateFarewell({
     ...options,
-    transcript,
+    history,
     requester: options.invocation.requester ?? {
       id: "unknown",
       name: "someone",
@@ -239,13 +239,13 @@ async function sendFarewell(
   }
 }
 
-async function buildLeaveTranscript(
+async function buildLeaveHistory(
   thread: ThreadChannel,
   botUserId: string,
   beforeTimestamp: number,
   log: Logger,
   configuredLimit: number,
-): Promise<string> {
+): Promise<LlmMessage[]> {
   const limit = Math.min(LEAVE_CONTEXT_MESSAGE_LIMIT, configuredLimit);
 
   try {
@@ -262,15 +262,11 @@ async function buildLeaveTranscript(
         context: "thread" as const,
       }));
 
-    const transcript = formatTranscript(buildTranscript(messages, botUserId));
-    log.debug(
-      { messageCount: messages.length, transcript },
-      "built leave transcript",
-    );
-    return transcript || "(no recent thread messages)";
+    log.debug({ messageCount: messages.length }, "built leave history");
+    return formatTranscriptMessages(buildTranscript(messages, botUserId), "");
   } catch (error) {
-    log.warn({ error }, "failed to build leave transcript");
-    return "(recent thread messages unavailable)";
+    log.warn({ error }, "failed to build leave history");
+    return [];
   }
 }
 
@@ -278,14 +274,14 @@ async function generateFarewell(options: {
   config: ActionContext["config"];
   llm: ActionContext["llm"];
   logger: ActionContext["logger"];
-  transcript: string;
+  history: LlmMessage[];
   requester: { id: string; name: string };
 }): Promise<string> {
   return askLlm({
     llm: options.llm,
     logger: options.logger,
     label: "leave-thread-farewell",
-    messages: buildLeaveMessages(options.requester, options.transcript),
+    messages: buildLeaveMessages(options.requester, options.history),
     maxTokens: LEAVE_MAX_TOKENS,
     enableThinking: false,
     timeoutMs: options.config.llmTimeoutMs,

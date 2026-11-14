@@ -7,6 +7,8 @@ import {
 } from "discord.js";
 import { Schema } from "effect";
 import { slashCommand } from "protocord";
+import { paginate, showPages } from "../discord/pages.js";
+import type { Logger } from "../logger.js";
 import { MemoryManagementError, type MemoryRecord } from "../memory/client.js";
 import type { EvidenceRecord } from "../memory/evidence.js";
 import { memoryScopes, resolveMemoryBank } from "../memory/scope.js";
@@ -49,7 +51,6 @@ const MemoryArgs = Schema.Union([
   }),
 ]);
 const NO_MENTIONS = { parse: [] as const, repliedUser: false };
-const MAX_INLINE_LENGTH = 1900;
 const scopeOption = {
   type: ApplicationCommandOptionType.String as const,
   name: "scope",
@@ -270,6 +271,7 @@ export const memoryAction: Action<typeof MemoryArgs.Type> = {
         interaction,
         bank.label,
         snapshot?.data ?? [],
+        context.logger,
         quotations?.data,
       );
       return;
@@ -371,10 +373,12 @@ function parseIds(value: string, limit: number): number[] {
   return ids;
 }
 
+/** A bank's facts, then its evidence, as pages with ◀ / ▶ buttons; evidence also attaches its full JSON. */
 async function presentMemories(
   interaction: ChatInputCommandInteraction,
   label: string,
   memories: readonly MemoryRecord[],
+  logger: Logger,
   evidence?: readonly EvidenceRecord[],
 ) {
   if (memories.length === 0 && !evidence?.length) {
@@ -384,53 +388,31 @@ async function presentMemories(
     });
     return;
   }
-  const listing = memories
-    .map(
-      (memory) =>
-        `${evidence === undefined ? "" : "fact "}#${memory.id} ${escapeMarkdown(memory.text)}`,
-    )
-    .join("\n\n");
-  const quotations = evidence
-    ?.map((record) => {
-      const provenance = (source: EvidenceRecord["source"]) => {
-        const voice = source.actor?.actor
-          ? `${source.actor.actor.role} ${source.actor.actor.id}`
-          : (source.actor?.entity ?? "unknown");
-        return [
-          source.origin,
-          `actor ${voice}`,
-          ...(source.tool ? [`tool ${source.tool}`] : []),
-          ...(source.url ? [source.url] : []),
-        ]
-          .map((value) => escapeMarkdown(value))
-          .join("; ");
-      };
-      return `evidence #${record.id} (${provenance(record.source)}; subjects unresolved)\n${escapeMarkdown(record.text)}${record.context.map((item, index) => `\ncontext ${index} (${provenance(item.source)}): ${escapeMarkdown(item.text)}`).join("")}`;
-    })
-    .join("\n\n");
-  const content = `${label}\n\n${[listing, quotations].filter(Boolean).join("\n\n")}`;
-  if (content.length <= MAX_INLINE_LENGTH && !evidence?.length) {
-    await interaction.editReply({ content, allowedMentions: NO_MENTIONS });
-    return;
-  }
+  const facts = memories.map(
+    (memory) =>
+      `${evidence === undefined ? "" : "fact "}#${memory.id} ${escapeMarkdown(memory.text)}`,
+  );
+  // The saved facts (or the quote when Remora kept no atoms) and a web page's URL; the file has the rest.
+  const quotations = (evidence ?? []).map(({ id, atoms, text, source }) =>
+    [
+      `#${id}`,
+      atoms?.length
+        ? atoms.map((atom) => escapeMarkdown(atom)).join(" ")
+        : `"${escapeMarkdown(text)}"`,
+      ...(source.url ? [`<${source.url}>`] : []),
+    ].join(" "),
+  );
+  const pages = paginate([`${label}\n`, ...facts, ...quotations]);
+  if (!evidence?.length) return showPages(interaction, pages, logger);
+  // Evidence includes source identities, spans and supporting contexts beyond its inline summary.
   const file = Buffer.from(
-    JSON.stringify(
-      evidence === undefined ? memories : { statements: memories, evidence },
-      null,
-      2,
-    ),
+    JSON.stringify({ statements: memories, evidence }, null, 2),
   );
   if (file.byteLength > interaction.attachmentSizeLimit)
     throw new MemoryManagementError("export_too_large");
-  await interaction.editReply({
-    // Evidence includes source identities, spans and supporting contexts beyond its inline summary.
-    content:
-      content.length <= MAX_INLINE_LENGTH
-        ? content
-        : `${memories.length + (evidence?.length ?? 0)} saved memories. the file contains the full list and IDs.`,
-    files: [new AttachmentBuilder(file, { name: "memories.json" })],
-    allowedMentions: NO_MENTIONS,
-  });
+  await showPages(interaction, pages, logger, [
+    new AttachmentBuilder(file, { name: "memories.json" }),
+  ]);
 }
 
 function memoryFailure(error: unknown): string {

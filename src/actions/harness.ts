@@ -7,6 +7,7 @@ import {
 } from "discord.js";
 import { Schema } from "effect";
 import { allowsConversation } from "../discord/scope.js";
+import { parseFollowupTimestamp } from "../tools/followup-schedule.js";
 import type { ActionContext, ActionRegistry } from "./context.js";
 import { actionInput } from "./context.js";
 import { toolCall } from "./tool-calls.js";
@@ -25,6 +26,7 @@ const NO_MENTIONS = { parse: [] as never[], repliedUser: false };
 const CONTINUATION_TOOLS = new Set([
   "web_search",
   "web_fetch",
+  "urban_dictionary",
   "memory_search",
   "scratch_list",
   "scratch_read",
@@ -112,10 +114,14 @@ export function registerHarnessActions(registry: ActionRegistry) {
 
   register(
     "react",
-    "Add Patch's reaction to a visible message. This can be your entire response.",
-    Schema.Struct({ message_id: ID, emoji: Name }),
+    "Add Patch's reaction to the message you are answering, or to message_id from a tool result. This can be your entire response.",
+    Schema.Struct({ message_id: Schema.optional(ID), emoji: Name }),
     async (input, context, channelId) => {
-      const message = await target(context, channelId, input.message_id);
+      const message = await target(
+        context,
+        channelId,
+        input.message_id ?? context.toolScope.currentMessageId,
+      );
       context.toolScope.signal.throwIfAborted();
       await message.react(input.emoji);
       return { message_id: message.id, reacted: true };
@@ -123,10 +129,14 @@ export function registerHarnessActions(registry: ActionRegistry) {
   );
   register(
     "unreact",
-    "Remove only Patch's reaction from a visible message.",
-    Schema.Struct({ message_id: ID, emoji: Name }),
+    "Remove only Patch's reaction from the message you are answering, or from message_id.",
+    Schema.Struct({ message_id: Schema.optional(ID), emoji: Name }),
     async (input, context, channelId) => {
-      const message = await target(context, channelId, input.message_id);
+      const message = await target(
+        context,
+        channelId,
+        input.message_id ?? context.toolScope.currentMessageId,
+      );
       const reaction = message.reactions.resolve(input.emoji);
       if (!reaction || !context.client.user)
         throw new Error("Patch's reaction was not found");
@@ -137,8 +147,8 @@ export function registerHarnessActions(registry: ActionRegistry) {
   );
   register(
     "edit_message",
-    "Edit a visible message written by Patch; never edit another author's message.",
-    Schema.Struct({ message_id: ID, text: Text }),
+    "Edit Patch's latest message in this conversation; never another author's message.",
+    Schema.Struct({ message_id: Schema.optional(ID), text: Text }),
     async (input, context, channelId) => {
       const message = await ownTarget(context, channelId, input.message_id);
       context.toolScope.signal.throwIfAborted();
@@ -148,8 +158,8 @@ export function registerHarnessActions(registry: ActionRegistry) {
   );
   register(
     "delete_message",
-    "Delete a visible message written by Patch only.",
-    Schema.Struct({ message_id: ID }),
+    "Delete Patch's latest message in this conversation. Patch's own messages only.",
+    Schema.Struct({ message_id: Schema.optional(ID) }),
     async (input, context, channelId) => {
       const message = await ownTarget(context, channelId, input.message_id);
       context.toolScope.signal.throwIfAborted();
@@ -159,10 +169,18 @@ export function registerHarnessActions(registry: ActionRegistry) {
   );
   register(
     "start_thread",
-    "Start or reuse a thread on a visible message, with optional opening text.",
-    Schema.Struct({ message_id: ID, name: Name, text: Schema.optional(Text) }),
+    "Start or reuse a thread on the message you are answering, with optional opening text.",
+    Schema.Struct({
+      message_id: Schema.optional(ID),
+      name: Name,
+      text: Schema.optional(Text),
+    }),
     async (input, context, channelId) => {
-      const message = await target(context, channelId, input.message_id);
+      const message = await target(
+        context,
+        channelId,
+        input.message_id ?? context.toolScope.currentMessageId,
+      );
       context.toolScope.signal.throwIfAborted();
       const thread = message.hasThread
         ? (message.thread ?? (await context.client.channels.fetch(message.id)))
@@ -243,10 +261,14 @@ export function registerHarnessActions(registry: ActionRegistry) {
   );
   register(
     "poll_results",
-    "Read the actual counts from a visible poll.",
-    Schema.Struct({ message_id: ID }),
+    "Read the actual counts from Patch's latest poll, or from message_id returned by create_poll.",
+    Schema.Struct({ message_id: Schema.optional(ID) }),
     async (input, context, channelId) => {
-      const message = await target(context, channelId, input.message_id);
+      const message = await target(
+        context,
+        channelId,
+        input.message_id ?? context.toolScope.ownMessageId,
+      );
       if (!message.poll) throw new Error("Message has no poll");
       return {
         question: message.poll.question.text,
@@ -260,8 +282,8 @@ export function registerHarnessActions(registry: ActionRegistry) {
   );
   register(
     "end_poll",
-    "End a visible poll created by Patch.",
-    Schema.Struct({ message_id: ID }),
+    "End Patch's latest poll, or the poll at message_id returned by create_poll.",
+    Schema.Struct({ message_id: Schema.optional(ID) }),
     async (input, context, channelId) => {
       const message = await ownTarget(context, channelId, input.message_id);
       if (!message.poll) throw new Error("Message has no poll");
@@ -328,28 +350,50 @@ export function registerHarnessActions(registry: ActionRegistry) {
   );
   register(
     "schedule_followup",
-    "Schedule exact text in this conversation at an ISO timestamp with timezone, within one year. This schedules no new model generation.",
-    Schema.Struct({ at: Schema.String, text: Text }),
+    "Schedule exact text: {at,text} once OR {cron,timezone,text} repeating (5-field cron, IANA timezone). Current conversation only, next occurrence within one year. No new generation. Never guess timezone.",
+    Schema.Union([
+      Schema.Struct({ at: Schema.String, text: Text }),
+      Schema.Struct({
+        cron: Schema.String.check(
+          Schema.isMinLength(1),
+          Schema.isMaxLength(128),
+        ),
+        timezone: Schema.String.check(
+          Schema.isMinLength(1),
+          Schema.isMaxLength(100),
+        ),
+        text: Text,
+      }),
+    ]),
     async (input, context, channelId) => {
-      if (!/(Z|[+-]\d{2}:\d{2})$/.test(input.at))
-        throw new Error("Supply an ISO timestamp with timezone");
+      if ("cron" in input)
+        return context.harness?.store.scheduleRecurring(
+          channelId,
+          input.cron,
+          input.timezone,
+          input.text,
+        );
       return context.harness?.store.schedule(
         channelId,
-        Date.parse(input.at),
+        parseFollowupTimestamp(input.at),
         input.text,
       );
     },
   );
   register(
     "list_followups",
-    "List pending or uncertain follow-ups in this conversation.",
+    "List active follow-ups in this conversation, including cron/timezone, next_at (ISO), and pending/sending/uncertain status. An uncertain schedule is paused.",
     Schema.Struct({}),
     async (_input, context, channelId) =>
-      context.harness?.store.followups(channelId),
+      context.harness?.store.followups(channelId).map((job) => ({
+        ...job,
+        recurring: job.cron !== null,
+        next_at: new Date(job.at).toISOString(),
+      })),
   );
   register(
     "cancel_followup",
-    "Cancel a pending follow-up in this conversation.",
+    "Cancel an entire one-off or recurring follow-up in this conversation. An already in-flight send may finish.",
     Schema.Struct({ id: Schema.String }),
     async (input, context, channelId) =>
       context.harness?.store.cancel(channelId, input.id),
@@ -433,6 +477,13 @@ export function registerHarnessActions(registry: ActionRegistry) {
         input.offset,
         context.toolScope?.signal,
       ),
+  );
+  register(
+    "urban_dictionary",
+    "Look up slang you don't know on Urban Dictionary. Returns up to three crowd-written definitions; how the word was used decides which one fits.",
+    Schema.Struct({ term: Schema.String }),
+    async (input, context) =>
+      context.harness?.web.slang(input.term, context.toolScope?.signal),
   );
   register(
     "scratch_list",
@@ -525,8 +576,9 @@ async function sendable(
 async function target(
   context: ActionContext,
   channelId: string,
-  messageId: string,
+  messageId: string | undefined,
 ): Promise<Message> {
+  if (!messageId) throw new Error("There is no message to act on");
   if (!context.toolScope?.messageIds.has(messageId))
     throw new Error("Message target is not in the supplied conversation");
   const channel: TextBasedChannel = await sendable(context, channelId);
@@ -537,10 +589,11 @@ async function target(
   });
 }
 
+/** Patch's own message: the given ID, or her latest message in this conversation. */
 async function ownTarget(
   context: ActionContext,
   channelId: string,
-  messageId: string,
+  messageId = context.toolScope?.ownMessageId,
 ) {
   const message = await target(context, channelId, messageId);
   if (message.author.id !== context.client.user?.id)
