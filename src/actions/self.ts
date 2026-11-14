@@ -173,15 +173,23 @@ async function add(
   return clip(lines.join("\n"));
 }
 
+/** Each fact with its atoms, and the context records attached to it nested beneath. */
 async function list(self: NonNullable<ActionContext["selfMemory"]>) {
   const page = await self.listAllEvidence(SELF_BANK, 1_000_000);
   if (!page.data.length) return "no self facts yet.";
+  const listed = new Set(page.data.map((record) => record.id));
+  const nested = (record: (typeof page.data)[number]) =>
+    record.attached_to?.some((id) => listed.has(id)) ?? false;
   return clip(
     page.data
+      .filter((record) => !nested(record))
       .map((record) =>
         [
           `#${record.id}: ${record.text}`,
           ...(record.atoms ?? []).map((atom) => `  - ${atom}`),
+          ...page.data
+            .filter((other) => other.attached_to?.includes(record.id))
+            .map((other) => `  - #${other.id}: ${other.text}`),
         ].join("\n"),
       )
       .join("\n"),

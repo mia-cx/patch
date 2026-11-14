@@ -1387,4 +1387,53 @@ describe("Patch's self memory", () => {
       }),
     );
   });
+
+  // Proves /self list shows a context record under the fact it attaches to, not as a fact of its own.
+  it("lists attached context beneath its fact", async () => {
+    const app = await selfRuntime();
+    const record = (id: number, text: string, extra: object) => ({
+      ...makeEvidenceRecord("patch:self", id),
+      span: { start: 0, end: text.length },
+      text,
+      ...extra,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          object: "remora.evidence.list",
+          version: 1,
+          bank: "patch:self",
+          revision: REVISION,
+          data: [
+            record(2, "Patch loves underscores.", {
+              atoms: ["Patch loves underscores."],
+              atom_subjects: ["c".repeat(64)],
+            }),
+            record(4, "underscores uses she/her pronouns.", {
+              atoms: ["underscores uses she/her pronouns."],
+              attached_to: [2],
+            }),
+          ],
+          next_cursor: null,
+        }),
+      ),
+    );
+    await app.dispatch(
+      app.command(
+        "self",
+        [{ type: ApplicationCommandOptionType.Subcommand, name: "list" }],
+        OWNER,
+      ),
+    );
+    expect(app.rest.patch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        body: expect.objectContaining({
+          content:
+            "#2: Patch loves underscores.\n  - Patch loves underscores.\n  - #4: underscores uses she/her pronouns.",
+        }),
+      }),
+    );
+  });
 });

@@ -101,6 +101,8 @@ export const EvidenceRecordSchema = Schema.Struct({
       Schema.isMaxLength(256),
     ),
   ),
+  /** Subject-bound records (e.g. Patch's self facts) this context record belongs with. */
+  attached_to: Schema.optional(Schema.Array(EvidenceId)),
 }).check(
   Schema.makeFilter(
     (value) =>
