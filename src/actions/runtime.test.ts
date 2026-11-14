@@ -613,8 +613,8 @@ describe("Patch's Protocord integration", () => {
     },
   );
 
-  // Proves an ordinary member can inspect a readable server bank without clipping long facts.
-  it("exports complete server memories privately when the list exceeds a Discord message", async () => {
+  // Proves an ordinary member can inspect a readable server bank without clipping long facts: they continue on the next page.
+  it("pages complete server memories privately when the list exceeds a Discord message", async () => {
     const app = await runtime(false);
     const data = [
       {
@@ -650,9 +650,20 @@ describe("Patch's Protocord integration", () => {
         READ_ACCESS,
       ),
     );
-    const file = app.rest.patch.mock.calls.at(-1)?.[1]?.files?.[0];
-    expect(file?.name).toBe("memories.json");
-    expect(file?.data.toString()).toBe(JSON.stringify(data, null, 2));
+    // The label page, then the 5,003-character fact across three full pages.
+    const pages = Math.ceil(`#2 ${data[0]?.text}`.length / 1_900) + 1;
+    expect(app.rest.patch.mock.calls.at(-1)?.[1]?.body).toMatchObject({
+      content: "this server's memories\n",
+      components: [
+        {
+          components: [
+            { custom_id: "page:previous", disabled: true },
+            { label: `1 / ${pages}`, disabled: true },
+            { custom_id: "page:next", disabled: false },
+          ],
+        },
+      ],
+    });
     expect(app.rest.post).toHaveBeenCalledTimes(1);
     expect(app.rest.post.mock.calls[0]?.[1]?.body).toMatchObject({
       data: { flags: MessageFlags.Ephemeral },

@@ -7,6 +7,7 @@ import {
 import { Schema } from "effect";
 import { slashCommand } from "protocord";
 import { SELF_BANK } from "../conversation/remora.js";
+import { paginate, showPages } from "../discord/pages.js";
 import { getBotIdentity } from "../identity.js";
 import { MemoryManagementError } from "../memory/client.js";
 import { isApplicationTeamMember } from "../memory/self.js";
@@ -25,6 +26,7 @@ const SelfArgs = Schema.Union([
   }),
 ]);
 const MAX_REPLY = 1900;
+const NO_MENTIONS = { parse: [] as never[], repliedUser: false };
 
 /**
  * Patch's self: facts about her alone, kept in one global bank that every
@@ -33,7 +35,7 @@ const MAX_REPLY = 1900;
  * Patch to their own account (never to server admins), in servers and DMs alike; the
  * handler refuses anyone outside the team anyway.
  */
-export const selfAction: Action<typeof SelfArgs.Type, string> = {
+export const selfAction: Action<typeof SelfArgs.Type, string | undefined> = {
   name: "self",
   description: "Manage facts about Patch herself.",
   input: actionInput(SelfArgs),
@@ -98,6 +100,20 @@ export const selfAction: Action<typeof SelfArgs.Type, string> = {
         if (operation === "list") return { operation };
         throw new Error("Unknown self operation");
       },
+      // `list` shows its own pages and returns nothing; every other result is one reply.
+      async present(outcome, interaction) {
+        if (outcome.status === "executed" && outcome.output === undefined)
+          return;
+        await interaction.editReply({
+          content:
+            outcome.status === "executed"
+              ? String(outcome.output)
+              : outcome.status === "failed"
+                ? "Something went wrong while running this action."
+                : outcome.reason,
+          allowedMentions: NO_MENTIONS,
+        });
+      },
     }),
   ],
   availability: (context) =>
@@ -115,7 +131,7 @@ export const selfAction: Action<typeof SelfArgs.Type, string> = {
     if (!self) throw new MemoryManagementError("unsupported_feature");
     if (input.operation === "add")
       return add(rawEvent, input.statement, self, context);
-    if (input.operation === "list") return list(self);
+    if (input.operation === "list") return list(rawEvent, self, context);
     const page = await self.listEvidence(SELF_BANK);
     const result = await self.forgetEvidence({
       bank: SELF_BANK,
@@ -173,27 +189,30 @@ async function add(
   return clip(lines.join("\n"));
 }
 
-/** Each fact with its atoms, and the context records attached to it nested beneath. */
-async function list(self: NonNullable<ActionContext["selfMemory"]>) {
+/** Each fact with its atoms and the context records attached to it nested beneath, as pages. */
+async function list(
+  interaction: ChatInputCommandInteraction,
+  self: NonNullable<ActionContext["selfMemory"]>,
+  context: ActionContext,
+) {
   const page = await self.listAllEvidence(SELF_BANK, 1_000_000);
   if (!page.data.length) return "no self facts yet.";
   const listed = new Set(page.data.map((record) => record.id));
   const nested = (record: (typeof page.data)[number]) =>
     record.attached_to?.some((id) => listed.has(id)) ?? false;
-  return clip(
-    page.data
-      .filter((record) => !nested(record))
-      .map((record) =>
-        [
-          `#${record.id}: ${record.text}`,
-          ...(record.atoms ?? []).map((atom) => `  - ${atom}`),
-          ...page.data
-            .filter((other) => other.attached_to?.includes(record.id))
-            .map((other) => `  - #${other.id}: ${other.text}`),
-        ].join("\n"),
-      )
-      .join("\n"),
-  );
+  const blocks = page.data
+    .filter((record) => !nested(record))
+    .map((record) =>
+      [
+        `#${record.id}: ${record.text}`,
+        ...(record.atoms ?? []).map((atom) => `  - ${atom}`),
+        ...page.data
+          .filter((other) => other.attached_to?.includes(record.id))
+          .map((other) => `  - #${other.id}: ${other.text}`),
+      ].join("\n"),
+    );
+  await showPages(interaction, paginate(blocks), context.logger);
+  return undefined;
 }
 
 function clip(text: string) {
