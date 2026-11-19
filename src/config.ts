@@ -134,7 +134,7 @@ export function loadConfigEffect(env: NodeJS.ProcessEnv = process.env) {
       llmApiKey: env.LLM_API_KEY ?? "local",
       settingsDbPath: env.SETTINGS_DB_PATH ?? "data/patch.sqlite",
       llmContextTokens: integer(env.LLM_CONTEXT_TOKENS, 32_768),
-      llmToolContextTokens: integer(env.LLM_TOOL_CONTEXT_TOKENS, 16_384),
+      llmToolContextTokens: integer(env.LLM_TOOL_CONTEXT_TOKENS, 16_384, 0),
       llmEnableThinking: boolean(env.LLM_ENABLE_THINKING, false),
       llmThinkingMaxTokens: integer(env.LLM_THINKING_MAX_TOKENS, 1024),
       llmThinkingTimeoutMs: integer(env.LLM_THINKING_TIMEOUT_MS, 20_000),
@@ -192,10 +192,11 @@ function required(env: NodeJS.ProcessEnv, key: string): string {
   return value;
 }
 
-function integer(value: string | undefined, fallback: number): number {
+/** Parses an integer env var; values below `min` (default 1) fall back. */
+function integer(value: string | undefined, fallback: number, min = 1): number {
   if (!value) return fallback;
   const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  if (!Number.isFinite(parsed) || parsed < min) return fallback;
   return parsed;
 }
 

@@ -175,9 +175,15 @@ export class LlmClient {
       throw new Error(
         "This Remora backend requires ACTIVITY_UPDATES_ENABLED=false; activity requests use sampling",
       );
+    // Mirrors remoraRequest: a DM reads user + legacy DM + configured + self banks,
+    // a guild channel reads channel + guild + self.
+    const self = this.config.remoraSelfApiKey ? 1 : 0;
     const bankCount = Math.max(
-      new Set(this.config.remoraReadBanks).size + 1,
-      this.config.discordTrialGuild ? 2 : 0,
+      new Set(this.config.remoraReadBanks).size +
+        1 +
+        (this.config.discordTrialDmChannelId ? 1 : 0) +
+        self,
+      this.config.discordTrialGuild ? 2 + self : 0,
     );
     if (
       bankCount > limits.max_read_banks ||

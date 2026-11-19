@@ -18,6 +18,12 @@ describe("loadConfig", () => {
     expect(config.llmContextTokens).toBe(32768);
   });
 
+  it("keeps an explicit zero tool-context allowance", () => {
+    const config = loadConfig({ ...requiredEnv, LLM_TOOL_CONTEXT_TOKENS: "0" });
+
+    expect(config.llmToolContextTokens).toBe(0);
+  });
+
   it("allows configuring the settings database path", () => {
     const config = loadConfig({
       ...requiredEnv,
