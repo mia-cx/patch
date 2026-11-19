@@ -1,6 +1,7 @@
 import type { TranscriptParticipant } from "../conversation/types.js";
 
-const CODE = /(```[\s\S]*?```|`[^`\n]*`)/;
+// Code and URLs pass through verbatim: a link was checked before mentions are repaired.
+const VERBATIM = /(```[\s\S]*?```|`[^`\n]*`|https?:\/\/\S+)/;
 const RAW_MENTION = /(\s?)<@([!&]?)([^<>\n]*)>(\s?)/g;
 const PLAIN_MENTION = /(?<![\w<@/])@([\w.]+)/g;
 const MASS_MENTIONS = new Set(["everyone", "here"]);
@@ -9,8 +10,8 @@ const MASS_MENTIONS = new Set(["everyone", "here"]);
  * Turn the model's mentions into what Discord should show: `@username` for a
  * participant becomes a real `<@id>` ping; unknown or ambiguous names stay plain
  * text. Raw `<@…>` forms keep only participant IDs: a name inside one is
- * resolved like `@name`, and unknown IDs and role mentions are dropped. Code is
- * left untouched. Mass mentions stay text; allowed mentions never ping them.
+ * resolved like `@name`, and unknown IDs and role mentions are dropped. Code and
+ * URLs are left untouched. Mass mentions stay text; allowed mentions never ping them.
  */
 export function repairMentions(
   text: string,
@@ -36,7 +37,7 @@ export function repairMentions(
     return loose ? `<@${loose.id}>${name.slice(trimmed.length)}` : `@${name}`;
   };
   return text
-    .split(CODE)
+    .split(VERBATIM)
     .map((part, index) =>
       index % 2
         ? part

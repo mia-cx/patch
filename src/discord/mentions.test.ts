@@ -23,6 +23,11 @@ describe("repairMentions", () => {
     ["role", "<@&555> all", "all"],
     ["mass mentions", "@everyone @here", "@everyone @here"],
     ["code and email", "`@kel` me@kel.dev", "`@kel` me@kel.dev"],
+    [
+      "URL destination",
+      "[profile](https://example.com/q?author=@kel) by @kel",
+      "[profile](https://example.com/q?author=@kel) by <@111>",
+    ],
   ])("%s", (_, text, expected) => {
     expect(repairMentions(text, PARTICIPANTS)).toBe(expected);
   });

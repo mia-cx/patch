@@ -21,6 +21,10 @@ const STRUCTURED_MARKDOWN = [
   /^(?: {2,}|\t)\S/m, // indented content
   /`|^[ \t]*~~~/m, // code
 ];
+/** Paired inline Markdown that a per-line split would leave unmatched. */
+const PAIRED_SPANS = ["||", "**", "__", "~~"];
+/** A trailing subtext line, such as the harness's source footer. */
+const TRAILING_SUBTEXT = /\n-#[ \t][^\n]*$/;
 
 type Range = readonly [start: number, end: number];
 
@@ -39,17 +43,28 @@ export function isCasualBurst(content: string): boolean {
   return (
     nonEmptyLines.length >= 2 &&
     nonEmptyLines.length <= MAX_BURST_LINES &&
-    nonEmptyLines.every((line) => line.length <= MAX_BURST_LINE_CHARS)
+    nonEmptyLines.every(
+      (line) =>
+        line.length <= MAX_BURST_LINE_CHARS &&
+        // An odd count means the span continues on another line.
+        PAIRED_SPANS.every((span) => line.split(span).length % 2 === 1),
+    )
   );
 }
 
 /**
  * Sends one Discord message per line of a casual burst, or per explicit marker outside code
  * (keeping every other newline inside a message), then applies Discord's length and burst limits.
+ * A trailing subtext line does not stop a burst; it stays under the burst's last message.
  */
 export function splitDiscordResponse(content: string): string[] {
+  const trimmed = content.trimEnd();
+  const footer = TRAILING_SUBTEXT.exec(trimmed)?.[0] ?? "";
+  const body = trimmed.slice(0, trimmed.length - footer.length).trimEnd();
   const chunks = (
-    isCasualBurst(content) ? content.split("\n") : splitOnMarkers(content)
+    isCasualBurst(body)
+      ? `${body}${footer}`.split(/\n(?!-#[ \t])/)
+      : splitOnMarkers(content)
   )
     .flatMap((chunk) => splitHardLimit(chunk.trim()))
     .filter(Boolean);

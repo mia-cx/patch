@@ -23,4 +23,12 @@ describe("paginate", () => {
     ]);
     expect(pages.every((page) => page.length <= 10)).toBe(true);
   });
+
+  // Proves an emoji on a page boundary moves whole to the next page.
+  it("never splits a character across pages", () => {
+    expect(paginate([`${"x".repeat(9)}😀end`], "\n", 10)).toEqual([
+      "x".repeat(9),
+      "😀end",
+    ]);
+  });
 });

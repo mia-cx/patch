@@ -36,13 +36,20 @@ export function paginate(
     }
     if (block.length > limit) {
       if (page) pages.push(page);
-      for (let start = 0; start < block.length; start += limit)
-        pages.push(block.slice(start, start + limit));
+      for (let start = 0, end = 0; start < block.length; start = end) {
+        end = Math.min(start + limit, block.length);
+        // Never split a surrogate pair: end before its high half instead.
+        if (end < block.length && isHighSurrogate(block.charCodeAt(end - 1)))
+          end--;
+        pages.push(block.slice(start, end));
+      }
       page = "";
     } else page = page ? `${page}${separator}${block}` : block;
   }
   return page ? [...pages, page] : pages;
 }
+
+const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
 
 /**
  * Show `pages` in the command's deferred reply, with ⏮ ◀ [n / N] ▶ ⏭ buttons while there is more than one.
@@ -56,10 +63,12 @@ export async function showPages(
   files: readonly AttachmentBuilder[] = [],
 ) {
   let at = 0;
+  // False once the collector ends, so a late jump submission doesn't restore dead buttons.
+  let paging = pages.length > 1;
   const last = pages.length - 1;
   const view = () => ({
     content: pages[at] ?? "",
-    components: pages.length > 1 ? [buttons(at, pages.length)] : [],
+    components: paging ? [buttons(at, pages.length)] : [],
     allowedMentions: NO_MENTIONS,
   });
   const message = await interaction.editReply({ ...view(), files: [...files] });
@@ -99,6 +108,7 @@ export async function showPages(
     click.update(view()).catch(failed);
   });
   collector.on("end", () => {
+    paging = false;
     interaction.editReply({ components: [] }).catch(failed);
   });
 }

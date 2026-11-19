@@ -11,6 +11,16 @@ describe("splitDiscordResponse", () => {
       ["first", "second", "third"],
     ],
     [
+      "keeps a trailing source footer under the burst's last message",
+      "first\nsecond\n-# [example.com](https://example.com/a)",
+      ["first", "second\n-# [example.com](https://example.com/a)"],
+    ],
+    [
+      "keeps a spoiler that spans lines in one message",
+      "||the killer is alice\nthe accomplice is bob||",
+      ["||the killer is alice\nthe accomplice is bob||"],
+    ],
+    [
       "keeps a list's newlines inside one message",
       "my picks:\n- teal\n- violet",
       ["my picks:\n- teal\n- violet"],
