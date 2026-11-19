@@ -106,6 +106,7 @@ balance familiar, novel, challenging, and transformative
 - Import Last.fm/Trakt/Goodreads activity and ratings first.
 - Add metadata text embeddings before raw media embeddings.
 - Add audio embeddings from local owned files, user-supplied files, public previews, creator-submitted audio, or tracks streamed or downloaded through a paid account (tastebase uses Tidal).
+  - Tidal audio is personal-use only and goes against TIDAL's Terms and Conditions of Use (effective 29 June 2026, section 5, General): "Any use of TIDAL Content for any purpose in connection with artificial intelligence or machine intelligence technologies or services is prohibited." Tastebase only embeds it: it trains no generative model and serves no audio.
 - Never keep or serve raw copyrighted media: delete audio once it is embedded, and store only the vectors.
 - Treat genre as cultural/folk taxonomy, not objective truth; embeddings can complement it but should not delete it from the graph.
 - Add embedding-backed ranking views only after `retrieve_interests` works with explicit graph + scores.
