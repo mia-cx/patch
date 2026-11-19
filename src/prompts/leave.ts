@@ -1,8 +1,5 @@
 import type { LlmMessage } from "../llm/client.js";
-import {
-  RESPONSE_TRANSCRIPT_PREFIX_PROMPT_FILES,
-  RESPONSE_TRANSCRIPT_SUFFIX_PROMPT_FILES,
-} from "./common.js";
+import { RESPONSE_PROMPT_FILES } from "./common.js";
 import { readPromptFile } from "./files.js";
 
 type LeaveRequester = {
@@ -10,9 +7,10 @@ type LeaveRequester = {
   name: string;
 };
 
+/** Persona and farewell brief, the recent thread in chat format, then the farewell request. */
 export function buildLeaveMessages(
   requester: LeaveRequester,
-  transcript: string,
+  history: LlmMessage[],
 ): LlmMessage[] {
   const leavePrompt = readPromptFile("30-leave.md").replace(
     "{{requested_by}}",
@@ -22,19 +20,11 @@ export function buildLeaveMessages(
   return [
     {
       role: "system",
-      content: [
-        ...RESPONSE_TRANSCRIPT_PREFIX_PROMPT_FILES.map(readPromptFile),
-        readPromptFile("system/05-transcript-thread.md"),
-        ...RESPONSE_TRANSCRIPT_SUFFIX_PROMPT_FILES.map(readPromptFile),
-        leavePrompt,
-      ].join("\n\n"),
-    },
-    {
-      role: "user",
-      content: readPromptFile("31-leave-user.md").replace(
-        "{{transcript}}",
-        transcript,
+      content: [...RESPONSE_PROMPT_FILES.map(readPromptFile), leavePrompt].join(
+        "\n\n",
       ),
     },
+    ...history,
+    { role: "user", content: readPromptFile("31-leave-user.md") },
   ];
 }

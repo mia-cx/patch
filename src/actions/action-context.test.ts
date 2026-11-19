@@ -69,7 +69,7 @@ describe("action context", () => {
         function: {
           name: "leave_thread",
           description: "Leave the current thread.",
-          parameters: { type: "object" },
+          parameters: { type: "object", properties: {}, required: [] },
         },
       },
     ]);

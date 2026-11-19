@@ -3,17 +3,30 @@ import { Effect, Schema } from "effect";
 export type Config = {
   discordToken: string;
   discordClientId: string;
+  discordTrialDmChannelId: string;
+  discordTrialGuild:
+    | { guildId: string; channelIds: readonly string[] }
+    | undefined;
   llmBaseUrl: string;
   llmModel: string;
   llmApiKey: string;
   settingsDbPath: string;
   llmContextTokens: number;
+  /** Extra tokens for one turn's tool exchanges, on top of the conversation budget; never carried to later turns. */
+  llmToolContextTokens: number;
   llmEnableThinking: boolean;
   llmThinkingMaxTokens: number;
   llmThinkingTimeoutMs: number;
   llmTimeoutMs: number;
   llmMaxTokens: number;
   llmTemperature: number;
+  llmToolMode: "auto" | "native" | "tagged" | "off";
+  maxToolCalls: number;
+  remoraDmEnabled: boolean;
+  remoraReadBanks: readonly string[];
+  /** Token for Patch's self bank, used only by team-only `/self`; set to enable self memory. */
+  remoraSelfApiKey: string;
+  remoraObservationStartId?: string;
   botOwnerUserIds: ReadonlySet<string>;
   debugLogging: boolean;
   llmTraceLogging: boolean;
@@ -28,6 +41,10 @@ export type Config = {
   threadContextMessageLimit: number;
   guildRecentMessageLimit: number;
   classifierContextMessageLimit: number;
+  classifierBaseUrl: string;
+  classifierApiKey: string;
+  classifierModel: string;
+  classifierTimeoutMs: number;
 };
 
 const PositiveInteger = Schema.Number.check(
@@ -40,17 +57,36 @@ const NonNegativeNumber = Schema.Number.check(Schema.isGreaterThanOrEqualTo(0));
 const ConfigSchema = Schema.Struct({
   discordToken: Schema.String.check(Schema.isMinLength(1)),
   discordClientId: Schema.String.check(Schema.isMinLength(1)),
+  discordTrialDmChannelId: Schema.String,
+  discordTrialGuild: Schema.UndefinedOr(
+    Schema.Struct({
+      guildId: Schema.String.check(Schema.isPattern(/^\d{1,20}$/)),
+      /** Opted-in channels, from a comma-separated DISCORD_TRIAL_GUILD_CHANNEL_ID. */
+      channelIds: Schema.Array(
+        Schema.String.check(Schema.isPattern(/^\d{1,20}$/)),
+      ).check(Schema.isMinLength(1)),
+    }),
+  ),
   llmBaseUrl: Schema.String.check(Schema.isMinLength(1)),
   llmModel: Schema.String.check(Schema.isMinLength(1)),
   llmApiKey: Schema.String.check(Schema.isMinLength(1)),
   settingsDbPath: Schema.String.check(Schema.isMinLength(1)),
   llmContextTokens: PositiveInteger,
+  llmToolContextTokens: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   llmEnableThinking: Schema.Boolean,
   llmThinkingMaxTokens: PositiveInteger,
   llmThinkingTimeoutMs: PositiveInteger,
   llmTimeoutMs: PositiveInteger,
   llmMaxTokens: PositiveInteger,
   llmTemperature: NonNegativeNumber,
+  llmToolMode: Schema.Literals(["auto", "native", "tagged", "off"]),
+  maxToolCalls: PositiveInteger,
+  remoraDmEnabled: Schema.Boolean,
+  remoraReadBanks: Schema.Array(Schema.String),
+  remoraSelfApiKey: Schema.String,
+  remoraObservationStartId: Schema.String.check(
+    Schema.isPattern(/^(?:|\d{1,20})$/),
+  ),
   botOwnerUserIds: Schema.ReadonlySet(Schema.String),
   debugLogging: Schema.Boolean,
   llmTraceLogging: Schema.Boolean,
@@ -65,6 +101,10 @@ const ConfigSchema = Schema.Struct({
   threadContextMessageLimit: PositiveInteger,
   guildRecentMessageLimit: PositiveInteger,
   classifierContextMessageLimit: PositiveInteger,
+  classifierBaseUrl: Schema.String.check(Schema.isMinLength(1)),
+  classifierApiKey: Schema.String,
+  classifierModel: Schema.String.check(Schema.isMinLength(1)),
+  classifierTimeoutMs: PositiveInteger,
 });
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -76,6 +116,17 @@ export function loadConfigEffect(env: NodeJS.ProcessEnv = process.env) {
     Schema.decodeUnknownSync(ConfigSchema)({
       discordToken: required(env, "DISCORD_TOKEN"),
       discordClientId: required(env, "DISCORD_CLIENT_ID"),
+      discordTrialDmChannelId: env.DISCORD_TRIAL_DM_CHANNEL_ID?.trim() ?? "",
+      discordTrialGuild:
+        env.DISCORD_TRIAL_GUILD_ID?.trim() ||
+        env.DISCORD_TRIAL_GUILD_CHANNEL_ID?.trim()
+          ? {
+              guildId: env.DISCORD_TRIAL_GUILD_ID?.trim() ?? "",
+              channelIds: (env.DISCORD_TRIAL_GUILD_CHANNEL_ID ?? "")
+                .split(",")
+                .map((id) => id.trim()),
+            }
+          : undefined,
       llmBaseUrl: trimTrailingSlash(
         env.LLM_BASE_URL ?? "http://10.0.3.2:8080/v1",
       ),
@@ -83,12 +134,19 @@ export function loadConfigEffect(env: NodeJS.ProcessEnv = process.env) {
       llmApiKey: env.LLM_API_KEY ?? "local",
       settingsDbPath: env.SETTINGS_DB_PATH ?? "data/patch.sqlite",
       llmContextTokens: integer(env.LLM_CONTEXT_TOKENS, 32_768),
+      llmToolContextTokens: integer(env.LLM_TOOL_CONTEXT_TOKENS, 16_384, 0),
       llmEnableThinking: boolean(env.LLM_ENABLE_THINKING, false),
       llmThinkingMaxTokens: integer(env.LLM_THINKING_MAX_TOKENS, 1024),
       llmThinkingTimeoutMs: integer(env.LLM_THINKING_TIMEOUT_MS, 20_000),
       llmTimeoutMs: integer(env.LLM_TIMEOUT_MS, 120_000),
       llmMaxTokens: integer(env.LLM_MAX_TOKENS, 512),
       llmTemperature: number(env.LLM_TEMPERATURE, 0.55),
+      llmToolMode: env.LLM_TOOL_MODE ?? "auto",
+      maxToolCalls: Math.min(integer(env.MAX_TOOL_CALLS, 3), 8),
+      remoraDmEnabled: boolean(env.REMORA_DM_ENABLED, false),
+      remoraReadBanks: splitCsv(env.REMORA_READ_BANKS),
+      remoraSelfApiKey: env.REMORA_SELF_API_KEY?.trim() ?? "",
+      remoraObservationStartId: env.REMORA_OBSERVATION_START_ID?.trim() ?? "",
       botOwnerUserIds: new Set(splitCsv(env.BOT_OWNER_USER_IDS)),
       debugLogging: boolean(env.DEBUG_LOGGING, false),
       llmTraceLogging: boolean(env.LLM_TRACE_LOGGING, false),
@@ -118,6 +176,12 @@ export function loadConfigEffect(env: NodeJS.ProcessEnv = process.env) {
         env.CLASSIFIER_CONTEXT_MESSAGE_LIMIT,
         12,
       ),
+      classifierBaseUrl: trimTrailingSlash(
+        env.CLASSIFIER_BASE_URL ?? "http://127.0.0.1:18792/v1",
+      ),
+      classifierApiKey: env.CLASSIFIER_API_KEY ?? "",
+      classifierModel: env.CLASSIFIER_MODEL ?? "english",
+      classifierTimeoutMs: integer(env.CLASSIFIER_TIMEOUT_MS, 10_000),
     }),
   );
 }
@@ -128,10 +192,11 @@ function required(env: NodeJS.ProcessEnv, key: string): string {
   return value;
 }
 
-function integer(value: string | undefined, fallback: number): number {
+/** Parses an integer env var; values below `min` (default 1) fall back. */
+function integer(value: string | undefined, fallback: number, min = 1): number {
   if (!value) return fallback;
   const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  if (!Number.isFinite(parsed) || parsed < min) return fallback;
   return parsed;
 }
 

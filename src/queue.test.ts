@@ -10,6 +10,54 @@ function deferred<T>() {
 }
 
 describe("GenerationQueue", () => {
+  // Proves memory mutations wait for every active reply and fence queued replies until completion.
+  it("runs exclusive work between active and queued generations, releasing on failure", async () => {
+    const queue = new GenerationQueue(2);
+    const firstGate = deferred<void>();
+    const secondGate = deferred<void>();
+    const mutationGate = deferred<void>();
+    const order: string[] = [];
+    const first = queue.add(
+      async () => {
+        order.push("first");
+        await firstGate.promise;
+      },
+      { bucketKey: "first" },
+    );
+    const second = queue.add(
+      async () => {
+        order.push("second");
+        await secondGate.promise;
+      },
+      { bucketKey: "second" },
+    );
+    const mutation = queue.add(
+      async () => {
+        order.push("mutation");
+        await mutationGate.promise;
+        throw new Error("permission changed");
+      },
+      { exclusive: true },
+    );
+    const failedMutation =
+      expect(mutation).rejects.toThrow("permission changed");
+    const queued = queue.add(async () => order.push("queued"), {
+      bucketKey: "third",
+    });
+    firstGate.resolve();
+    await first;
+    await Promise.resolve();
+    expect(order).toEqual(["first", "second"]);
+    secondGate.resolve();
+    await second;
+    await Promise.resolve();
+    expect(order).toEqual(["first", "second", "mutation"]);
+    mutationGate.resolve();
+    await failedMutation;
+    await queued;
+    expect(order).toEqual(["first", "second", "mutation", "queued"]);
+  });
+
   it("runs waiting manual jobs before passive and background jobs", async () => {
     const queue = new GenerationQueue(1);
     const gate = deferred<void>();

@@ -1,0 +1,177 @@
+# Direction
+Patch is a Discord persona and conversation partner with her own voice, taste,
+boundaries, and timing. Build the simplest useful conversation path before
+expanding the assistant features in the versioned specs.
+
+The voice LoRA carries how Patch talks, so the system prompt holds no style guide:
+only role, identity, output, safety, helpfulness, splitting, mentions and tools
+(about 1.1k Gemma tokens before tools). Long rule lists made her rigid.
+History uses the LoRA's training format with no explaining prompt: each human
+or bot message is a `user` turn `DisplayName [username]: text`, and Patch's
+messages are plain `assistant` turns. No IDs, timestamps, pronouns or reply markers.
+Her identity is name, pronouns and background only. Tastes and opinions grow
+through Remora from her conversations. Later, Tastebase gives her Mia's music
+taste: a read-only store, like Remora but never written by Patch, filled by
+importing Mia's last.fm history with an embedding per song.
+
+This repo is the whole harness: the Discord runtime (TypeScript), Protocord,
+Patch's tools, and the self-hosted services she runs on, Remora (memory and
+local inference) and Laya (reply timing). Inference is pluggable:
+- **Local (now):** Gemma 4 E4B with the voice and atomiser LoRAs on Remora; memory
+  reaches the model through its context, and her voice runs at temperature 0.7.
+- **Cloud (later):** if Gemma's conversation isn't good enough, a much larger hosted
+  model with written instructions. Remora then does memory only: it still recalls,
+  atomises and saves, and Patch puts recalled memories into the model's text input
+  as `memory:` messages. The memory tools stay available either way.
+When Remora saves something from the current message, the model is told so
+(`memory: saved just now: …`) so it never saves the same thing again with a tool.
+Never compact or summarise conversations. History rolls forward in large jumps so
+the prompt prefix stays cacheable, and Remora recalls anything older or from other
+conversations. On cloud models, design for prompt caching: stable instructions and
+history first, per-turn `memory:` messages after the cached prefix, next to the
+current message.
+Remora keeps its own repo and Python core; Patch consumes its HTTP API.
+
+Protocord is the shared Discord action framework. Its canonical source is
+`mia-cx/protocord`, extracted from Prod with the core, settings, permissions,
+and AI scaffold. Patch consumes it as a pinned submodule at `vendor/protocord`
+through pnpm workspace dependencies. Publishing packages is deferred.
+
+Patch actions use Protocord's shared validation, authorization and trigger lifecycle.
+A casual reply of up to four short lines, with no markdown structure, sends one Discord message per line, matching how the voice adapter learned bursts. Other text splits at `<|message_split|>` outside code; legacy `<split />` remains accepted. Lists, quotes, headings and code keep their newlines. The persona prompt is written in Patch's own lowercase register. An optional `<reply />` replies to the message being answered.
+Patch mentions people as `@username`; the send path turns participants into pings and drops other IDs and roles.
+Reactions, own-message edits/deletion, threads, polls, stickers and fixed-text follow-ups are implemented.
+Every link Patch shows passes a link check before any chunk is sent, including text after actions. A confirmed 404 (HEAD confirmed by GET) or definite DNS absence withholds the draft and asks for at most two rewrites through the tool loop; dead or rejected appended sources are dropped. Auth, server and timeout results are inconclusive and send. Checks follow bounded redirects and never reach private networks. Rejected drafts never post.
+Follow-ups support one-off timestamps or cron with explicit IANA timezone, persisted next occurrences and bounded missed-tick coalescing.
+Ambiguous sends pause the schedule. Recurring delivery is synthetically qualified, without deployment or real scheduled messages.
+DDG search/fetch identifies Patch/Protocord; persistent scoped notes offer no code execution.
+All model inputs and outputs should be eligible for passive memory, preserving each source's origin.
+Live evidence transport uses Remora `9062f61`/`8e04001`; see [caller mapping](spec/all-stream-evidence.md).
+Raw human/web views and authenticated generated parents preserve exact origins and frozen ancestry.
+Transformed Discord displays depend on their raw parent. Principal-wide erasure fences purge caller plaintext.
+Mia approved the clean model-context boundary; rollover cannot repair an untracked reply chain.
+Preserve all old Discord/history records and bank data, without re-extraction or source renaming.
+Caller mechanics pass 360 tests; full-persona E4B qualification supports bounded recall/correction/erasure/isolation and fetched-page meaning.
+Immutable caller `209603b`/`51eb418` is live with the existing durable cutoffs and principal-wide context boundary.
+Assistant history stays literal; tagged web calls pass the actual E4B caller journey. The earlier E2B search-only failure remains recorded in the [diagnosis](spec/quotes-and-web-diagnosis.md).
+A turn allows up to `MAX_TOOL_CALLS` (6) calls in its own `LLM_TOOL_CONTEXT_TOKENS` budget; running out asks for an answer instead of failing. Games remain deferred. See [v2](spec/v2.md).
+
+Patch runs in the owner DM and the listed channels of guild `1559060271404945512`.
+Memory is layered. A server message is written to its channel, the speaker's user bank and, only when the
+channel is public, the server bank. Public means the server's member role (default @everyone, set by admins
+with `/member-role`) can view it; private threads never are. Channels read channel + server banks; DMs read
+the speaker's user bank, so DM facts never surface in public. Forgetting a source erases every copy.
+
+Patch's Remora client supports the approved DM and shared scope. Caller-owned history uses real
+user/assistant roles. Incoming turns keep their exact text after a
+`DisplayName [username]: ` prefix, which memory evidence treats as frame text.
+Remora's legacy `turn` mode still ends on the raw final user message.
+Stable source IDs and edit revisions survive generation retries. Read-bank
+selection never adds write destinations or grants.
+Runtime capabilities bound context/output; receipts/cache reuse are validated. Classifier/activity calls have no memory access.
+Laya runs beside Gemma on the same GPU. A typed decision prompt reaches 6/8 archived cases; passive gating stays disabled. See [classifier](spec/laya-classifier.md).
+Evidence-aware formatting observes its real dependency with an empty recall allowlist.
+The shared contract and synthetic full-persona request are in `spec/fixtures`.
+Initial HF/native TypeScript smokes establish durable retries and 7,310-token SYSTEM reuse,
+not whole-history continuity. Native CPU qualification is limited to its exact BF16 assets;
+see the released guides at `865ade5`. It does not establish GPU or broad HF parity.
+The HF trial uses separate SQLite settings and skips automatic global registration.
+Attributed chat roles pass both original failed follow-ups cold and cached, preserving receipts and bank rows.
+Keep assistant dialogue literal. XML wrappers leak into output; cumulative
+metadata footers obscure recent dialogue in Gemma's 512-token local attention.
+llama.cpp qualification does not gate this HF trial.
+Mia approved evidence formation, replacing narrow passive writer/dreaming with attributed quotations on the same HF API.
+The scoped trial is online with tagged tools (three calls per turn); general semantic concept formation/dreaming remains open.
+Startup capabilities and Discord READY pass with the original persona and source identities.
+Earlier ownership leaks led to preserving source authorship separately from fact subjects.
+Patch supports the optional `speaker: {bank, id}` attribution field and optional
+speaker-binding capability from contract `193e295`. Writable turns infer identity
+from their existing source tuple. Capabilities disclose optional `memory_delivery`.
+The opt-in HF `native-cache` mode delivers recall through ordinary token/KV input;
+the service default remains detached. Remora `ba87a90` adds an opt-in server-only
+legacy-source projection for verified primary-human facts. A copied-bank read-only
+TypeScript diagnostic on the source-projected profile now recalls the direct name,
+attributes ownership to the human and denies assistant ownership. Repeated replies
+agree, all eight calls reuse 7,310 SYSTEM tokens, and both bank copies and policies
+remain unchanged. Reviewed source `ba87a90` and final guide `242fae2` are delivered;
+R5/R6 are closed, with 732 parent CPU tests passing and three native-asset skips.
+The validated flags are `--memory-delivery native-cache --entity-identity --legacy-source-projection`;
+the profile is `gemma-reference-12288-native-cache-source-projected`.
+It remains opt-in; detached is the default and llama.cpp entity support is unqualified.
+A captured 2026-10-17 intrusion is causally tied to irrelevant Remora recall:
+the reconstructed persona and 22 history messages contain no dog name, yet cold
+and warm recall reproduce the off-topic dog reply. An empty fact allowlist and
+bare Gemma both produce a relevant follow-up; restoring recall restores the
+failure. All bank rows and policy bytes are unchanged.
+The turn relevance fix adds an optional turn-start gate using reviewed runtime
+`d0b8b52` and release docs `70ba7c9`. Turn relevance remains enabled in the active
+profile on `18787`:
+`gemma-reference-12288-native-cache-source-projected-turn-relevance-all-stream-evidence`.
+Read the [turn relevance guide](https://github.com/mia-cx/remora/blob/70ba7c9c8a4a9c0cf7bef12b6dde97ebe271c000/docs/api/turn-relevance.md)
+for the mechanism and launch artifact checks. Raw partial-reply refresh is
+unchanged. The 27 behavioral checks, one-shot fresh64 gates, public HTTP checks
+and eight actual TypeScript calls pass; the captured music reply stays relevant,
+name and human ownership remain correct, and the assistant denies owning the dog.
+All eight TS calls reuse 7,310 SYSTEM tokens with `writes:null`; bank rows,
+cache files and policies are preserved. The release passed startup and Discord
+READY before the offline hold. Caller, persona, source tuple and history stay unchanged. Names
+remain separately gated. Coordinate any GPU window before changing the shared
+model lease. No LoRA.
+Mia's approved Unsloth NF4 E4B switch is live as `gemma-4-e4b-it-unsloth-bnb-4bit`.
+The 18-completion full-persona journey passes bounded gates with Laya resident. Startup caps/Discord READY pass; only the caller model aliases change alongside reviewed `209603b`. Classifier gates remain off.
+Memory inspection and forgetting belong to Protocord slash commands backed by
+deterministic Remora management endpoints. Users control their personal DM bank;
+shared channel/server banks follow Discord access and management permissions.
+Explicit remember/forget tools preserve human evidence, exact authorized IDs and confirmed receipts.
+Their separate Remora save API is implemented but undeployed; see [explicit controls](spec/explicit-memory-tools.md).
+Show actual authorized records and storage receipts. Explicit forgetting must
+invalidate memory caches and affected caller history; a model reply is not proof
+of deletion. Keep Remora's API generic and require separate deletion grants.
+The `/memory` fact/evidence controls are published; the other five global command objects are preserved.
+Management builds on runtime `4e95553`, contract `f00a364` ([guide](https://github.com/mia-cx/remora/blob/54f7bd6/docs/api/memory-management.md)).
+Active-recall client `87760e8` is installed; `memory_search` stays hidden until Remora advertises support and four valid limits.
+Canonical facts use explicit third-person statements bound to generic stable
+entity references, keeping fact subjects separate
+from source authors and preserving raw evidence and receipts. Names are optional
+caller-supplied labels; Patch may resolve them through its Discord adapter or
+Protocord. Core extraction, storage and recall must work without any harness or
+platform SDK. Patch accepts the [entity identity semantics](https://github.com/mia-cx/remora/blob/e5670f158ede3a2781dc5f18e9fb2ddbde2484b2/docs/api/entity-identity-proposal.md):
+the existing tuple identifies the local human; assistant identity is separate;
+shared links are durable actor-scoped associations. Current labels are request-local.
+Next, harness-supplied names should be retained as attributed details of the stable
+actor/entity and available during recall, including after context resets. Patch
+resolves names; Remora owns the generic association and its authorization. Renames
+preserve identity, and equal names never merge people. Caller review accepts the
+additive `identity.names` draft: separately negotiated support,
+source-bound harness facts, frozen retries and a separate write acknowledgement.
+Forgetting redacts name evidence while retaining retry digests; moving a local
+actor to a shared entity creates a new name fact without rebinding old evidence.
+The name contract is promoted at `6b5e18c`. Patch's low-level transport checks the
+separate name capability and all six limits, preserves exact declarations, and
+requires the sibling acknowledgement even if the model writer fails. Remora's
+isolated name backend `2f64afd` is CPU-reviewed: 806 tests pass with three native
+asset skips. Its [name guide](https://github.com/mia-cx/remora/blob/b2e8b8cf9cb4aabd7e11e2e1c687ae1c1046bc63/docs/api/harness-names.md)
+records the implementation; separate model evidence is still required before
+enabling the DM name mapping. The builder keeps its original tuple without name
+observations. The client passes 145 tests plus typecheck and build smoke.
+Wire review is closed at the [additive identity draft](https://github.com/mia-cx/remora/blob/ea060f25b03e6ad82cede9db6514a805a1e1ecf1/docs/api/entity-identity-wire-draft.json).
+The canonical contract snapshot is `6b5e18c`. Low-level client identity transport
+requires enabled support and all four valid advertised limits, then enforces those
+limits without rewriting IDs or labels. The DM builder retains its original source
+tuple. Stored facts and receipts remain unchanged. Remora serves the approved
+profile on `18787`; coordinate any model or service restart while the trial runs.
+The measured synthetic Patch request already uses 8,770 rendered Gemma tokens
+before Remora framing/output, so an 8,192-token profile is insufficient.
+
+Chat context grows from a persistent per-channel starting boundary until it
+reaches the token budget, then jumps forward to a recent boundary with room to
+grow again. Keep prompt prefixes stable for llama.cpp's KV cache. Evaluate
+Remora's recall across these resets before deciding whether compaction is
+needed; automatic summaries are deferred.
+Owner-only `/context reset` waits for an active reply to finish, then confirms
+success. The next new human arrival establishes an empty conversation's starting
+boundary, even without a reply. Pending resets survive restarts; older queued
+turns, edits and reply ancestors cannot restore history. Saved Remora memories
+remain intact. The implementation is verified, and `/context reset` is published
+globally for the development bot's DM use. Other commands were preserved; scoped
+trial startup continues to skip automatic registration.

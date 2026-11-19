@@ -1,4 +1,5 @@
-import type { LlmMessage } from "../llm/client.js";
+import type { ConversationMessage } from "../conversation/types.js";
+import { getBotIdentity } from "../identity.js";
 import { readPromptFile } from "./files.js";
 
 export type ClassifierPromptContext = {
@@ -22,45 +23,66 @@ export type ClassifierPromptContext = {
   };
 };
 
-const COMMON_CLASSIFIER_PREFIX_PROMPT_FILES = [
-  "system/01-role.md",
-  "system/02-identity.md",
-  "system/03-participant-relations.md",
-  "system/04-transcript.md",
-];
-
-const COMMON_CLASSIFIER_SUFFIX_PROMPT_FILES = [
-  "system/09-tone.md",
-  "system/10-humour.md",
-  "system/11-slang-policy.md",
-  "webslang/phrases.md",
-  "20-classifier.md",
-];
-
-const CLASSIFIER_MODE_PROMPT_FILES = {
-  dm: "system/05-transcript-dm.md",
-  guild_channel: "system/05-transcript-global.md",
-  guild_thread: "system/05-transcript-thread.md",
-} satisfies Record<ClassifierPromptContext["location"], string>;
-
-export function buildClassifierMessages(
-  transcript: string,
+/** Keep Laya's decision instructions separate from conversation data and resolve reply authors without guessing addressees. */
+export function buildClassifierQuestion(
+  messages: ConversationMessage[],
   context: ClassifierPromptContext,
-): LlmMessage[] {
-  return [
-    {
-      role: "system",
-      content: [
-        ...COMMON_CLASSIFIER_PREFIX_PROMPT_FILES.map(readPromptFile),
-        readPromptFile(CLASSIFIER_MODE_PROMPT_FILES[context.location]),
-        ...COMMON_CLASSIFIER_SUFFIX_PROMPT_FILES.map(readPromptFile),
-      ].join("\n\n"),
+) {
+  const identity = getBotIdentity();
+  const format = (message: ConversationMessage) => {
+    const parent = messages.find(
+      (candidate) => candidate.id === message.replyTo?.messageId,
+    );
+    const name = (actor: ConversationMessage) =>
+      messages.some(
+        (other) =>
+          other.authorName === actor.authorName &&
+          other.authorId !== actor.authorId,
+      )
+        ? `${actor.authorName} [${actor.authorId}]`
+        : actor.authorName;
+    const role =
+      message.authorId === context.botUserId
+        ? `${identity.name}, the bot`
+        : message.authorIsBot
+          ? "another bot"
+          : "human";
+    const reply = message.replyTo
+      ? ` replying to ${parent ? name(parent) : `unknown message ${message.replyTo.messageId}`}`
+      : "";
+    const attachments = message.attachments.length
+      ? `\nAttachments: ${message.attachments.map((item) => item.filename).join(", ")}`
+      : "";
+    return `${name(message)} (${role})${reply}: ${message.content}${attachments}`;
+  };
+  const latest = messages.find(
+    (message) => message.id === context.latestMessage.id,
+  );
+  if (!latest)
+    throw new Error("Classifier context is missing the current message");
+  const history = messages
+    .filter((message) => message.id !== latest.id)
+    .map(format)
+    .join("\n");
+  const otherAliases = identity.aliases.filter(
+    (alias) => alias.toLowerCase() !== identity.name.toLowerCase(),
+  );
+  const aliases = otherAliases.length
+    ? ` Aliases: ${otherAliases.join(", ")}.`
+    : "";
+  return {
+    state: `Bot being considered: ${identity.name}. Pronouns: ${identity.pronouns}.${aliases}\nLocation: ${context.location}.\nRecent conversation, oldest first:\n${history}\n\nLATEST MESSAGE TO CLASSIFY:\n${format(latest)}\n\nShould ${identity.name} reply to this latest message?`,
+    questions: {
+      response: {
+        type: "choice" as const,
+        instructions: readPromptFile("20-classifier.md"),
+        criteria: {
+          respond:
+            "The speaker addresses the bot, follows up with the bot, requests confirmation, corrects the bot, or invites a useful or playful comment.",
+          "dont respond":
+            "The speaker addresses another human, describes the bot to someone else, gives an ambient acknowledgement, leaves an unfinished thought, or requests silence.",
+        },
+      },
     },
-    {
-      role: "user",
-      content: readPromptFile("21-classifier-user.md")
-        .replace("{{context}}", JSON.stringify(context, null, 2))
-        .replace("{{transcript}}", transcript),
-    },
-  ];
+  };
 }

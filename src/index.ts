@@ -2,10 +2,12 @@ import "dotenv/config";
 import {
   Client,
   Events,
+  GatewayIntentBits,
   type Message,
   type PartialMessage,
   type ThreadChannel,
 } from "discord.js";
+import { registerDiscordCommands } from "protocord";
 import { registerDefaultActions } from "./actions/defaults.js";
 import { actionRegistry } from "./actions/registry.js";
 import { classifyShouldRespond } from "./classifier/response-classifier.js";
@@ -13,24 +15,29 @@ import { loadConfig } from "./config.js";
 import {
   limitContextMessages,
   reconstructConversationContext,
-  trimConversationContext,
 } from "./conversation/context.js";
+import { ConversationContextStore } from "./conversation/store.js";
 import type { ConversationMessage } from "./conversation/types.js";
 import { dispatchInteraction } from "./discord/actions/dispatch.js";
-import { registerDiscordActionTriggers } from "./discord/actions/register.js";
 import { startActivityLoop } from "./discord/activity.js";
 import {
   DiscordJsAdapter,
   discordClientOptions,
 } from "./discord/discord-js-adapter.js";
 import { DiscordPronounProvider } from "./discord/pronouns.js";
+import { allowsConversation, isScopedTrial } from "./discord/scope.js";
 import { getBotIdentity } from "./identity.js";
 import { LlmClient } from "./llm/client.js";
 import { ModelCatalog } from "./llm/model-catalog.js";
 import { createLogger } from "./logger.js";
+import { RemoraMemoryClient } from "./memory/client.js";
+import { buildResponseContextBudget } from "./prompts/response.js";
 import { GenerationQueue } from "./queue.js";
 import { respond } from "./response/responder.js";
 import { SettingsStore } from "./settings/store.js";
+import { startFollowups } from "./tools/followups.js";
+import { HarnessStore } from "./tools/store.js";
+import { WebClient } from "./tools/web.js";
 
 const MENTION_CACHE_LIMIT = 5_000;
 
@@ -38,11 +45,62 @@ const mentionStateByMessageId = new Map<string, boolean>();
 const config = loadConfig();
 const identity = getBotIdentity();
 const logger = createLogger(config.debugLogging || config.llmTraceLogging);
-const client = new Client(discordClientOptions);
+const client = new Client(
+  config.discordTrialDmChannelId && !config.discordTrialGuild
+    ? {
+        ...discordClientOptions,
+        intents: [
+          GatewayIntentBits.DirectMessages,
+          GatewayIntentBits.MessageContent,
+        ],
+      }
+    : discordClientOptions,
+);
 const settings = new SettingsStore(config.settingsDbPath, {
   llmModel: config.llmModel,
 });
+const contextStore = new ConversationContextStore(config.settingsDbPath);
 const llm = new LlmClient(config, settings);
+const memory = new RemoraMemoryClient(config);
+// Patch's self bank has its own token: conversations can only read it.
+const selfMemory = config.remoraSelfApiKey
+  ? new RemoraMemoryClient({ ...config, llmApiKey: config.remoraSelfApiKey })
+  : undefined;
+if (config.remoraDmEnabled || config.discordTrialGuild) {
+  const capabilities = await llm.initializeRemora();
+  if (llm.observationLimits && !config.remoraObservationStartId)
+    throw new Error(
+      "Evidence formation requires an explicit coordinated REMORA_OBSERVATION_START_ID before Discord connects",
+    );
+  if (llm.observationLimits && !llm.supportsSourceReferences)
+    throw new Error(
+      "Patch evidence mapping requires completed generated source references",
+    );
+  await memory.initialize(capabilities);
+  if (config.discordTrialDmChannelId)
+    contextStore.recordMemoryContext(config.discordTrialDmChannelId);
+  for (const channelId of config.discordTrialGuild?.channelIds ?? [])
+    contextStore.recordMemoryContext(channelId);
+  const budget = buildResponseContextBudget(
+    config,
+    config.discordTrialGuild ? "global" : "dm",
+  );
+  if (
+    budget.promptTokens + (budget.responseTokens ?? 0) >=
+    budget.contextTokens
+  )
+    throw new Error(
+      "Remora context cannot fit Patch's persona and output allowance",
+    );
+  logger.info(
+    {
+      capabilities,
+      contextTokens: config.llmContextTokens,
+      maxTokens: config.llmMaxTokens,
+    },
+    "Remora memory enabled",
+  );
+}
 const modelCatalog = new ModelCatalog(llm, logger);
 const pronounProvider = new DiscordPronounProvider(
   config.discordToken,
@@ -54,28 +112,51 @@ const actionContext = {
   client,
   config,
   llm,
+  memory,
+  ...(selfMemory ? { selfMemory } : {}),
   logger,
   queue,
   modelCatalog,
   settings,
+  contextStore,
+  harness: {
+    store: new HarnessStore(config.settingsDbPath),
+    web: new WebClient(),
+  },
 };
+
+if (llm.observationLimits) {
+  const banks = [
+    ...(config.discordTrialDmChannelId && config.remoraDmEnabled
+      ? [`discord:dm:${config.discordTrialDmChannelId}`]
+      : []),
+    ...(config.discordTrialGuild?.channelIds ?? []).map(
+      (channelId) => `discord:channel:${channelId}`,
+    ),
+  ];
+  for (const bank of banks)
+    actionContext.harness.store.observationCutoff(
+      bank,
+      config.remoraObservationStartId ?? "",
+    );
+}
 
 registerDefaultActions(actionRegistry);
 
 client.once(Events.ClientReady, (readyClient) => {
+  startFollowups(actionContext);
   startActivityLoop({ client: readyClient, config, llm, logger, queue });
 
   void modelCatalog.refresh().catch((error) => {
     logger.warn({ error }, "failed to prewarm model catalog");
   });
 
-  void registerDiscordActionTriggers({
-    client: readyClient,
-    registry: actionRegistry,
-    logger,
-  }).catch((error) => {
-    logger.error({ error }, "failed to register action triggers");
-  });
+  // Scoped trials must not change the application's global Discord commands.
+  if (!isScopedTrial(config)) {
+    void registerDiscordCommands(readyClient, actionRegistry).catch((error) => {
+      logger.error({ error }, "failed to register action triggers");
+    });
+  }
 
   logger.info(
     {
@@ -84,12 +165,15 @@ client.once(Events.ClientReady, (readyClient) => {
       identityName: identity.name,
       llmModel: settings.getLlmModel(),
       settingsDbPath: config.settingsDbPath,
+      trialDmChannelId: config.discordTrialDmChannelId || undefined,
+      trialGuild: config.discordTrialGuild,
     },
     `${identity.name.toLowerCase()} online`,
   );
 });
 
 client.on(Events.MessageCreate, (message) => {
+  if (!allowsConversation(config, message)) return;
   void handleMessage(message).catch((error) => {
     logger.error(
       { error, messageId: message.id, channelId: message.channelId },
@@ -99,6 +183,7 @@ client.on(Events.MessageCreate, (message) => {
 });
 
 client.on(Events.MessageUpdate, (oldMessage, newMessage) => {
+  if (!allowsConversation(config, newMessage)) return;
   void handleMessageUpdate(oldMessage, newMessage).catch((error) => {
     logger.error(
       { error, messageId: newMessage.id, channelId: newMessage.channelId },
@@ -108,6 +193,19 @@ client.on(Events.MessageUpdate, (oldMessage, newMessage) => {
 });
 
 client.on(Events.InteractionCreate, (interaction) => {
+  if (
+    isScopedTrial(config) &&
+    !allowsConversation(config, {
+      channelId: interaction.channelId ?? "",
+      guildId: interaction.guildId,
+    }) &&
+    // Memory and self controls carry their own access checks and work anywhere.
+    !(
+      interaction.isChatInputCommand() &&
+      ["memory", "self"].includes(interaction.commandName)
+    )
+  )
+    return;
   void dispatchInteraction({
     interaction,
     context: actionContext,
@@ -131,6 +229,7 @@ async function handleMessage(message: Message): Promise<void> {
   const botUserId = client.user?.id;
   if (!botUserId) return;
   if (message.author.bot) return;
+  if (!contextStore.observeHumanMessage(message.channelId, message.id)) return;
 
   const mentionsBotUser = message.mentions.users.has(botUserId);
   rememberMentionState(message.id, mentionsBotUser);
@@ -166,6 +265,7 @@ async function handleMessage(message: Message): Promise<void> {
           llm,
           logger,
           pronounProvider,
+          contextStore,
           actionContext,
           actionRegistry,
         });
@@ -184,6 +284,7 @@ async function handleMessage(message: Message): Promise<void> {
   );
   await queue.add(
     async () => {
+      if (!contextStore.allowsMessage(message.channelId, message.id)) return;
       logger.debug(
         {
           messageId: message.id,
@@ -201,6 +302,7 @@ async function handleMessage(message: Message): Promise<void> {
         contextMessages,
         config.classifierContextMessageLimit,
       );
+      if (contextMessages.length === 0) return;
       if (classifierContextMessages.length !== contextMessages.length) {
         logger.debug(
           {
@@ -215,7 +317,7 @@ async function handleMessage(message: Message): Promise<void> {
       const decision = await classifyShouldRespond({
         message,
         botUserId,
-        llm,
+        config,
         logger,
         llmTraceLogging: config.llmTraceLogging,
         contextMessages: classifierContextMessages,
@@ -239,6 +341,7 @@ async function handleMessage(message: Message): Promise<void> {
         llm,
         logger,
         pronounProvider,
+        contextStore,
         contextMessages,
         classifierDecision: decision,
         silentFailure: true,
@@ -259,20 +362,26 @@ async function buildSharedContext(
   message: Message,
   botUserId: string,
 ): Promise<ConversationMessage[]> {
-  return trimConversationContext(
-    await reconstructConversationContext(
-      adapter,
-      message,
-      botUserId,
-      logger,
-      pronounProvider,
-      {
-        dmContextMessageLimit: config.dmContextMessageLimit,
-        threadContextMessageLimit: config.threadContextMessageLimit,
-        guildRecentMessageLimit: config.guildRecentMessageLimit,
-      },
-    ),
-    { contextTokens: config.llmContextTokens },
+  return reconstructConversationContext(
+    adapter,
+    message,
+    botUserId,
+    logger,
+    pronounProvider,
+    {
+      store: contextStore,
+      budget: buildResponseContextBudget(
+        config,
+        !message.inGuild()
+          ? "dm"
+          : message.channel.isThread()
+            ? "thread"
+            : "global",
+      ),
+      dmContextMessageLimit: config.dmContextMessageLimit,
+      threadContextMessageLimit: config.threadContextMessageLimit,
+      guildRecentMessageLimit: config.guildRecentMessageLimit,
+    },
   );
 }
 
@@ -326,6 +435,7 @@ async function handleMessageUpdate(
   const botUserId = client.user?.id;
   if (!botUserId) return;
 
+  if (!contextStore.allowsMessage(newMessage.channelId, newMessage.id)) return;
   const beforeMentionedBot =
     mentionStateByMessageId.get(oldMessage.id) ??
     mentionsBot(oldMessage, botUserId);
@@ -351,6 +461,7 @@ async function handleMessageUpdate(
         llm,
         logger,
         pronounProvider,
+        contextStore,
         actionContext,
         actionRegistry,
       }),
@@ -407,6 +518,7 @@ async function isReplyToBot(
 ): Promise<boolean> {
   const reference = message.reference;
   if (!reference?.messageId || !reference.channelId) return false;
+  if (reference.channelId !== message.channelId) return false;
 
   try {
     const parent = await adapter.fetchMessage({

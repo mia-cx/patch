@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { escapeTranscriptText } from "./escape.js";
+import { escapeJsonMessageSplit, escapeTranscriptText } from "./escape.js";
 import { RESERVED_TRANSCRIPT_TOKENS } from "./reserved-tokens.js";
 
 describe("escapeTranscriptText", () => {
@@ -20,9 +20,18 @@ describe("escapeTranscriptText", () => {
   });
 
   it("neutralizes output control tags in transcript text", () => {
-    expect(escapeTranscriptText("first <split /> second")).toBe(
-      "first <split_escaped /> second",
-    );
+    expect(
+      escapeTranscriptText("first <split /> second <|message_split|> third"),
+    ).toBe("first <split_escaped /> second <|message_split_escaped|> third");
+  });
+
+  // Proves untrusted JSON keeps its exact decoded value while the marker stops being one literal.
+  it("hides the message split marker inside JSON without changing its value", () => {
+    const value = { text: "a <|message_split|> b" };
+    const escaped = escapeJsonMessageSplit(JSON.stringify(value));
+
+    expect(escaped).not.toContain("<|message_split|>");
+    expect(JSON.parse(escaped)).toEqual(value);
   });
 
   it("neutralizes every reserved transcript token", () => {

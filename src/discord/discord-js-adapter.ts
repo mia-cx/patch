@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import {
   type Client,
   type Attachment as DiscordAttachment,
   GatewayIntentBits,
   type Message,
   type MessageCreateOptions,
+  MessageFlags,
   type MessageMentionOptions,
   type MessageReference,
   Partials,
@@ -27,6 +29,7 @@ export const discordClientOptions = {
   partials: [Partials.Channel, Partials.Message],
 };
 
+/** Sends Patch's messages with link embeds suppressed, as if every link were wrapped in `<>`. */
 export class DiscordJsAdapter implements DiscordAdapter {
   constructor(
     private readonly client: Client,
@@ -38,7 +41,12 @@ export class DiscordJsAdapter implements DiscordAdapter {
     if (!channel?.isTextBased())
       throw new Error(`Channel ${ref.channelId} is not text based`);
 
-    const message = await channel.messages.fetch(ref.messageId);
+    // Reply-chain entries must reflect edits/deletions just like fetched history.
+    const message = await channel.messages.fetch({
+      message: ref.messageId,
+      force: true,
+      cache: false,
+    });
     return toConversationMessage(message, this.botUserId);
   }
 
@@ -69,7 +77,10 @@ export class DiscordJsAdapter implements DiscordAdapter {
 
     const message = await channel.send({
       content,
+      flags: MessageFlags.SuppressEmbeds,
       allowedMentions: buildAllowedMentions(options.allowedMentionUsers),
+      nonce: randomUUID().replaceAll("-", "").slice(0, 25),
+      enforceNonce: true,
     });
     return toConversationMessage(message, this.botUserId);
   }
@@ -91,7 +102,10 @@ export class DiscordJsAdapter implements DiscordAdapter {
     const messageOptions: MessageCreateOptions = {
       content,
       reply: { messageReference: target.messageId, failIfNotExists: false },
+      flags: MessageFlags.SuppressEmbeds,
       allowedMentions: buildAllowedMentions(options.allowedMentionUsers),
+      nonce: randomUUID().replaceAll("-", "").slice(0, 25),
+      enforceNonce: true,
     };
 
     const message = await channel.send(messageOptions);
@@ -111,8 +125,10 @@ export function toConversationMessage(
       message.member?.displayName ??
       message.author.globalName ??
       message.author.username,
+    authorUsername: message.author.username,
     authorIsBot: message.author.bot,
     content: stripBotMention(message.content, botUserId).trim(),
+    source: { text: message.content, revision: message.editedTimestamp ?? 0 },
     timestamp: message.createdAt,
     mentionsBot: message.mentions.users.has(botUserId),
     attachments: [...message.attachments.values()].map(toAttachment),

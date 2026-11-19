@@ -1,9 +1,37 @@
+import { Schema } from "effect";
 import type { Config } from "../config.js";
+import { SELF_BANK } from "../conversation/remora.js";
 import type { ModelSettingProvider } from "../settings/store.js";
+import {
+  type CompletedGeneration,
+  type ObservationLimits,
+  ObservationLimitsSchema,
+  type ObservationSegment,
+  type ReferenceSegment,
+  validateObservationBatch,
+} from "./evidence.js";
+import {
+  type RemoraRequest,
+  type RemoraResponse,
+  parseRemoraCapabilities,
+  parseRemoraResponse,
+} from "./remora.js";
 
 export type LlmMessage = {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
+  /** Exact source segments for the caller's observation compiler; never sent as message fields. */
+  observationSources?: readonly ObservationSegment[];
+  observationReferences?: readonly ReferenceSegment[];
+  observationParents?: readonly CompletedGeneration[];
+  /** Unknown historical or derived content must never become independent framing. */
+  observationUnknown?: readonly { start: number; end: number }[];
+  tool_call_id?: string;
+  tool_calls?: Array<{
+    id: string;
+    type: "function";
+    function: { name: string; arguments: string };
+  }>;
 };
 
 export type LlmTool = {
@@ -37,7 +65,11 @@ export type LlmRequest = {
   enableThinking?: boolean;
   tools?: readonly LlmTool[];
   toolChoice?: LlmToolChoice;
+  remora?: RemoraRequest;
   signal?: AbortSignal;
+  onResponse?: (response: LlmResponse) => void;
+  /** Recheck causal inputs immediately before every real HTTP attempt, including fallbacks. */
+  beforeRequest?: () => void;
 };
 
 export type LlmResponse = {
@@ -46,14 +78,153 @@ export type LlmResponse = {
   finishReason?: string;
   toolCalls?: LlmToolCall[];
   timings?: unknown;
+  remora?: RemoraResponse;
   raw?: unknown;
 };
 
+type IdentityLimits = {
+  bindings: number;
+  labels: number;
+  idChars: number;
+  labelChars: number;
+};
+
+type HarnessNameLimits = { names: number; nameChars: number };
+
 export class LlmClient {
+  /** Native tools are disabled when a negotiated backend rejects them. */
+  supportsTools = true;
+  supportsSourceReferences = false;
+  private maxOutputTokens = Number.POSITIVE_INFINITY;
+  private identityLimits: IdentityLimits | undefined;
+  private harnessNameLimits: HarnessNameLimits | undefined;
+  private evidenceLimits: ObservationLimits | undefined;
+
+  /** Negotiated observation limits; absent on legacy or uninitialized endpoints. */
+  get observationLimits() {
+    return this.evidenceLimits;
+  }
+
   constructor(
     private readonly config: Config,
     private readonly settings?: ModelSettingProvider,
   ) {}
+
+  /** Checks capabilities and bounds shared config/output limits before Discord connects. */
+  async initializeRemora() {
+    this.identityLimits = undefined;
+    this.harnessNameLimits = undefined;
+    this.evidenceLimits = undefined;
+    this.supportsSourceReferences = false;
+    const response = await fetch(
+      `${this.config.llmBaseUrl}/remora/capabilities`,
+      {
+        headers: { Authorization: `Bearer ${this.config.llmApiKey}` },
+        signal: AbortSignal.timeout(this.config.llmTimeoutMs),
+      },
+    );
+    if (!response.ok)
+      throw new Error(
+        `Remora capabilities failed: ${response.status} ${await response.text()}`,
+      );
+    const capabilities = parseRemoraCapabilities(await response.json());
+    const { features, limits } = capabilities;
+    this.supportsTools = features.tools;
+    let identityLimits: IdentityLimits | undefined;
+    if (features.entity_identity) {
+      const {
+        max_identity_bindings: bindings,
+        max_identity_labels: labels,
+        max_identity_id_chars: idChars,
+        max_identity_label_chars: labelChars,
+      } = limits;
+      if (
+        bindings === undefined ||
+        labels === undefined ||
+        idChars === undefined ||
+        labelChars === undefined
+      )
+        throw new Error("Remora entity identity requires all four limits");
+      identityLimits = { bindings, labels, idChars, labelChars };
+    }
+    let harnessNameLimits: HarnessNameLimits | undefined;
+    if (features.harness_names) {
+      if (!identityLimits)
+        throw new Error("Remora harness names require entity identity support");
+      const { max_harness_names: names, max_harness_name_chars: nameChars } =
+        limits;
+      if (names === undefined || nameChars === undefined)
+        throw new Error("Remora harness names require both name limits");
+      harnessNameLimits = { names, nameChars };
+    }
+    if (
+      !features.memory ||
+      !features.automatic_writes ||
+      !features.source_revisions ||
+      !features.prefix_cache
+    )
+      throw new Error(
+        "Remora requires memory, automatic writes, source revisions, and prefix caching",
+      );
+    if (this.config.llmEnableThinking && !features.thinking)
+      throw new Error(
+        "Remora backend does not support LLM_ENABLE_THINKING=true",
+      );
+    if (this.config.llmTemperature !== 0 && !features.sampling)
+      throw new Error("This Remora backend requires LLM_TEMPERATURE=0");
+    if (this.config.activityUpdatesEnabled && !features.sampling)
+      throw new Error(
+        "This Remora backend requires ACTIVITY_UPDATES_ENABLED=false; activity requests use sampling",
+      );
+    // Mirrors remoraRequest: a DM reads user + legacy DM + configured + self banks,
+    // a guild channel reads channel + guild + self. Only the user bank is never configured.
+    const self = this.config.remoraSelfApiKey ? [SELF_BANK] : [];
+    const legacy = this.config.discordTrialDmChannelId
+      ? [`discord:dm:${this.config.discordTrialDmChannelId}`]
+      : [];
+    const bankCount = Math.max(
+      new Set([...legacy, ...this.config.remoraReadBanks, ...self]).size + 1,
+      this.config.discordTrialGuild ? 2 + self.length : 0,
+    );
+    if (
+      bankCount > limits.max_read_banks ||
+      (bankCount > 1 && !features.multi_bank)
+    )
+      throw new Error("REMORA_READ_BANKS exceeds backend bank capabilities");
+    this.config.llmContextTokens = Math.min(
+      this.config.llmContextTokens,
+      limits.context_tokens,
+    );
+    // Tool exchanges ride on top of the conversation budget inside one request.
+    this.config.llmToolContextTokens = Math.min(
+      this.config.llmToolContextTokens,
+      limits.context_tokens - this.config.llmContextTokens,
+    );
+    this.maxOutputTokens = limits.max_output_tokens;
+    this.config.llmMaxTokens = Math.min(
+      this.config.llmMaxTokens,
+      limits.max_output_tokens,
+    );
+    this.config.llmThinkingMaxTokens = Math.min(
+      this.config.llmThinkingMaxTokens,
+      limits.max_output_tokens,
+    );
+    this.identityLimits = identityLimits;
+    this.harnessNameLimits = harnessNameLimits;
+    if (features.all_stream_evidence) {
+      const {
+        max_observation_labels,
+        max_observation_label_chars,
+        ...evidence
+      } = Schema.decodeUnknownSync(ObservationLimitsSchema)(limits);
+      // Label limits mean label support only when the feature is advertised.
+      this.evidenceLimits = features.observation_labels
+        ? { ...evidence, max_observation_labels, max_observation_label_chars }
+        : evidence;
+    }
+    this.supportsSourceReferences = features.source_references === true;
+    return capabilities;
+  }
 
   async listModels(): Promise<string[]> {
     const response = await fetch(`${this.config.llmBaseUrl}/models`, {
@@ -74,20 +245,75 @@ export class LlmClient {
   }
 
   async complete(request: LlmRequest): Promise<LlmResponse> {
+    if (request.remora?.also_banks)
+      throw new Error("Remora layers travel inside the observation batch");
+    if (
+      this.evidenceLimits &&
+      (request.remora?.turn ||
+        request.remora?.write_bank ||
+        request.remora?.identity)
+    )
+      throw new Error(
+        "Remora evidence profile rejects legacy writes and identity declarations",
+      );
+    if (request.remora?.observations) {
+      if (
+        request.remora.observations.references !== undefined &&
+        !this.supportsSourceReferences
+      )
+        throw new Error("Remora source references have not been negotiated");
+      if (!this.evidenceLimits)
+        throw new Error("Remora all-stream evidence has not been negotiated");
+      if (
+        request.remora.turn ||
+        request.remora.write_bank ||
+        request.remora.identity
+      )
+        throw new Error(
+          "Remora observations cannot accompany legacy writes or identity declarations",
+        );
+      validateObservationBatch(
+        request.remora.observations,
+        request.messages,
+        this.evidenceLimits,
+      );
+    }
+    if (
+      !this.evidenceLimits &&
+      [
+        ...(request.remora?.recall?.allow ?? []),
+        ...(request.remora?.recall?.deny ?? []),
+      ].some((ref) => ref.kind !== undefined)
+    )
+      throw new Error("Remora evidence recall has not been negotiated");
+    if (request.remora?.identity !== undefined)
+      this.validateIdentityLimits(request.remora.identity);
     const body: LlamaChatCompletionRequest = {
       model: this.settings?.getLlmModel() ?? this.config.llmModel,
-      messages: request.messages,
+      messages: request.messages.map(
+        ({
+          observationSources: _,
+          observationReferences: __,
+          observationUnknown: ___,
+          observationParents: ____,
+          ...message
+        }) => message,
+      ),
       chat_template_kwargs: {
         enable_thinking:
           request.enableThinking ?? this.config.llmEnableThinking,
       },
       cache_prompt: true,
       temperature: request.temperature ?? this.config.llmTemperature,
-      max_tokens: request.maxTokens ?? this.config.llmMaxTokens,
+      max_tokens: Math.min(
+        request.maxTokens ?? this.config.llmMaxTokens,
+        this.maxOutputTokens,
+      ),
     };
     if (request.tools && request.tools.length > 0)
       body.tools = [...request.tools];
     if (request.toolChoice) body.tool_choice = request.toolChoice;
+    if (request.remora) body.remora = request.remora;
 
     const requestInit: RequestInit = {
       method: "POST",
@@ -99,6 +325,7 @@ export class LlmClient {
     };
     if (request.signal) requestInit.signal = request.signal;
 
+    request.beforeRequest?.();
     const response = await fetch(
       `${this.config.llmBaseUrl}/chat/completions`,
       requestInit,
@@ -116,6 +343,12 @@ export class LlmClient {
     const content = choice?.message?.content ?? "";
 
     const result: LlmResponse = { content };
+    if (request.remora)
+      result.remora = parseRemoraResponse(
+        json.remora,
+        request.remora,
+        this.evidenceLimits !== undefined,
+      );
     if (choice?.message?.reasoning_content)
       result.reasoningContent = choice.message.reasoning_content;
     if (choice?.finish_reason) result.finishReason = choice.finish_reason;
@@ -123,7 +356,47 @@ export class LlmClient {
     if (toolCalls.length > 0) result.toolCalls = toolCalls;
     if (json.timings) result.timings = json.timings;
     result.raw = json;
+    request.onResponse?.(result);
     return result;
+  }
+
+  private validateIdentityLimits(
+    identity: NonNullable<RemoraRequest["identity"]>,
+  ) {
+    const limits = this.identityLimits;
+    if (!limits)
+      throw new Error("Remora entity identity has not been negotiated");
+    const { bindings = [], labels = [] } = identity;
+    if (bindings.length > limits.bindings || labels.length > limits.labels)
+      throw new Error(
+        "Remora identity exceeds advertised binding or label limits",
+      );
+
+    const ids = bindings.flatMap(({ actor, entity }) => [actor.id, entity]);
+    if (identity.assistant) ids.push(identity.assistant.id);
+    for (const label of labels) {
+      ids.push(label.entity !== undefined ? label.entity : label.actor.id);
+      if (Array.from(label.label).length > limits.labelChars)
+        throw new Error(
+          "Remora identity label exceeds advertised character limit",
+        );
+    }
+    if (identity.names !== undefined) {
+      const names = this.harnessNameLimits;
+      if (!names)
+        throw new Error("Remora harness names have not been negotiated");
+      if (identity.names.length < 1 || identity.names.length > names.names)
+        throw new Error("Remora harness names exceed advertised count limits");
+      for (const { actor, name } of identity.names) {
+        ids.push(actor.id);
+        if (!/\S/.test(name) || Array.from(name).length > names.nameChars)
+          throw new Error(
+            "Remora harness name must be nonblank and within advertised character limits",
+          );
+      }
+    }
+    if (ids.some((id) => Array.from(id).length > limits.idChars))
+      throw new Error("Remora identity ID exceeds advertised character limit");
   }
 }
 
@@ -140,9 +413,11 @@ type LlamaChatCompletionRequest = {
   max_tokens: number;
   tools?: LlmTool[] | undefined;
   tool_choice?: LlmToolChoice | undefined;
+  remora?: RemoraRequest;
 };
 
 type LlamaChatCompletionResponse = {
+  remora?: unknown;
   choices?: Array<{
     finish_reason?: string;
     message?: {

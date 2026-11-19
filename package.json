@@ -3,26 +3,37 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.13.1",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsup src/index.ts --format esm --target node22 --clean",
+    "postinstall": "pnpm run protocord:build",
+    "protocord:build": "pnpm --dir vendor/protocord build",
+    "protocord:check": "pnpm --dir vendor/protocord check",
+    "dev": "pnpm run protocord:build && tsx watch src/index.ts",
+    "build": "pnpm run protocord:build && tsup src/index.ts --format esm --target node24 --clean && tsx test/build-smoke.ts",
     "start": "node dist/index.js",
-    "check": "biome check . && tsc --noEmit",
+    "check": "pnpm run protocord:build && biome check . && tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "fix": "biome check --write .",
     "test": "vitest run",
+    "remora:smoke": "tsx test/remora-smoke.ts",
+    "remora:memory-smoke": "tsx test/remora-memory-smoke.ts",
     "test:watch": "vitest"
   },
   "dependencies": {
-    "discord.js": "^14.18.0",
+    "cron-parser": "5.10.4",
+    "discord.js": "14.27.0",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.45.2",
-    "effect": "beta",
-    "pino": "^9.6.0"
+    "effect": "4.0.0-beta.78",
+    "ipaddr.js": "^2.5.0",
+    "linkedom": "^0.18.13",
+    "pino": "^9.6.0",
+    "protocord": "workspace:*"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
+    "@huggingface/jinja": "0.5.11",
     "@types/node": "^22.13.10",
     "drizzle-kit": "^0.31.10",
     "tsup": "^8.4.0",
@@ -31,6 +42,6 @@
     "vitest": "^3.0.8"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=24 <25"
   }
 }

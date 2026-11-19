@@ -1,0 +1,732 @@
+import { Schema } from "effect";
+import type { Config } from "../config.js";
+import { parseRemoraCapabilities } from "../llm/remora.js";
+import {
+  type EvidenceMutation,
+  EvidenceMutationSchema,
+  type EvidenceSnapshot,
+  EvidenceSnapshotSchema,
+} from "./evidence.js";
+import {
+  type MemorySaveReceipt,
+  MemorySaveReceiptSchema,
+  type MemorySaveRequest,
+  MemorySaveRequestSchema,
+} from "./save.js";
+import {
+  type SelfStatementReceipt,
+  SelfStatementReceiptSchema,
+  type SelfStatementRequest,
+  SelfStatementRequestSchema,
+} from "./self.js";
+
+const SafeCount = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(0),
+  Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
+);
+const MemoryId = SafeCount.check(Schema.isGreaterThan(0));
+const StoredString = Schema.String.check(Schema.isMinLength(1));
+const Bank = Schema.String.check(
+  Schema.isPattern(/\S/u),
+  Schema.makeFilter((value) => Array.from(value).length <= 256),
+);
+const Revision = Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/u));
+const Cursor = Schema.String.check(
+  Schema.isPattern(/^[A-Za-z0-9_-]+$/u),
+  Schema.isMaxLength(1024),
+);
+const Actor = Schema.Struct({
+  bank: StoredString,
+  role: Schema.Literals(["human", "assistant"]),
+  id: StoredString,
+});
+const EntityRef = Schema.Union([
+  Schema.Struct({
+    principal: StoredString,
+    actor: Actor,
+    description: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({
+    principal: StoredString,
+    entity: StoredString,
+    description: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({
+    principal: StoredString,
+    unknown: StoredString,
+    description: Schema.optional(Schema.String),
+  }),
+]);
+const Memory = Schema.Struct({
+  id: MemoryId,
+  text: Schema.String,
+  kind: Schema.Literals(["fact", "tombstone"]),
+  source: Schema.Literals(["user", "confirmed", "self"]),
+  subjects: Schema.Record(
+    Schema.String.check(Schema.isPattern(/^@\{[0-9a-f]{64}\}$/u)),
+    EntityRef,
+  ),
+});
+const MemoryPage = Schema.Struct({
+  object: Schema.Literal("remora.memory.list"),
+  version: Schema.Literal(1),
+  bank: Bank,
+  revision: Revision,
+  data: Schema.Array(Memory).check(Schema.isMaxLength(100)),
+  next_cursor: Schema.NullOr(Cursor),
+});
+const SearchScore = Schema.Number.check(
+  Schema.isGreaterThanOrEqualTo(-1),
+  Schema.isLessThanOrEqualTo(1),
+);
+const SearchRequest = Schema.Struct({
+  read_banks: Schema.Array(Bank).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(8),
+    Schema.isUnique(),
+  ),
+  query: Schema.String.check(
+    Schema.isPattern(/\S/u),
+    Schema.makeFilter((value) => Array.from(value).length <= 2048),
+  ),
+  limit: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(50)),
+  ),
+  min_score: Schema.optional(SearchScore),
+});
+const SearchResponse = Schema.Struct({
+  object: Schema.Literal("remora.memory.search"),
+  version: Schema.Literal(1),
+  query: SearchRequest.fields.query,
+  read_banks: SearchRequest.fields.read_banks,
+  data: Schema.Array(
+    Schema.Struct({
+      ...Memory.fields,
+      bank: Bank,
+      kind: Schema.Literal("fact"),
+      source_actor: Schema.NullOr(EntityRef),
+      score: SearchScore,
+    }),
+  ).check(Schema.isMaxLength(50)),
+  revisions: Schema.Record(Bank, Revision),
+});
+const MutationReceipt = Schema.Struct({
+  object: Schema.Literal("remora.memory.mutation"),
+  version: Schema.Literal(1),
+  bank: Bank,
+  request_id: Bank,
+  operation: Schema.Literals(["forget", "clear"]),
+  replayed: Schema.Boolean,
+  deleted_ids: Schema.NullOr(
+    Schema.Array(MemoryId).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(100),
+      Schema.isUnique(),
+    ),
+  ),
+  deleted_count: SafeCount,
+  dependent_suppression: Schema.Struct({
+    bank: Bank,
+    visible_active_count: SafeCount,
+  }),
+  revision: Revision,
+  cache_invalidated: Schema.Literal(true),
+  reset_required: Schema.Literal(true),
+});
+export const MemoryMutationSchema = MutationReceipt;
+const ErrorBody = Schema.Struct({
+  error: Schema.Struct({ code: Schema.NullOr(Schema.String) }),
+});
+const decodePage = Schema.decodeUnknownSync(MemoryPage, {
+  onExcessProperty: "error",
+});
+const decodeReceipt = Schema.decodeUnknownSync(MutationReceipt, {
+  onExcessProperty: "error",
+});
+const decodeSearch = Schema.decodeUnknownSync(SearchResponse, {
+  onExcessProperty: "error",
+});
+
+export type MemoryRecord = typeof Memory.Type;
+export type MemorySnapshot = typeof MemoryPage.Type;
+export type MemoryMutation = typeof MutationReceipt.Type;
+export type MemorySearch = typeof SearchResponse.Type;
+export type MemorySearchRequest = typeof SearchRequest.Type;
+export type MemorySearchLimits = {
+  results: number;
+  banks: number;
+  queryChars: number;
+  queryTokens: number;
+};
+export type MemoryLimits = {
+  pageSize: number;
+  forgetIds: number;
+  requestIdChars: number;
+};
+type ClientConfig = Pick<Config, "llmBaseUrl" | "llmApiKey" | "llmTimeoutMs">;
+type MutationRequest = {
+  bank: string;
+  request_id: string;
+  expected_revision: string;
+};
+
+/** A safe code for command presentation; server messages never become Discord output. */
+export class MemoryManagementError extends Error {
+  constructor(
+    readonly code: string,
+    readonly status = 0,
+    options?: ErrorOptions,
+  ) {
+    super(`Remora memory request failed (${code})`, options);
+  }
+}
+
+/** Bank administration and explicit recall. Never calls chat completion or infers a grant. */
+export class RemoraMemoryClient {
+  private initialized = false;
+  private limits: MemoryLimits | undefined;
+  private searchLimits: MemorySearchLimits | undefined;
+  private evidence = false;
+  private saveChars: number | undefined;
+  private layers: number | undefined;
+  private statementChars: number | undefined;
+
+  /** Explicit writes require their own negotiated endpoint; automatic writes do not imply support. */
+  get supportsSave() {
+    return this.saveChars !== undefined;
+  }
+
+  /** Team statements about Patch herself have their own negotiated endpoint. */
+  get supportsSelfStatements() {
+    return this.statementChars !== undefined;
+  }
+
+  /** How many extra layers one save may name; 0 when the backend writes one bank only. */
+  get maxLayers() {
+    return this.layers ?? 0;
+  }
+
+  get supportsManagement() {
+    return this.limits !== undefined;
+  }
+
+  /** Separate evidence namespace; fact-only endpoints never imply evidence access. */
+  get supportsEvidence() {
+    return this.evidence;
+  }
+
+  constructor(private readonly config: ClientConfig) {}
+
+  /** Reuse the startup capability result, or negotiate lazily after Discord authorization. */
+  async initialize(capabilities?: ReturnType<typeof parseRemoraCapabilities>) {
+    this.initialized = false;
+    this.limits = undefined;
+    this.searchLimits = undefined;
+    this.evidence = false;
+    this.saveChars = undefined;
+    this.layers = undefined;
+    this.statementChars = undefined;
+    const caps =
+      capabilities ??
+      parseRemoraCapabilities(await this.request("/remora/capabilities"));
+    const {
+      max_memory_page_size,
+      max_memory_forget_ids,
+      max_memory_request_id_chars,
+    } = caps.limits;
+    if (caps.features.memory_management) {
+      if (
+        max_memory_page_size === undefined ||
+        max_memory_forget_ids === undefined ||
+        max_memory_request_id_chars === undefined
+      )
+        throw new Error("Remora memory management requires all three limits");
+      this.limits = {
+        pageSize: max_memory_page_size,
+        forgetIds: max_memory_forget_ids,
+        requestIdChars: max_memory_request_id_chars,
+      };
+    }
+    if (caps.features.memory_search) {
+      const {
+        max_search_results,
+        max_search_banks,
+        max_search_query_chars,
+        max_search_query_tokens,
+      } = caps.limits;
+      if (
+        max_search_results === undefined ||
+        max_search_banks === undefined ||
+        max_search_query_chars === undefined ||
+        max_search_query_tokens === undefined
+      )
+        throw new Error("Remora memory search requires all four limits");
+      this.searchLimits = {
+        results: max_search_results,
+        banks: max_search_banks,
+        queryChars: max_search_query_chars,
+        queryTokens: max_search_query_tokens,
+      };
+    }
+    this.initialized = true;
+    this.evidence = caps.features.all_stream_evidence === true;
+    if (caps.features.explicit_memory_save)
+      this.saveChars = caps.limits.max_explicit_memory_chars;
+    if (caps.features.also_banks) this.layers = caps.limits.max_also_banks;
+    if (caps.features.assistant_statements)
+      this.statementChars = caps.limits.max_assistant_statement_chars;
+    return caps;
+  }
+
+  /** Actual advertised bounds, with older endpoints treated as unavailable. */
+  async getLimits(): Promise<MemoryLimits> {
+    if (!this.initialized) await this.initialize();
+    if (!this.limits) throw new MemoryManagementError("unsupported_feature");
+    return this.limits;
+  }
+
+  /** Save the authenticated adapter's literal human message, never model-written fact text. */
+  async save(request: MemorySaveRequest): Promise<MemorySaveReceipt> {
+    if (!this.initialized) await this.initialize();
+    if (this.saveChars === undefined)
+      throw new MemoryManagementError("unsupported_feature");
+    const input = Schema.decodeUnknownSync(MemorySaveRequestSchema, {
+      onExcessProperty: "error",
+    })(request);
+    const layers = input.also_banks ?? [];
+    if (
+      Array.from(input.source.text).length > this.saveChars ||
+      !Number.isFinite(Date.parse(input.source.observed_at)) ||
+      layers.length > this.maxLayers ||
+      new Set([input.bank, ...layers]).size !== layers.length + 1
+    )
+      throw new MemoryManagementError("invalid_parameter");
+    const receipt = await this.evidenceRequest(
+      MemorySaveReceiptSchema,
+      "/remora/memories/save",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    );
+    if (
+      receipt.bank !== input.bank ||
+      receipt.request_id !== input.request_id ||
+      receipt.source.id !== input.source.id ||
+      receipt.source.revision !== input.source.revision ||
+      receipt.source.origin !== "human_input" ||
+      receipt.source.actor?.actor?.bank !== input.bank ||
+      receipt.source.actor.actor.id !== input.source.actor_id ||
+      receipt.source.actor.actor.role !== "human" ||
+      receipt.source.tool !== null ||
+      receipt.source.url !== null ||
+      (receipt.status === "saved"
+        ? JSON.stringify(receipt.active_ids) !==
+          JSON.stringify(receipt.saved_ids)
+        : receipt.active_ids.length !== 0) ||
+      JSON.stringify(receipt.copies?.map((copy) => copy.bank) ?? []) !==
+        JSON.stringify(layers)
+    )
+      throw new MemoryManagementError("invalid_response");
+    return receipt;
+  }
+
+  /** Save a team member's statement about Patch; Remora keeps only atoms that name her. */
+  async saveStatement(
+    request: SelfStatementRequest,
+  ): Promise<SelfStatementReceipt> {
+    if (!this.initialized) await this.initialize();
+    if (this.statementChars === undefined)
+      throw new MemoryManagementError("unsupported_feature");
+    const input = Schema.decodeUnknownSync(SelfStatementRequestSchema, {
+      onExcessProperty: "error",
+    })(request);
+    if (
+      Array.from(input.source.text).length > this.statementChars ||
+      !Number.isFinite(Date.parse(input.source.observed_at))
+    )
+      throw new MemoryManagementError("invalid_parameter");
+    const receipt = await this.evidenceRequest(
+      SelfStatementReceiptSchema,
+      "/remora/memories/assistant",
+      { method: "POST", body: JSON.stringify(input) },
+    );
+    if (
+      receipt.bank !== input.bank ||
+      receipt.request_id !== input.request_id ||
+      receipt.source.id !== input.source.id ||
+      receipt.source.origin !== "assistant_output" ||
+      receipt.source.actor?.entity !== input.source.entity_id
+    )
+      throw new MemoryManagementError("invalid_response");
+    return receipt;
+  }
+
+  /** Availability without an HTTP request while assembling the model's tool catalogue. */
+  get supportsSearch() {
+    return this.searchLimits !== undefined;
+  }
+
+  /** Search has its own feature gate and does not require management/deletion support. */
+  async getSearchLimits(): Promise<MemorySearchLimits> {
+    if (!this.initialized) await this.initialize();
+    if (!this.searchLimits)
+      throw new MemoryManagementError("unsupported_feature");
+    return this.searchLimits;
+  }
+
+  /** Read ranked, bank-qualified facts. Token limits and grants remain enforced by the server. */
+  async search(
+    request: MemorySearchRequest,
+    signal?: AbortSignal,
+  ): Promise<MemorySearch> {
+    const input = Schema.decodeUnknownSync(SearchRequest, {
+      onExcessProperty: "error",
+    })(request);
+    const limits = await this.getSearchLimits();
+    const limit = input.limit ?? Math.min(10, limits.results);
+    if (
+      input.read_banks.length > limits.banks ||
+      Array.from(input.query).length > limits.queryChars ||
+      limit > limits.results
+    )
+      throw new MemoryManagementError("invalid_parameter");
+    let result: MemorySearch;
+    try {
+      result = decodeSearch(
+        await this.request(
+          "/remora/memories/search",
+          { method: "POST", body: JSON.stringify({ ...input, limit }) },
+          signal,
+        ),
+      );
+    } catch (error) {
+      if (error instanceof MemoryManagementError) throw error;
+      // Decoder diagnostics can contain untrusted fact text; only expose a safe code.
+      throw new MemoryManagementError("invalid_response", 0, { cause: error });
+    }
+    const banks = [...input.read_banks].sort(compareBanks);
+    if (
+      result.query !== input.query ||
+      JSON.stringify(result.read_banks) !== JSON.stringify(banks) ||
+      JSON.stringify(Object.keys(result.revisions).sort(compareBanks)) !==
+        JSON.stringify(banks) ||
+      result.data.length > limit
+    )
+      throw new MemoryManagementError("invalid_response");
+    const seen = new Set<string>();
+    let previous: MemorySearch["data"][number] | undefined;
+    for (const hit of result.data) {
+      const key = JSON.stringify([hit.bank, hit.id]);
+      if (
+        !banks.includes(hit.bank) ||
+        seen.has(key) ||
+        hit.score < (input.min_score ?? -1) ||
+        (previous &&
+          (hit.score > previous.score ||
+            (hit.score === previous.score &&
+              (compareBanks(hit.bank, previous.bank) < 0 ||
+                (hit.bank === previous.bank && hit.id <= previous.id)))))
+      )
+        throw new MemoryManagementError("invalid_response");
+      seen.add(key);
+      previous = hit;
+    }
+    return result;
+  }
+
+  /** Read one authorized snapshot page; the revision can also guard a mutation. */
+  async list(
+    bank: string,
+    cursor?: string,
+    signal?: AbortSignal,
+  ): Promise<MemorySnapshot> {
+    const limits = await this.getLimits();
+    Schema.decodeUnknownSync(Bank)(bank);
+    if (cursor !== undefined) Schema.decodeUnknownSync(Cursor)(cursor);
+    const query = new URLSearchParams({ bank, limit: String(limits.pageSize) });
+    if (cursor !== undefined) query.set("cursor", cursor);
+    const page = decodePage(
+      await this.request(`/remora/memories?${query}`, {}, signal),
+    );
+    if (page.bank !== bank || page.data.length > limits.pageSize)
+      throw new MemoryManagementError("invalid_response");
+    let lastId = 0;
+    for (const memory of page.data) {
+      if (memory.id <= lastId)
+        throw new MemoryManagementError("invalid_response");
+      lastId = memory.id;
+    }
+    if (page.next_cursor && page.data.length === 0)
+      throw new MemoryManagementError("invalid_response");
+    return page;
+  }
+
+  /** Collect complete pages from one revision, bounded by the caller's attachment allowance and timeout. */
+  async listAll(bank: string, maxBytes: number): Promise<MemorySnapshot> {
+    const signal = AbortSignal.timeout(this.config.llmTimeoutMs);
+    const first = await this.list(bank, undefined, signal);
+    const data = [...first.data];
+    const cursors = new Set<string>();
+    let page = first;
+    let bytes = Buffer.byteLength(JSON.stringify(page.data));
+    while (true) {
+      if (bytes > maxBytes) throw new MemoryManagementError("export_too_large");
+      if (page.next_cursor === null)
+        return { ...first, data, next_cursor: null };
+      if (cursors.has(page.next_cursor))
+        throw new MemoryManagementError("invalid_response");
+      cursors.add(page.next_cursor);
+      page = await this.list(bank, page.next_cursor, signal);
+      if (page.revision !== first.revision)
+        throw new MemoryManagementError("cursor_stale", 409);
+      const lastId = data.at(-1)?.id ?? 0;
+      if (page.data.some((memory) => memory.id <= lastId))
+        throw new MemoryManagementError("invalid_response");
+      bytes += Buffer.byteLength(JSON.stringify(page.data));
+      data.push(...page.data);
+    }
+  }
+
+  /** Delete only explicit roots, preserving the exact request body for durable HTTP retries. */
+  async forget(
+    request: MutationRequest & { ids: readonly number[] },
+  ): Promise<MemoryMutation> {
+    const limits = await this.getLimits();
+    Schema.decodeUnknownSync(
+      Schema.Array(MemoryId).check(
+        Schema.isMinLength(1),
+        Schema.isMaxLength(limits.forgetIds),
+        Schema.isUnique(),
+      ),
+    )(request.ids);
+    return this.mutate(
+      "forget",
+      request,
+      [...request.ids].sort((a, b) => a - b),
+    );
+  }
+
+  /** Clear the explicitly selected bank; server read-all and forget-all grants remain mandatory. */
+  async clear(request: MutationRequest): Promise<MemoryMutation> {
+    return this.mutate("clear", request, null);
+  }
+
+  /** List exact attributed quotations, separately from canonical statements. */
+  async listEvidence(
+    bank: string,
+    cursor?: string,
+    signal?: AbortSignal,
+  ): Promise<EvidenceSnapshot> {
+    await this.getLimits();
+    if (!this.evidence) throw new MemoryManagementError("unsupported_feature");
+    Schema.decodeUnknownSync(Bank)(bank);
+    if (cursor !== undefined) Schema.decodeUnknownSync(Cursor)(cursor);
+    const query = new URLSearchParams({ bank, limit: "100" });
+    if (cursor !== undefined) query.set("cursor", cursor);
+    const page = await this.evidenceRequest(
+      EvidenceSnapshotSchema,
+      `/remora/evidence?${query}`,
+      {},
+      signal,
+    );
+    if (
+      page.bank !== bank ||
+      (page.next_cursor !== null && page.data.length === 0) ||
+      page.data.some(
+        (record, index) =>
+          record.bank !== bank ||
+          (index > 0 && record.id <= (page.data[index - 1]?.id ?? 0)),
+      )
+    )
+      throw new MemoryManagementError("invalid_response");
+    return page;
+  }
+
+  /** Collect one bounded evidence snapshot without returning partial pages after a revision change. */
+  async listAllEvidence(
+    bank: string,
+    maxBytes: number,
+  ): Promise<EvidenceSnapshot> {
+    const signal = AbortSignal.timeout(this.config.llmTimeoutMs);
+    const first = await this.listEvidence(bank, undefined, signal);
+    const data = [...first.data];
+    const cursors = new Set<string>();
+    let page = first;
+    let bytes = Buffer.byteLength(JSON.stringify(page.data));
+    while (true) {
+      if (bytes > maxBytes) throw new MemoryManagementError("export_too_large");
+      if (page.next_cursor === null)
+        return { ...first, data, next_cursor: null };
+      if (cursors.has(page.next_cursor))
+        throw new MemoryManagementError("invalid_response");
+      cursors.add(page.next_cursor);
+      page = await this.listEvidence(bank, page.next_cursor, signal);
+      if (page.revision !== first.revision)
+        throw new MemoryManagementError("cursor_stale", 409);
+      const lastId = data.at(-1)?.id ?? 0;
+      if (page.data.some((record) => record.id <= lastId))
+        throw new MemoryManagementError("invalid_response");
+      bytes += Buffer.byteLength(JSON.stringify(page.data));
+      data.push(...page.data);
+    }
+  }
+
+  /** Forget exact evidence roots. Numeric equality never selects a canonical fact. */
+  async forgetEvidence(
+    request: MutationRequest & { ids: readonly number[] },
+  ): Promise<EvidenceMutation> {
+    const { forgetIds } = await this.getLimits();
+    Schema.decodeUnknownSync(
+      Schema.Array(MemoryId).check(
+        Schema.isMinLength(1),
+        Schema.isMaxLength(forgetIds),
+        Schema.isUnique(),
+      ),
+    )(request.ids);
+    return this.mutateEvidence("forget", {
+      ...request,
+      ids: [...request.ids].sort((a, b) => a - b),
+    });
+  }
+
+  /** Resolve source erasure from a listed main/context anchor, never caller-supplied principal scope. */
+  async forgetEvidenceSource(
+    request: MutationRequest & { id: number; context_index?: number },
+  ): Promise<EvidenceMutation> {
+    Schema.decodeUnknownSync(MemoryId)(request.id);
+    if (request.context_index !== undefined)
+      Schema.decodeUnknownSync(SafeCount.check(Schema.isLessThanOrEqualTo(15)))(
+        request.context_index,
+      );
+    return this.mutateEvidence("forget_source", request);
+  }
+
+  private async mutateEvidence(
+    operation: "forget" | "forget_source",
+    request: MutationRequest & {
+      ids?: readonly number[];
+      id?: number;
+      context_index?: number;
+    },
+  ): Promise<EvidenceMutation> {
+    await this.getLimits();
+    if (!this.evidence) throw new MemoryManagementError("unsupported_feature");
+    Schema.decodeUnknownSync(Bank)(request.bank);
+    Schema.decodeUnknownSync(Bank)(request.request_id);
+    Schema.decodeUnknownSync(Revision)(request.expected_revision);
+    const body = {
+      bank: request.bank,
+      request_id: request.request_id,
+      expected_revision: request.expected_revision,
+      ...(operation === "forget"
+        ? { ids: request.ids }
+        : {
+            id: request.id,
+            ...(request.context_index !== undefined
+              ? { context_index: request.context_index }
+              : {}),
+          }),
+    };
+    const result = await this.evidenceRequest(
+      EvidenceMutationSchema,
+      `/remora/evidence/${operation === "forget" ? "forget" : "forget-source"}`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+    if (
+      result.bank !== request.bank ||
+      result.operation !== operation ||
+      result.request_id !== request.request_id ||
+      (operation === "forget" &&
+        JSON.stringify(result.deleted_ids) !== JSON.stringify(request.ids)) ||
+      (operation === "forget_source" &&
+        !result.deleted_ids.includes(request.id ?? 0))
+    )
+      throw new MemoryManagementError("invalid_response");
+    return result;
+  }
+
+  private async evidenceRequest<S extends Schema.Decoder<unknown>>(
+    schema: S,
+    path: string,
+    init: RequestInit,
+    signal?: AbortSignal,
+  ): Promise<S["Type"]> {
+    try {
+      return Schema.decodeUnknownSync(schema, { onExcessProperty: "error" })(
+        await this.request(path, init, signal),
+      );
+    } catch (error) {
+      if (error instanceof MemoryManagementError) throw error;
+      throw new MemoryManagementError("invalid_response", 0, { cause: error });
+    }
+  }
+
+  private async mutate(
+    operation: "forget" | "clear",
+    request: MutationRequest,
+    ids: number[] | null,
+  ): Promise<MemoryMutation> {
+    const limits = await this.getLimits();
+    Schema.decodeUnknownSync(Bank)(request.bank);
+    Schema.decodeUnknownSync(Bank)(request.request_id);
+    Schema.decodeUnknownSync(Revision)(request.expected_revision);
+    if (Array.from(request.request_id).length > limits.requestIdChars)
+      throw new MemoryManagementError("invalid_request_id");
+    const body = {
+      bank: request.bank,
+      request_id: request.request_id,
+      expected_revision: request.expected_revision,
+      ...(ids === null ? {} : { ids }),
+    };
+    const receipt = decodeReceipt(
+      await this.request(`/remora/memories/${operation}`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    );
+    if (
+      receipt.bank !== request.bank ||
+      receipt.request_id !== request.request_id ||
+      receipt.operation !== operation ||
+      receipt.dependent_suppression.bank !== request.bank ||
+      (ids === null
+        ? receipt.deleted_ids !== null ||
+          receipt.dependent_suppression.visible_active_count !== 0
+        : JSON.stringify(receipt.deleted_ids) !== JSON.stringify(ids) ||
+          receipt.deleted_count !== ids.length)
+    )
+      throw new MemoryManagementError("invalid_response");
+    return receipt;
+  }
+
+  private async request(
+    path: string,
+    init: RequestInit = {},
+    signal = AbortSignal.timeout(this.config.llmTimeoutMs),
+  ): Promise<unknown> {
+    const response = await fetch(`${this.config.llmBaseUrl}${path}`, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${this.config.llmApiKey}`,
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+      },
+      signal,
+      redirect: "error",
+    });
+    if (!response.ok) {
+      // Non-JSON gateway errors still get a safe code; their HTML/body is never shown or logged.
+      const body: unknown = await response.json().catch(() => null);
+      const code = Schema.is(ErrorBody)(body) ? body.error.code : null;
+      throw new MemoryManagementError(
+        code ?? "memory_management_error",
+        response.status,
+      );
+    }
+    return response.json();
+  }
+}
+
+function compareBanks(left: string, right: string) {
+  return Buffer.compare(Buffer.from(left), Buffer.from(right));
+}

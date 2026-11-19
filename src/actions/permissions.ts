@@ -1,9 +1,12 @@
 import {
-  type AutocompleteInteraction,
   type ChatInputCommandInteraction,
   PermissionsBitField,
 } from "discord.js";
+import type { Authorize } from "protocord";
 import type { Config } from "../config.js";
+import { memoryPermissionFailure } from "../memory/scope.js";
+import { isApplicationTeamMember } from "../memory/self.js";
+import type { ActionContext, ActionPermission } from "./context.js";
 
 type OwnerConfig = Pick<Config, "botOwnerUserIds">;
 
@@ -28,44 +31,65 @@ export function canDeleteBotMessages(
   );
 }
 
-export async function requireOwner(
-  interaction: ChatInputCommandInteraction,
-  config: OwnerConfig,
-): Promise<boolean> {
-  if (isOwner(interaction.user.id, config)) return true;
-  await interaction.reply({ content: "nope, owner-only.", ephemeral: true });
-  return false;
-}
-
-export async function requireOwnerAutocomplete(
-  interaction: AutocompleteInteraction,
-  config: OwnerConfig,
-): Promise<boolean> {
-  if (isOwner(interaction.user.id, config)) return true;
-  await interaction.respond([]);
-  return false;
-}
-
-export async function requireDeleteBotMessagesPermission(
-  interaction: ChatInputCommandInteraction,
-  config: OwnerConfig,
-): Promise<boolean> {
-  if (
+/** Apply Patch's owner and moderation policies during Protocord dispatch. */
+export const authorizeAction: Authorize<
+  ActionContext,
+  ActionPermission
+> = async (permission, invocation, context) => {
+  if (typeof permission !== "string") {
+    const interaction = invocation.rawEvent;
+    if (!isSlashInteraction(interaction))
+      return { authorized: false, reason: "use /memory to manage memories." };
+    const reason = memoryPermissionFailure(
+      permission.scope,
+      permission.operation,
+      interaction,
+    );
+    return reason ? { authorized: false, reason } : { authorized: true };
+  }
+  const userId = invocation.requester?.id;
+  if (permission === "owner") {
+    return userId && isOwner(userId, context.config)
+      ? { authorized: true }
+      : { authorized: false, reason: "nope, owner-only." };
+  }
+  const interaction = invocation.rawEvent;
+  if (permission === "team")
+    return userId &&
+      isSlashInteraction(interaction) &&
+      (await isApplicationTeamMember(interaction.client, userId))
+      ? { authorized: true }
+      : { authorized: false, reason: "nope, that's for Patch's team only." };
+  if (permission === "manage_server")
+    return isSlashInteraction(interaction) &&
+      interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)
+      ? { authorized: true }
+      : { authorized: false, reason: "nope, you need Manage Server here." };
+  const allowed =
+    userId &&
+    isSlashInteraction(interaction) &&
     canDeleteBotMessages(
       {
-        userId: interaction.user.id,
+        userId,
         guildId: interaction.guildId,
         memberPermissions: interaction.memberPermissions,
       },
-      config,
-    )
-  ) {
-    return true;
-  }
+      context.config,
+    );
+  return allowed
+    ? { authorized: true }
+    : { authorized: false, reason: "nope, you need Manage Messages here." };
+};
 
-  await interaction.reply({
-    content: "nope, you need Manage Messages here.",
-    ephemeral: true,
-  });
-  return false;
+/** Narrow a Discord event at the action/interaction seam. */
+export function isSlashInteraction(
+  event: unknown,
+): event is ChatInputCommandInteraction {
+  return (
+    event !== null &&
+    typeof event === "object" &&
+    "isChatInputCommand" in event &&
+    typeof event.isChatInputCommand === "function" &&
+    event.isChatInputCommand()
+  );
 }

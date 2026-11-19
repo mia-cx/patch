@@ -1,45 +1,61 @@
 import type { Message } from "discord.js";
 import {
   buildModelVisibleActions,
-  formatAvailableActionsPrompt,
+  formatCompactActionsPrompt,
   toLlmTools,
 } from "../actions/action-context.js";
-import type { ActionContext } from "../actions/context.js";
-import type { ActionRegistry } from "../actions/registry.js";
+import type { ActionContext, ActionRegistry } from "../actions/context.js";
 import type { ClassifierDecision } from "../classifier/response-classifier.js";
 import type { Config } from "../config.js";
 import {
   reconstructConversationContext,
+  rolloverConversationContext,
   summarizeContext,
-  trimConversationContext,
 } from "../conversation/context.js";
 import {
   escapeAttribute,
   escapeTranscriptText,
 } from "../conversation/escape.js";
 import {
+  ConversationObservations,
+  ObservationAttemptInvalidated,
+  observationNamespace,
+} from "../conversation/observations.js";
+import { buildRemoraRequest } from "../conversation/remora.js";
+import { MESSAGE_SPLIT } from "../conversation/reserved-tokens.js";
+import type { ConversationContextStore } from "../conversation/store.js";
+import {
   buildTranscript,
-  formatTranscript,
+  formatTranscriptMessages,
 } from "../conversation/transcript.js";
 import type { ConversationMessage } from "../conversation/types.js";
 import type { DiscordAdapter } from "../discord/adapter.js";
+import { repairMentions } from "../discord/mentions.js";
 import { stripUnicodeEmoji } from "../discord/no-emoji.js";
 import type { PronounProvider } from "../discord/pronouns.js";
-import {
-  needsSplitHintRepair,
-  splitDiscordResponse,
-} from "../discord/split.js";
+import { splitDiscordResponse } from "../discord/split.js";
 import type {
   LlmClient,
   LlmMessage,
   LlmResponse,
   LlmTool,
 } from "../llm/client.js";
+import type { CompletedGeneration } from "../llm/evidence.js";
+import type { RemoraRequest } from "../llm/remora.js";
 import type { Logger } from "../logger.js";
 import {
-  type ResponseTranscriptMode,
+  RESPONSE_TEMPLATE_TOKEN_MARGIN,
+  buildResponseContextBudget,
   buildResponseMessages,
+  buildResponseSystemPrompt,
 } from "../prompts/response.js";
+import {
+  OUTPUT_INSTRUCTIONS,
+  TAGGED_TOOL_INSTRUCTIONS,
+  WEB_TURN_INSTRUCTIONS,
+} from "../tools/output.js";
+import { runToolTurn } from "../tools/turn.js";
+import { findBrokenLinks, findBrokenReplyLinks } from "./reply-links.js";
 
 const FAILURE_MESSAGE =
   "sorry, brain fog. couldn't get my thoughts into a usable shape. try that again?";
@@ -47,6 +63,7 @@ const TYPING_WORDS_PER_MINUTE = 180;
 const AVERAGE_WORD_CHARS = 5;
 const MIN_FOLLOWUP_TYPING_DELAY_MS = 150;
 const MAX_FOLLOWUP_TYPING_DELAY_MS = 12_000;
+const MAX_LINK_REGENERATIONS = 2;
 
 export type RespondOptions = {
   adapter: DiscordAdapter;
@@ -55,12 +72,17 @@ export type RespondOptions = {
   config: Config;
   llm: LlmClient;
   logger: Logger;
+  contextStore: ConversationContextStore;
   pronounProvider?: PronounProvider | undefined;
   contextMessages?: ConversationMessage[] | undefined;
   classifierDecision?: ClassifierDecision | undefined;
   silentFailure?: boolean | undefined;
   actionContext?: ActionContext | undefined;
   actionRegistry?: ActionRegistry | undefined;
+  /** Host-owned scope mapping for isolated qualification; never accepted from model arguments. */
+  remoraScope?: (message: Message) => RemoraRequest | undefined;
+  /** Restrict execution while retaining the complete real tool catalog in the prompt. */
+  toolExecutionAllowlist?: ReadonlySet<string>;
 };
 
 export async function respond(options: RespondOptions): Promise<void> {
@@ -72,69 +94,150 @@ export async function respond(options: RespondOptions): Promise<void> {
     llm,
     logger,
     pronounProvider,
+    contextStore,
     contextMessages,
     classifierDecision,
     silentFailure,
     actionContext,
     actionRegistry,
   } = options;
+  if (!contextStore.allowsMessage(message.channelId, message.id)) return;
   const log = logger.child({
     messageId: message.id,
     channelId: message.channelId,
   });
   const typing = keepTyping(adapter, message.channelId, log);
+  let observationAttempt: ConversationObservations | undefined;
 
   try {
     log.debug(
       { silentFailure: Boolean(silentFailure) },
       "response generation started",
     );
-    const chain =
-      contextMessages ??
-      trimConversationContext(
-        await reconstructConversationContext(
+    const remora = options.remoraScope
+      ? options.remoraScope(message)
+      : buildRemoraRequest(
+          config,
+          message,
+          message.guildId
+            ? actionContext?.settings.getMemberRole(message.guildId)
+            : undefined,
+        );
+    let observations: ConversationObservations | undefined;
+    if (remora && llm.observationLimits) {
+      const store = actionContext?.harness?.store;
+      if (!store)
+        throw new Error(
+          "Evidence formation requires the durable harness store",
+        );
+      observations = new ConversationObservations({
+        store,
+        remora,
+        message,
+        botUserId,
+        startId: config.remoraObservationStartId ?? "",
+        limits: llm.observationLimits,
+        namespace: observationNamespace(config.llmBaseUrl, config.llmApiKey),
+      });
+    }
+    observationAttempt = observations;
+    const scopedActionContext = actionContext
+      ? {
+          ...actionContext,
+          readBanks: remora?.read_banks ?? [],
+          writeBank: remora?.write_bank,
+        }
+      : undefined;
+    const availableActions = await buildAvailableActions({
+      message,
+      actionContext: scopedActionContext,
+      actionRegistry,
+    });
+    const mode = config.llmToolMode ?? "auto";
+    if (mode === "native" && llm.supportsTools === false)
+      throw new Error("Backend does not support native tools");
+    const tagged =
+      mode === "tagged" || (mode === "auto" && llm.supportsTools === false);
+    const enabledActions = mode === "off" ? [] : availableActions;
+    const actionTools = toLlmTools(enabledActions);
+    const tools = tagged ? [] : actionTools;
+    const currentTurnInstructions =
+      tagged &&
+      ["web_search", "web_fetch"].every((name) =>
+        actionTools.some((tool) => tool.function.name === name),
+      )
+        ? WEB_TURN_INSTRUCTIONS
+        : "";
+    const availableActionsPrompt = [
+      OUTPUT_INSTRUCTIONS,
+      ...(tagged && actionTools.length ? [TAGGED_TOOL_INSTRUCTIONS] : []),
+      formatCompactActionsPrompt(enabledActions),
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    if (remora) contextStore.recordMemoryContext(message.channelId);
+    const budget = buildResponseContextBudget(
+      config,
+      availableActionsPrompt,
+      tools,
+      currentTurnInstructions,
+    );
+    const chain = contextMessages
+      ? rolloverConversationContext(contextMessages, budget)
+      : await reconstructConversationContext(
           adapter,
           message,
           botUserId,
           log,
           pronounProvider,
           {
+            store: contextStore,
+            budget,
             dmContextMessageLimit: config.dmContextMessageLimit,
             threadContextMessageLimit: config.threadContextMessageLimit,
             guildRecentMessageLimit: config.guildRecentMessageLimit,
           },
-        ),
-        { contextTokens: config.llmContextTokens },
-      );
-    const transcript = buildTranscript(chain, botUserId);
-    const transcriptText = withClassifierDecisionBlock(
-      formatTranscript(transcript),
-      classifierDecision,
-    );
-
-    if (config.debugLogging) {
-      log.debug({ transcript: transcriptText }, "built transcript");
+        );
+    // The classifier assembled history before tool discovery; apply the final budget too.
+    if (contextMessages && chain.length !== contextMessages.length) {
+      const start = chain[0]?.id;
+      const previous = contextStore.getStart(message.channelId);
+      if (start && (!previous || BigInt(start) > BigInt(previous)))
+        contextStore.setStart(message.channelId, start);
     }
-
-    const availableActions = buildAvailableActions({
-      message,
-      actionContext,
-      actionRegistry,
-    });
-    const availableActionsPrompt =
-      formatAvailableActionsPrompt(availableActions);
-    const tools = toLlmTools(availableActions);
+    if (chain.length === 0) return;
+    const transcript = buildTranscript(chain, botUserId);
+    // Remora's legacy source mode binds the raw final message, which cannot carry the speaker prefix.
+    const legacyTurn = observations ? undefined : remora?.turn;
     const promptMessages = buildResponseMessages(
-      transcriptText,
-      getResponseTranscriptMode(message),
+      formatTranscriptMessages(
+        legacyTurn
+          ? {
+              ...transcript,
+              blocks: transcript.blocks.filter(
+                (block) => block.id !== message.id,
+              ),
+            }
+          : transcript,
+        message.id,
+        observations ? (block) => observations.humanSource(block) : undefined,
+        observations ? (block) => observations.assistantBody(block) : undefined,
+        [
+          classifierDecision
+            ? formatClassifierDecision(classifierDecision)
+            : "",
+          currentTurnInstructions,
+        ].filter(Boolean),
+      ),
       availableActionsPrompt,
     );
+    if (legacyTurn)
+      promptMessages.push({ role: "user", content: legacyTurn.text });
 
     if (config.llmTraceLogging) {
       log.debug(
         {
           context: summarizeContext(chain),
-          transcript: transcriptText,
           availableActions,
           nativeTools: tools.map((tool) => tool.function.name),
           promptMessages,
@@ -145,69 +248,194 @@ export async function respond(options: RespondOptions): Promise<void> {
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.llmTimeoutMs);
+    const rejectedLinks = new Set<string>();
 
     try {
-      const generated = await generateResponse({
-        llm,
-        promptMessages,
+      const generated = await runToolTurn({
+        messages: promptMessages,
+        message,
+        ...(scopedActionContext ? { context: scopedActionContext } : {}),
+        ...(actionRegistry ? { registry: actionRegistry } : {}),
+        visibleMessageIds: new Set([
+          message.id,
+          ...chain
+            .filter((item) => item.channelId === message.channelId)
+            .map((item) => item.id),
+        ]),
+        ...ownMessageId(chain, message.channelId, botUserId),
+        allowedTools: new Set(
+          actionTools
+            .map((tool) => tool.function.name)
+            .filter(
+              (name) => options.toolExecutionAllowlist?.has(name) ?? true,
+            ),
+        ),
+        maxCalls: config.maxToolCalls ?? 3,
+        maxInputChars: Math.max(
+          0,
+          (budget.contextTokens +
+            config.llmToolContextTokens -
+            (budget.responseTokens ?? 0) -
+            RESPONSE_TEMPLATE_TOKEN_MARGIN) *
+            4,
+        ),
+        nativeTools: tools,
+        native: !tagged,
         signal: controller.signal,
-        enableThinking: config.llmEnableThinking,
-        thinkingMaxTokens: config.llmThinkingMaxTokens,
-        thinkingTimeoutMs: config.llmThinkingTimeoutMs,
-        tools,
+        maxDraftRetries: MAX_LINK_REGENERATIONS,
+        // Check the exact text Discord will show. A plausible URL is not a page:
+        // confirmed 404s and missing DNS names never reach Discord.
+        present: async ({ content, sources, generatedSource }) => {
+          // A casual multi-line burst is split per line when sent (`splitDiscordResponse`).
+          const repaired = {
+            content: stripUnicodeEmoji(content.trim()),
+            source: generatedSource,
+          };
+          observations?.assertCurrent();
+          const broken = await findBrokenReplyLinks(
+            repaired.content,
+            controller.signal,
+          );
+          if (broken.length) {
+            for (const { url } of broken) rejectedLinks.add(url);
+            log.debug(
+              { brokenLinkCount: broken.length },
+              "withholding reply with broken links",
+            );
+            return {
+              feedback: `The harness checked links in your unsent draft and found missing destinations: ${JSON.stringify(broken)}. The draft was not sent. Rewrite your reply to the original message: remove the broken links or use a source from the conversation or your tools. Do not guess replacement URLs.`,
+            };
+          }
+          // Sources the model did not write are appended by the harness; drop dead ones silently.
+          const appended = sources.filter(
+            ({ url }) =>
+              !repaired.content.includes(url) && !rejectedLinks.has(url),
+          );
+          const missing = new Set(
+            (
+              await findBrokenLinks(
+                appended.map(({ url }) => url),
+                controller.signal,
+              )
+            ).map(({ url }) => url),
+          );
+          return {
+            content: withSources(
+              repaired.content,
+              appended.filter(({ url }) => !missing.has(url)),
+            ),
+            sources,
+            generatedSource: repaired.source,
+          };
+        },
+        ...(observations
+          ? { assertCurrent: () => observations.assertCurrent() }
+          : {}),
+        generate: async (messages, continuation, remainingCalls) => {
+          // Keep the full persona. At exhaustion remove only the tool advertisement.
+          const requestMessages: LlmMessage[] = continuation
+            ? [
+                {
+                  role: "system",
+                  content: buildResponseSystemPrompt(
+                    remainingCalls
+                      ? availableActionsPrompt
+                      : OUTPUT_INSTRUCTIONS,
+                    true,
+                  ),
+                },
+                ...messages.slice(1),
+              ]
+            : messages;
+          const requestRemora = observations
+            ? observations.request(requestMessages)
+            : continuation && remora
+              ? readOnlyRemora(remora)
+              : remora && withoutLayers(remora);
+          const result = await generateResponse({
+            llm,
+            promptMessages: requestMessages,
+            signal: controller.signal,
+            enableThinking: config.llmEnableThinking,
+            thinkingMaxTokens: config.llmThinkingMaxTokens,
+            thinkingTimeoutMs: config.llmThinkingTimeoutMs,
+            tools: remainingCalls ? tools : [],
+            ...(observations
+              ? {
+                  onResponse: (response: LlmResponse) => {
+                    observations.capture(response, requestRemora?.observations);
+                  },
+                  beforeRequest: () => observations.assertCurrent(),
+                }
+              : {}),
+            ...(requestRemora ? { remora: requestRemora } : {}),
+          });
+          return result.response;
+        },
+        onResponse(response) {
+          if (!response.remora) return undefined;
+          const receipt = response.remora.writes;
+          if (receipt?.result.error) {
+            log.warn(
+              { remora: response.remora },
+              "Remora automatic write failed",
+            );
+          } else {
+            log.info({ remora: response.remora }, "Remora response received");
+          }
+          return observations?.capture(response);
+        },
       });
-      const { response } = generated;
-
-      if (response.toolCalls?.length) {
-        await executeToolCalls({
-          response,
-          message,
-          actionContext,
-          actionRegistry,
-          log,
+      if (!generated.content) return;
+      if ("memoryControl" in generated && generated.memoryControl) {
+        if (
+          generated.memoryEpoch !== actionContext?.harness?.store.privacyEpoch()
+        )
+          return;
+        await adapter.sendMessage(message.channelId, generated.content, {
+          allowedMentionUsers: [],
         });
         return;
       }
 
-      const content = await repairMissingSplitHints({
-        llm,
-        content: generated.content,
-        signal: controller.signal,
-        log,
-      });
-
       if (config.llmTraceLogging) {
         log.debug(
-          { rawResponse: response.raw, sanitizedContent: content },
+          { sanitizedContent: generated.content },
           "llm response trace",
         );
       } else {
         log.debug(
-          { finishReason: response.finishReason, timings: response.timings },
+          { sourceCount: generated.sources.length },
           "llm response complete",
         );
       }
 
+      const displayedParent = generated.generatedSource;
       await sendChunks(
         adapter,
         message,
-        content,
-        [...transcript.participantUserIds],
+        repairMentions(generated.content, transcript.participants),
+        transcript.participants.map(({ id }) => id),
         log,
+        generated.replyTo,
+        observations && displayedParent
+          ? (sent) => observations.associate(sent, displayedParent)
+          : undefined,
+        observations ? () => observations.assertCurrent() : undefined,
       );
     } finally {
       clearTimeout(timeout);
     }
   } catch (error) {
+    if (
+      error instanceof ObservationAttemptInvalidated ||
+      observationAttempt?.isCurrent() === false
+    )
+      return;
     log.error({ error }, "failed to generate response");
     if (silentFailure) return;
 
-    const failure = message.inGuild()
-      ? message.reply({
-          content: FAILURE_MESSAGE,
-          allowedMentions: { parse: [], repliedUser: false },
-        })
-      : adapter.sendMessage(message.channelId, FAILURE_MESSAGE);
+    const failure = adapter.sendMessage(message.channelId, FAILURE_MESSAGE);
 
     await failure.catch((replyError) => {
       log.error({ error: replyError }, "failed to send failure response");
@@ -225,125 +453,53 @@ function buildAvailableActions(options: {
   if (!options.actionContext || !options.actionRegistry) return [];
 
   return buildModelVisibleActions({
-    triggerMessage: options.message,
-    channelId: options.message.channelId,
-    guildId: options.message.guildId ?? undefined,
+    message: options.message,
     context: options.actionContext,
     registry: options.actionRegistry,
   });
 }
 
-async function repairMissingSplitHints(options: {
-  llm: LlmClient;
-  content: string;
-  signal: AbortSignal;
-  log: Logger;
-}): Promise<string> {
-  if (!needsSplitHintRepair(options.content)) return options.content;
-
-  options.log.debug(
-    { contentLength: options.content.length },
-    "repairing missing split hints",
-  );
-
-  const response = await options.llm.complete({
-    messages: [
-      {
-        role: "system",
-        content:
-          "Repair Discord output formatting only. Preserve the exact words, order, casing, and punctuation. Replace casual message-separating line breaks or blank lines with literal <split />. If the text is a poem, list, quote, code, or structured markdown, return it unchanged. Output only the repaired text.",
-      },
-      { role: "user", content: options.content },
-    ],
-    temperature: 0,
-    maxTokens: 768,
-    enableThinking: false,
-    signal: options.signal,
-  });
-
-  const repaired = stripUnicodeEmoji(response.content.trim());
-  if (!repaired) return options.content;
-
-  options.log.debug(
-    {
-      repaired: repaired !== options.content,
-      stillNeedsRepair: needsSplitHintRepair(repaired),
-      finishReason: response.finishReason,
-      timings: response.timings,
-    },
-    "split hint repair complete",
-  );
-  return repaired;
+/** Legacy turn writes have one destination; layers exist only inside an observation batch. */
+function withoutLayers({
+  also_banks: _,
+  ...remora
+}: RemoraRequest): RemoraRequest {
+  return remora;
 }
 
-async function executeToolCalls(options: {
-  response: LlmResponse;
-  message: Message;
-  actionContext?: ActionContext | undefined;
-  actionRegistry?: ActionRegistry | undefined;
-  log: Logger;
-}): Promise<void> {
-  if (!options.actionContext || !options.actionRegistry) {
-    throw new Error(
-      "LLM returned tool calls but action execution is unavailable",
-    );
-  }
-
-  for (const toolCall of options.response.toolCalls ?? []) {
-    const resolved = options.actionRegistry.getToolCallTrigger(toolCall.name);
-    if (!resolved) throw new Error(`Unknown tool call: ${toolCall.name}`);
-
-    const args = parseToolArguments(toolCall.arguments);
-    options.log.debug(
-      {
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-        action: resolved.action.name,
-      },
-      "executing LLM tool call action",
-    );
-    await resolved.action.execute(
-      {
-        source: "tool_call",
-        channelId: options.message.channelId,
-        guildId: options.message.guildId ?? undefined,
-        requester: {
-          id: options.message.author.id,
-          name:
-            options.message.author.globalName ??
-            options.message.author.username,
-        },
-        triggerMessage: options.message,
-        args,
-      },
-      options.actionContext,
-    );
-  }
+/** Follow-up reads retain speaker and recall policy without re-observing the human source. */
+function readOnlyRemora(remora: RemoraRequest): RemoraRequest {
+  const speaker =
+    remora.speaker ??
+    (remora.write_bank && remora.turn
+      ? { bank: remora.write_bank, id: remora.turn.speaker_id }
+      : undefined);
+  return {
+    read_banks: remora.read_banks,
+    ...(speaker ? { speaker } : {}),
+    ...(remora.recall ? { recall: remora.recall } : {}),
+  };
 }
 
-function parseToolArguments(argumentsJson: string): unknown {
-  try {
-    return JSON.parse(argumentsJson || "{}");
-  } catch (error) {
-    throw new Error(`Invalid tool call arguments JSON: ${argumentsJson}`, {
-      cause: error,
-    });
+function withSources(
+  content: string,
+  sources: Array<{ title: string; url: string; kind: string }>,
+) {
+  if (!sources.length) return content;
+  // One subtext line of hostnames: tiny, one link per site.
+  const sites = new Map<string, string>();
+  for (const { url } of sources) {
+    const host = new URL(url).hostname.replace(/^www\./, "");
+    if (!sites.has(host))
+      sites.set(host, url.replaceAll("(", "%28").replaceAll(")", "%29"));
   }
+  const links = [...sites].map(([host, url]) => `[${host}](${url})`);
+  return `${content}\n-# ${links.join(" · ")}`;
 }
 
-function withClassifierDecisionBlock(
-  transcript: string,
-  decision: ClassifierDecision | undefined,
-): string {
-  if (!decision) return transcript;
-
-  const block = `<classifier_decision should_respond="${String(decision.shouldRespond)}" confidence="${escapeAttribute(String(decision.confidence))}">\n${escapeTranscriptText(decision.reason)}\n</classifier_decision>`;
-  const participantBlockEnd = "</participants>";
-  const participantBlockIndex = transcript.indexOf(participantBlockEnd);
-  if (participantBlockIndex === -1) return `${block}\n\n${transcript}`;
-
-  const insertAt = participantBlockIndex + participantBlockEnd.length;
-  return `${transcript.slice(0, insertAt)}\n\n${block}${transcript.slice(insertAt)}`;
+// Per-turn guidance follows history so it cannot invalidate its cached prefix.
+function formatClassifierDecision(decision: ClassifierDecision): string {
+  return `<classifier_decision should_respond="${String(decision.shouldRespond)}" confidence="${escapeAttribute(String(decision.confidence))}">\n${escapeTranscriptText(decision.reason)}\n</classifier_decision>`;
 }
 
 async function generateResponse(options: {
@@ -354,6 +510,9 @@ async function generateResponse(options: {
   thinkingMaxTokens: number;
   thinkingTimeoutMs: number;
   tools: LlmTool[];
+  remora?: RemoraRequest;
+  onResponse?: (response: LlmResponse) => void;
+  beforeRequest?: () => void;
 }): Promise<{ content: string; response: LlmResponse }> {
   return completeAndSanitize(options.llm, {
     messages: options.promptMessages,
@@ -362,6 +521,9 @@ async function generateResponse(options: {
     thinkingMaxTokens: options.thinkingMaxTokens,
     thinkingTimeoutMs: options.thinkingTimeoutMs,
     tools: options.tools,
+    ...(options.remora ? { remora: options.remora } : {}),
+    ...(options.onResponse ? { onResponse: options.onResponse } : {}),
+    ...(options.beforeRequest ? { beforeRequest: options.beforeRequest } : {}),
   });
 }
 
@@ -374,6 +536,9 @@ async function completeAndSanitize(
     thinkingMaxTokens: number;
     thinkingTimeoutMs: number;
     tools: LlmTool[];
+    remora?: RemoraRequest;
+    onResponse?: (response: LlmResponse) => void;
+    beforeRequest?: () => void;
   },
 ): Promise<{ content: string; response: LlmResponse }> {
   if (!request.enableThinking) {
@@ -393,13 +558,14 @@ async function completeAndSanitize(
       ...(request.tools.length > 0 ? { toolChoice: "auto" as const } : {}),
     });
     if (response.toolCalls?.length) return { content: "", response };
-    const content = stripUnicodeEmoji(response.content.trim());
+    const content = response.content.trim();
     if (content) return { content, response };
 
     throw new Error(
       `thinking response returned empty content; finishReason=${response.finishReason ?? "unknown"}; reasoningContentLength=${response.reasoningContent?.length ?? 0}`,
     );
   } catch (error) {
+    if (error instanceof ObservationAttemptInvalidated) throw error;
     if (request.signal.aborted) throw error;
     const reason = isAbortError(error) ? "timeout" : "empty_or_failed";
     // Fall back to a no-thinking request so Discord typing does not hang on long reasoning.
@@ -409,7 +575,7 @@ async function completeAndSanitize(
       ...(request.tools.length > 0 ? { toolChoice: "auto" as const } : {}),
     });
     if (retry.toolCalls?.length) return { content: "", response: retry };
-    const retryContent = stripUnicodeEmoji(retry.content.trim());
+    const retryContent = retry.content.trim();
     if (retryContent) return { content: retryContent, response: retry };
 
     throw new Error(
@@ -427,6 +593,7 @@ async function completeAndRequireContent(
     signal: AbortSignal;
     enableThinking?: boolean;
     tools: LlmTool[];
+    remora?: RemoraRequest;
   },
 ): Promise<{ content: string; response: LlmResponse }> {
   const response = await llm.complete({
@@ -434,7 +601,7 @@ async function completeAndRequireContent(
     ...(request.tools.length > 0 ? { toolChoice: "auto" as const } : {}),
   });
   if (response.toolCalls?.length) return { content: "", response };
-  const content = stripUnicodeEmoji(response.content.trim());
+  const content = response.content.trim();
   if (content) return { content, response };
 
   throw new Error(
@@ -457,6 +624,18 @@ function withTimeoutSignal(parent: AbortSignal, timeoutMs: number) {
   };
 }
 
+/** Patch's latest message in this conversation, the default target for edits and deletion. */
+function ownMessageId(
+  chain: readonly ConversationMessage[],
+  channelId: string,
+  botUserId: string,
+): { ownMessageId?: string } {
+  const own = chain.findLast(
+    (item) => item.authorId === botUserId && item.channelId === channelId,
+  );
+  return own ? { ownMessageId: own.id } : {};
+}
+
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
@@ -467,6 +646,9 @@ async function sendChunks(
   content: string,
   participantUserIds: string[],
   log: Logger,
+  replyTo?: string,
+  onSent?: (message: ConversationMessage) => void,
+  assertCurrent?: () => void,
 ): Promise<void> {
   const chunks = splitDiscordResponse(content);
   log.debug(
@@ -477,7 +659,7 @@ async function sendChunks(
     "sending Discord response chunks",
   );
 
-  if (!trigger.inGuild()) {
+  if (!replyTo) {
     for (const [index, chunk] of chunks.entries()) {
       if (index > 0) {
         await waitForFollowupTyping(adapter, trigger.channelId, chunk, log);
@@ -486,9 +668,11 @@ async function sendChunks(
         { index, chunkLength: chunk.length },
         "sending Discord message chunk",
       );
-      await adapter.sendMessage(trigger.channelId, chunk, {
+      assertCurrent?.();
+      const sent = await adapter.sendMessage(trigger.channelId, chunk, {
         allowedMentionUsers: participantUserIds,
       });
+      onSent?.(sent);
       log.debug({ index }, "sent Discord message chunk");
     }
     return;
@@ -504,11 +688,30 @@ async function sendChunks(
     { index: 0, chunkLength: first.length },
     "sending Discord reply chunk",
   );
-  await adapter.sendReply(
-    { channelId: trigger.channelId, messageId: trigger.id },
-    first,
-    { allowedMentionUsers: participantUserIds },
-  );
+  try {
+    assertCurrent?.();
+    const sent = await adapter.sendReply(
+      { channelId: trigger.channelId, messageId: replyTo },
+      first,
+      { allowedMentionUsers: participantUserIds },
+    );
+    onSent?.(sent);
+  } catch (error) {
+    if (
+      !(
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === 10008
+      )
+    )
+      throw error;
+    assertCurrent?.();
+    const sent = await adapter.sendMessage(trigger.channelId, first, {
+      allowedMentionUsers: participantUserIds,
+    });
+    onSent?.(sent);
+  }
   log.debug({ index: 0 }, "sent Discord reply chunk");
 
   for (const [offset, chunk] of rest.entries()) {
@@ -518,9 +721,11 @@ async function sendChunks(
       { index, chunkLength: chunk.length },
       "sending Discord message chunk",
     );
-    await adapter.sendMessage(trigger.channelId, chunk, {
+    assertCurrent?.();
+    const sent = await adapter.sendMessage(trigger.channelId, chunk, {
       allowedMentionUsers: participantUserIds,
     });
+    onSent?.(sent);
     log.debug({ index }, "sent Discord message chunk");
   }
 }
@@ -560,12 +765,6 @@ function clamp(value: number, min: number, max: number): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function getResponseTranscriptMode(message: Message): ResponseTranscriptMode {
-  if (!message.inGuild()) return "dm";
-  if (message.channel.isThread()) return "thread";
-  return "global";
 }
 
 function keepTyping(adapter: DiscordAdapter, channelId: string, log: Logger) {

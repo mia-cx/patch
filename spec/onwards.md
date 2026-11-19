@@ -56,7 +56,7 @@ This needs a structured response protocol or bot-action channel so the model can
 
 ## Post-transformer burst splitting
 
-V0/v1 only allow burst splitting when Patch emits `<split />` herself.
+V0/v1 only allow burst splitting when Patch emits `<|message_split|>` herself.
 
 A future post-transformer might apply conversational burst splitting after generation, but only if it has enough semantic understanding to avoid mangling tone and meaning.
 

@@ -4,50 +4,48 @@ import {
   escapeTranscriptText,
 } from "../conversation/escape.js";
 import type { LlmTool } from "../llm/client.js";
-import type { ActionContext } from "./context.js";
-import type { ActionRegistry } from "./registry.js";
+import type { ActionContext, ActionRegistry } from "./context.js";
+import { modelDeclarationSchema } from "./model-schema.js";
+import { isToolCallTrigger } from "./tool-calls.js";
 
 export type ModelVisibleAction = {
   actionName: string;
   name: string;
   description: string;
   usage: string;
-  inputSchemaJson: unknown;
+  inputSchemaJson: Readonly<Record<string, unknown>>;
   available: boolean;
   unavailableReason?: string | undefined;
 };
 
-export function buildModelVisibleActions(input: {
-  triggerMessage?: Message | undefined;
-  channelId: string;
-  guildId?: string | undefined;
+/** Discover explicitly exposed model tools for the current message's channel. */
+export async function buildModelVisibleActions(input: {
+  message: Message;
   context: ActionContext;
   registry: ActionRegistry;
-}): ModelVisibleAction[] {
-  const isThread = input.triggerMessage?.channel.isThread() ?? false;
-  return input.registry.toolCallTriggers.map(({ action, trigger }) => {
-    const availability = action.availability(
-      {
-        channelId: input.channelId,
-        guildId: input.guildId,
-        isThread,
-        triggerMessage: input.triggerMessage,
-      },
-      input.context,
-    );
+}): Promise<ModelVisibleAction[]> {
+  return Promise.all(
+    input.registry.actions.flatMap((action) =>
+      action.triggers.filter(isToolCallTrigger).map(async (trigger) => {
+        const availability = await action.availability({
+          ...input.context,
+          channel: input.message.channel,
+        });
 
-    const visible: ModelVisibleAction = {
-      actionName: action.name,
-      name: trigger.name,
-      description: trigger.description,
-      usage: trigger.usage,
-      inputSchemaJson: trigger.inputSchemaJson ?? { type: "object" },
-      available: availability.available,
-    };
-    if (!availability.available)
-      visible.unavailableReason = availability.reason;
-    return visible;
-  });
+        const visible: ModelVisibleAction = {
+          actionName: action.name,
+          name: trigger.name,
+          description: trigger.description,
+          usage: trigger.usage,
+          inputSchemaJson: trigger.input.jsonSchema,
+          available: availability.available,
+        };
+        if (!availability.available)
+          visible.unavailableReason = availability.reason;
+        return visible;
+      }),
+    ),
+  );
 }
 
 export function toLlmTools(
@@ -63,7 +61,7 @@ export function toLlmTools(
       function: {
         name: action.name,
         description: action.description,
-        parameters: action.inputSchemaJson,
+        parameters: modelDeclarationSchema(action.inputSchemaJson),
       },
     }));
 }
@@ -85,11 +83,69 @@ export function formatAvailableActionsPrompt(
   ].join("\n");
 }
 
+/** Keep local-model tool instructions small; Protocord retains the complete validators. */
+export function formatCompactActionsPrompt(
+  actions: readonly ModelVisibleAction[],
+): string {
+  const available = actions.filter((action) => action.available);
+  if (!available.length) return "";
+  return [
+    "Available tools (omit optional arguments instead of passing null):",
+    ...available.map((action) => {
+      const variants: readonly unknown[] = Array.isArray(
+        action.inputSchemaJson.anyOf,
+      )
+        ? action.inputSchemaJson.anyOf
+        : [action.inputSchemaJson];
+      const signatures = variants.map((schema) => {
+        if (!schema || typeof schema !== "object") return `${action.name}()`;
+        const required = new Set(
+          "required" in schema && Array.isArray(schema.required)
+            ? schema.required
+            : [],
+        );
+        const properties =
+          "properties" in schema ? schema.properties : undefined;
+        const args =
+          properties && typeof properties === "object"
+            ? Object.entries(properties)
+                .map(
+                  ([key, value]) =>
+                    `${key}${required.has(key) ? "" : "?"}:${compactType(value, !required.has(key))}`,
+                )
+                .join(", ")
+            : "";
+        return `${action.name}(${args})`;
+      });
+      return `${signatures.join(" | ")} ${action.description.slice(0, 100)}`;
+    }),
+  ].join("\n");
+}
+
+function compactType(value: unknown, optional = false): string {
+  if (!value || typeof value !== "object") return "value";
+  if ("anyOf" in value && Array.isArray(value.anyOf))
+    return value.anyOf
+      .map((member: unknown) => compactType(member))
+      .filter((type: string) => !optional || type !== "null")
+      .join("|");
+  if ("enum" in value && Array.isArray(value.enum))
+    return value.enum.map(String).join("|");
+  if ("type" in value && typeof value.type === "string") {
+    if (value.type === "array" && "items" in value)
+      return `${compactType(value.items)}[]`;
+    return value.type;
+  }
+  return "value";
+}
+
 function formatAvailableAction(action: ModelVisibleAction): string {
   return [
     `<action name="${escapeAttribute(action.name)}" action_name="${escapeAttribute(action.actionName)}">`,
     `<description>${escapeTranscriptText(action.description)}</description>`,
-    `<usage>${escapeTranscriptText(action.usage)}</usage>`,
+    ...(action.usage === action.description
+      ? []
+      : [`<usage>${escapeTranscriptText(action.usage)}</usage>`]),
     `<input_schema>${escapeTranscriptText(JSON.stringify(action.inputSchemaJson))}</input_schema>`,
     "</action>",
   ].join("\n");

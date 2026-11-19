@@ -1,0 +1,95 @@
+{
+  "capabilities": {
+    "object": "remora.capabilities",
+    "version": 1,
+    "model": "gemma-4-e2b-it",
+    "backend": "transformers",
+    "profile": "gemma-reference-12288",
+    "source_binding": "final_user_message_exact",
+    "features": {
+      "memory": true,
+      "automatic_writes": true,
+      "multi_bank": true,
+      "fact_filter": true,
+      "source_revisions": true,
+      "prefix_cache": true,
+      "streaming": false,
+      "tools": false,
+      "thinking": false
+    },
+    "limits": {
+      "context_tokens": 12288,
+      "max_output_tokens": 256,
+      "max_read_banks": 8
+    }
+  },
+  "contextTokens": 12288,
+  "first": {
+    "content": "hey, so elin moved away, huh?",
+    "remora": {
+      "version": 1,
+      "backend": "transformers",
+      "read_banks": ["discord:dm:synthetic"],
+      "selected": [
+        {
+          "bank": "discord:dm:synthetic",
+          "id": 1
+        }
+      ],
+      "writes": {
+        "bank": "discord:dm:synthetic",
+        "source_id": "discord:message:synthetic-7",
+        "revision": 0,
+        "replayed": true,
+        "result": {
+          "saved": [1],
+          "reinforced": [],
+          "superseded": [],
+          "forgotten": [],
+          "error": null,
+          "unmatched_forget": false
+        }
+      },
+      "cache": {
+        "requested": true,
+        "reused_tokens": 7310,
+        "evaluated_tokens": 1601,
+        "invalidated": "memory_or_model_changed"
+      }
+    }
+  },
+  "replay": {
+    "content": "hey, so elin moved away, huh?",
+    "remora": {
+      "version": 1,
+      "backend": "transformers",
+      "read_banks": ["discord:dm:synthetic"],
+      "selected": [
+        {
+          "bank": "discord:dm:synthetic",
+          "id": 1
+        }
+      ],
+      "writes": {
+        "bank": "discord:dm:synthetic",
+        "source_id": "discord:message:synthetic-7",
+        "revision": 0,
+        "replayed": true,
+        "result": {
+          "saved": [1],
+          "reinforced": [],
+          "superseded": [],
+          "forgotten": [],
+          "error": null,
+          "unmatched_forget": false
+        }
+      },
+      "cache": {
+        "requested": true,
+        "reused_tokens": 7310,
+        "evaluated_tokens": 1601,
+        "invalidated": "prompt_prefix_changed"
+      }
+    }
+  }
+}

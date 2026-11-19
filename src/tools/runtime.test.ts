@@ -1,0 +1,2600 @@
+import { lookup } from "node:dns/promises";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { ChannelType, Client, ClientUser } from "discord.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  evidenceCapabilities,
+  observationReply,
+} from "../../test/fixtures/evidence.js";
+import type { ActionContext } from "../actions/context.js";
+import { registerDefaultActions } from "../actions/defaults.js";
+import { createPatchActionRegistry } from "../actions/registry.js";
+import { loadConfig } from "../config.js";
+import {
+  ConversationObservations,
+  observationNamespace,
+} from "../conversation/observations.js";
+import { buildRemoraRequest } from "../conversation/remora.js";
+import { ConversationContextStore } from "../conversation/store.js";
+import {
+  buildTranscript,
+  formatTranscriptMessages,
+} from "../conversation/transcript.js";
+import type { ConversationMessage } from "../conversation/types.js";
+import {
+  DiscordJsAdapter,
+  toConversationMessage,
+} from "../discord/discord-js-adapter.js";
+import { getBotIdentity } from "../identity.js";
+import { LlmClient, type LlmMessage } from "../llm/client.js";
+import {
+  type ObservationBatch,
+  decodeObservationView,
+} from "../llm/evidence.js";
+import { ModelCatalog } from "../llm/model-catalog.js";
+import { parseRemoraCapabilities } from "../llm/remora.js";
+import { createLogger } from "../logger.js";
+import { RemoraMemoryClient } from "../memory/client.js";
+import { GenerationQueue } from "../queue.js";
+import { respond } from "../response/responder.js";
+import { SettingsStore } from "../settings/store.js";
+import { deliverFollowups } from "./followups.js";
+import { toolResultMessage } from "./observations.js";
+import { HarnessStore } from "./store.js";
+import { runToolTurn } from "./turn.js";
+import { WebClient } from "./web.js";
+
+// Fixture URLs are fictional. An unavailable resolver keeps reply link checks
+// inconclusive and offline; responder.test.ts proves their outcomes.
+vi.mock("node:dns/promises", () => ({
+  lookup: vi.fn(async () => {
+    throw Object.assign(new Error("No test resolver"), { code: "EAI_AGAIN" });
+  }),
+}));
+const missingHost = () =>
+  vi
+    .mocked(lookup)
+    .mockRejectedValueOnce(
+      Object.assign(new Error("Missing host"), { code: "ENOTFOUND" }),
+    );
+
+const CHANNEL = "1000000000000000001";
+const BOT = "1000000000000000002";
+const HUMAN = "1000000000000000003";
+const CURRENT = "1000000000000000004";
+const PREVIOUS = "1000000000000000005";
+const GUILD = "1000000000000000006";
+const THREAD = "1000000000000000007";
+const resources: Array<() => void> = [];
+afterEach(() => {
+  for (const close of resources.splice(0).reverse()) close();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+class Bot extends ClientUser {
+  constructor(client: Client<true>) {
+    super(client, {
+      id: BOT,
+      username: "Patch",
+      discriminator: "0",
+      avatar: null,
+      bot: true,
+    });
+  }
+}
+
+async function runtime(guild = false, remora = false, storePath = ":memory:") {
+  const client = new Client<true>({ intents: [] });
+  client.user = new Bot(client);
+  const packet = (id = PREVIOUS, author = BOT, content = "old message") => ({
+    id,
+    channel_id: CHANNEL,
+    ...(guild ? { guild_id: GUILD } : {}),
+    type: 0,
+    author: {
+      id: author,
+      username: author === BOT ? "Patch" : "Mia",
+      discriminator: "0",
+      avatar: null,
+      bot: author === BOT,
+    },
+    content,
+    timestamp: "2026-10-19T12:00:00Z",
+    edited_timestamp: null,
+    tts: false,
+    mention_everyone: false,
+    mentions: [],
+    mention_roles: [],
+    attachments: [],
+    embeds: [],
+    pinned: false,
+    components: [],
+  });
+  const thread = {
+    id: THREAD,
+    guild_id: GUILD,
+    parent_id: CHANNEL,
+    type: ChannelType.PublicThread,
+    name: "tangent",
+    owner_id: BOT,
+    thread_metadata: {
+      archived: false,
+      auto_archive_duration: 1440,
+      archive_timestamp: "2026-10-19T12:00:00Z",
+    },
+  };
+  const rest = {
+    get: vi.spyOn(client.rest, "get").mockImplementation(async (route) => {
+      if (route === `/guilds/${GUILD}`)
+        return {
+          id: GUILD,
+          name: "test guild",
+          owner_id: BOT,
+          features: [],
+          roles: [
+            {
+              id: GUILD,
+              name: "@everyone",
+              permissions: "8",
+              position: 0,
+              color: 0,
+            },
+          ],
+          members: [
+            {
+              user: {
+                id: BOT,
+                username: "Patch",
+                discriminator: "0",
+                avatar: null,
+                bot: true,
+              },
+              roles: [],
+              joined_at: "2026-10-19T00:00:00Z",
+              deaf: false,
+              mute: false,
+            },
+          ],
+          channels: [],
+          emojis: [],
+          stickers: [],
+        };
+      if (route === `/channels/${CHANNEL}`)
+        return guild
+          ? {
+              id: CHANNEL,
+              guild_id: GUILD,
+              type: ChannelType.GuildText,
+              name: "test",
+              permission_overwrites: [],
+            }
+          : {
+              id: CHANNEL,
+              type: ChannelType.DM,
+              recipients: [
+                {
+                  id: HUMAN,
+                  username: "Mia",
+                  discriminator: "0",
+                  avatar: null,
+                },
+              ],
+            };
+      if (route === `/channels/${THREAD}`) return thread;
+      if (route === `/channels/${CHANNEL}/messages/${CURRENT}`)
+        return packet(CURRENT, HUMAN, "look that up");
+      if (route === `/channels/${CHANNEL}/messages/${PREVIOUS}`)
+        return packet();
+      if (route === `/guilds/${GUILD}/emojis`)
+        return [
+          {
+            id: "1000000000000000010",
+            name: "happy",
+            available: true,
+            roles: [],
+          },
+        ];
+      if (route === `/guilds/${GUILD}/stickers`)
+        return [
+          {
+            id: "1000000000000000011",
+            guild_id: GUILD,
+            name: "wave",
+            tags: "hi",
+            type: 2,
+            format_type: 1,
+            available: true,
+          },
+        ];
+      if (route === `/guilds/${GUILD}/stickers/1000000000000000011`)
+        return {
+          id: "1000000000000000011",
+          guild_id: GUILD,
+          name: "wave",
+          tags: "hi",
+          type: 2,
+          format_type: 1,
+          available: true,
+        };
+      if (route === `/guilds/${GUILD}/threads/active`)
+        return { threads: [thread], members: [], has_more: false };
+      throw new Error(`Unexpected SDK request: ${route}`);
+    }),
+    post: vi
+      .spyOn(client.rest, "post")
+      .mockImplementation(async (route) =>
+        route.endsWith("/threads") ? thread : packet("1000000000000000020"),
+      ),
+    patch: vi.spyOn(client.rest, "patch").mockResolvedValue(packet()),
+    put: vi.spyOn(client.rest, "put").mockResolvedValue(undefined),
+    delete: vi.spyOn(client.rest, "delete").mockResolvedValue(undefined),
+  };
+  if (guild) await client.guilds.fetch(GUILD);
+  const channel = await client.channels.fetch(CHANNEL);
+  if (!channel?.isTextBased()) throw new Error("Fixture channel unavailable");
+  const message = await channel.messages.fetch(CURRENT);
+  const previous = await channel.messages.fetch(PREVIOUS);
+  const config = loadConfig({
+    DISCORD_TOKEN: "test",
+    DISCORD_CLIENT_ID: BOT,
+    LLM_TOOL_MODE: "tagged",
+    LLM_BASE_URL: "http://remora.test/v1",
+    REMORA_DM_ENABLED: String(remora),
+  });
+  const logger = createLogger(false);
+  logger.level = "silent";
+  const settings = new SettingsStore(":memory:", { llmModel: "test" });
+  const contextStore = new ConversationContextStore(":memory:");
+  const llm = new LlmClient(config);
+  if (remora) llm.supportsTools = false;
+  const store = new HarnessStore(storePath);
+  const web = new WebClient({
+    resolve: async () => [{ address: "93.184.216.34", family: 4 }],
+    request: async () => ({
+      status: 200,
+      headers: { "content-type": "text/plain" },
+      body: "A real fixture page.",
+    }),
+  });
+  const context: ActionContext = {
+    client,
+    config,
+    llm,
+    logger,
+    settings,
+    contextStore,
+    queue: new GenerationQueue(1),
+    modelCatalog: new ModelCatalog(llm, logger),
+    memory: new RemoraMemoryClient(config),
+    harness: { store, web },
+  };
+  const registry = createPatchActionRegistry();
+  registerDefaultActions(registry);
+  resources.push(
+    () => settings.close(),
+    () => contextStore.close(),
+    () => store.close(),
+    () => {
+      void client.destroy();
+    },
+  );
+  const complete = vi.spyOn(llm, "complete");
+  const run = (history?: ConversationMessage[]) =>
+    respond({
+      adapter: new DiscordJsAdapter(client, BOT),
+      message,
+      botUserId: BOT,
+      config,
+      llm,
+      logger,
+      contextStore,
+      contextMessages: history ?? [
+        toConversationMessage(previous, BOT),
+        toConversationMessage(message, BOT),
+      ],
+      actionContext: context,
+      actionRegistry: registry,
+    });
+  return {
+    ...context,
+    client,
+    registry,
+    message,
+    complete,
+    rest,
+    run,
+    store,
+    packet,
+  };
+}
+
+const call = (name: string, args: object) =>
+  `<tool_call>${JSON.stringify({ name, arguments: args })}</tool_call>`;
+
+describe("complete harness with the actual Discord SDK", () => {
+  // Proves the captured multiword tagged search dispatches through Protocord, fetches its result and continues without rewriting the human turn.
+  it("executes the captured Wikipedia lookup syntax through the real caller", async () => {
+    const app = await runtime(false, true);
+    if (!app.harness) throw new Error("Missing harness");
+    app.complete.mockRestore();
+    app.config.llmTemperature = 0;
+    app.config.remoraObservationStartId = "1000000000000000000";
+    app.message.content = "whats the article of the day on wikipedia?";
+    const network = vi.fn(async (url: URL) => {
+      if (url.hostname === "html.duckduckgo.com")
+        return {
+          status: 200,
+          headers: { "content-type": "text/html" },
+          body: '<div class="result"><a class="result__a" href="https://example.com/featured">Featured fixture article</a><p class="result__snippet">The fictional daily article.</p></div>',
+        };
+      if (url.href === "https://example.com/featured")
+        return {
+          status: 200,
+          headers: { "content-type": "text/html" },
+          body: "<main>Today's fictional featured article is Aster.</main>",
+        };
+      throw new Error("Unexpected fixture web request");
+    });
+    app.harness.web = new WebClient({
+      resolve: async () => [{ address: "93.184.216.34", family: 4 }],
+      request: network,
+    });
+    const requests: Array<{
+      messages: LlmMessage[];
+      remora: { observations: ObservationBatch };
+    }> = [];
+    const outputs = [
+      "<tool_call>web_search{query:article of the day wikipedia}</tool_call>",
+      '<tool_call>{"name":"web_fetch","arguments":{"url":"https://example.com/featured"}}</tool_call>',
+      "today's featured article is aster",
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/capabilities"))
+          return Response.json(evidenceCapabilities);
+        expect(url).toBe("http://remora.test/v1/chat/completions");
+        const request = JSON.parse(String(init?.body));
+        requests.push(request);
+        return Response.json(
+          observationReply(
+            request.remora.observations,
+            outputs[requests.length - 1] ?? "",
+            requests.length,
+          ),
+        );
+      }),
+    );
+    await app.llm.initializeRemora();
+    await app.run([toConversationMessage(app.message, BOT)]);
+    expect(network).toHaveBeenCalledTimes(2);
+    expect(requests).toHaveLength(3);
+    for (const request of requests)
+      expect(
+        request.messages.filter(
+          (message) => message.content === `Mia [Mia]: ${app.message.content}`,
+        ),
+      ).toHaveLength(1);
+    const initial = requests[0]?.messages;
+    expect(initial?.at(-2)?.content).toContain("Emit the tagged JSON call");
+    expect(initial?.at(-1)?.content).toBe(`Mia [Mia]: ${app.message.content}`);
+    expect(
+      app.rest.post.mock.calls.find(([route]) =>
+        route.endsWith("/messages"),
+      )?.[1]?.body,
+    ).toMatchObject({
+      content: expect.stringContaining("today's featured article is aster"),
+    });
+  });
+
+  // Proves captured duplicate read requests use one actual result, follow the human causally, and finish without a fourth tool attempt.
+  it("finishes the captured v4 web loop without replaying the human or the read", async () => {
+    const app = await runtime(false, true);
+    if (!app.harness) throw new Error("Missing harness");
+    app.complete.mockRestore();
+    app.config.llmTemperature = 0;
+    app.config.remoraObservationStartId = "1000000000000000000";
+    app.config.llmMaxTokens = 256;
+    app.message.content =
+      "Use web_fetch to read https://fictional-release.example/aurora and tell me what its badge colour means. Keep the reply short.";
+    const raw =
+      "<tool_call>web_fetch{url:https://fictional-release.example/aurora}</tool_call>";
+    const outputs = [
+      raw,
+      raw,
+      `${raw}\nviolet badges for offline devices</split />`,
+    ];
+    const requests: Array<{
+      messages: LlmMessage[];
+      remora: { observations: ObservationBatch };
+    }> = [];
+    const web = vi.spyOn(app.harness.web, "fetch");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/capabilities"))
+          return Response.json(evidenceCapabilities);
+        const body = JSON.parse(String(init?.body));
+        requests.push(body);
+        return Response.json(
+          observationReply(
+            body.remora.observations,
+            outputs[requests.length - 1] ?? raw,
+            requests.length,
+          ),
+        );
+      }),
+    );
+    await app.llm.initializeRemora();
+    await app.run([toConversationMessage(app.message, BOT)]);
+    expect(web).toHaveBeenCalledTimes(1);
+    expect(requests).toHaveLength(3);
+    for (const request of requests.slice(1)) {
+      const human = request.messages.findIndex(
+        (m) => m.content === `Mia [Mia]: ${app.message.content}`,
+      );
+      expect(
+        request.messages.filter(
+          (m) => m.content === `Mia [Mia]: ${app.message.content}`,
+        ),
+      ).toHaveLength(1);
+      expect(request.messages[human + 1]).toMatchObject({
+        role: "assistant",
+        content: raw,
+      });
+      expect(request.messages.at(-1)?.content).toContain(
+        "Harness tool results",
+      );
+      expect(request.messages[0]?.content).not.toContain(
+        "The final standard user message is the current human turn",
+      );
+      expect(request.remora).not.toHaveProperty("turn");
+      expect(
+        request.remora.observations.inputs.filter(
+          (s) => s.origin === "human_input",
+        ),
+      ).toEqual(
+        requests[0]?.remora.observations.inputs.filter(
+          (s) => s.origin === "human_input",
+        ),
+      );
+    }
+    expect(requests[2]?.messages[0]?.content).not.toContain("Available tools");
+    const sent = app.rest.post.mock.calls.find(([route]) =>
+      route.endsWith("/messages"),
+    )?.[1]?.body;
+    expect(sent).toMatchObject({
+      content: expect.stringContaining("violet badges for offline devices"),
+    });
+    for (const [index, output] of outputs.entries())
+      expect(
+        app.store.generation(
+          observationNamespace(app.config.llmBaseUrl, app.config.llmApiKey),
+          `discord:user:${HUMAN}`,
+          `generation-${String(index + 1).padStart(32, "0")}:output`,
+        )?.text,
+      ).toBe(output);
+  });
+
+  // Proves an uncooperative model gets one final-answer attempt after an identical completed read, without another dispatch.
+  it("bounds duplicate-only reads and keeps mutation duplicates strict", async () => {
+    const app = await runtime();
+    if (!app.harness) throw new Error("Missing harness");
+    const web = vi.spyOn(app.harness.web, "fetch");
+    app.complete.mockResolvedValue({
+      content: call("web_fetch", { url: "https://example.com/", offset: 0 }),
+    });
+    await app.run();
+    expect(app.complete).toHaveBeenCalledTimes(3);
+    expect(web).toHaveBeenCalledTimes(1);
+    expect(app.complete.mock.calls[2]?.[0].messages[0]?.content).not.toContain(
+      "Available tools",
+    );
+    app.complete.mockReset();
+    const write = {
+      path: "draft.md",
+      text: "original",
+      expected_revision: null,
+    };
+    app.complete.mockResolvedValue({ content: call("scratch_write", write) });
+    await app.run();
+    expect(app.complete).toHaveBeenCalledTimes(2);
+    expect(app.store.readNote(CHANNEL, "draft.md")).toMatchObject({
+      text: "original",
+    });
+  });
+
+  // Proves a write invalidates read reuse so a later read sees actual changed state within the same three-call budget.
+  it("reads again after an intervening mutation and disables exhausted tools", async () => {
+    const app = await runtime();
+    const revision = app.store.writeNote(
+      CHANNEL,
+      "draft.md",
+      "old",
+      null,
+    ).revision;
+    app.complete
+      .mockResolvedValueOnce({
+        content: call("scratch_read", { path: "draft.md" }),
+      })
+      .mockResolvedValueOnce({
+        content: call("scratch_write", {
+          path: "draft.md",
+          text: "new",
+          expected_revision: revision,
+        }),
+      })
+      .mockResolvedValueOnce({
+        content: call("scratch_read", { path: "draft.md" }),
+      })
+      .mockResolvedValueOnce({ content: "the note says new" });
+    await app.run();
+    expect(app.complete).toHaveBeenCalledTimes(4);
+    expect(app.complete.mock.calls[3]?.[0].messages[0]?.content).not.toContain(
+      "Available tools",
+    );
+    const data = app.complete.mock.calls[3]?.[0].messages
+      .filter((m) => m.content.startsWith("Harness tool results"))
+      .flatMap((m) => JSON.parse(m.content.slice(m.content.indexOf("\n") + 1)));
+    expect(data?.at(-1)).toMatchObject({
+      name: "scratch_read",
+      completed: true,
+      output: { text: "new" },
+    });
+  });
+
+  // Proves a mixed duplicate/new batch cannot execute its new mutation, even if both individual schemas are valid.
+  it("rejects mixed reuse batches before their first side effect", async () => {
+    const app = await runtime();
+    app.complete
+      .mockResolvedValueOnce({
+        content: call("web_fetch", { url: "https://example.com/" }),
+      })
+      .mockResolvedValueOnce({
+        content:
+          call("react", { message_id: CURRENT, emoji: "x" }) +
+          call("web_fetch", { url: "https://example.com/" }),
+      });
+    await app.run();
+    expect(app.rest.put).not.toHaveBeenCalled();
+    expect(app.complete).toHaveBeenCalledTimes(2);
+  });
+
+  // Proves even cached read proposals cannot enlarge the original three-call budget.
+  it("rejects an oversized cached-read batch without another dispatch or completion", async () => {
+    const app = await runtime();
+    if (!app.harness) throw new Error("Missing harness");
+    const read = vi.spyOn(app.harness.web, "fetch");
+    const batch =
+      call("web_fetch", { url: "https://one.test/" }) +
+      call("web_fetch", { url: "https://two.test/" });
+    app.complete.mockResolvedValue({ content: batch });
+    await app.run();
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(app.complete).toHaveBeenCalledTimes(2);
+  });
+
+  // Proves running out of tool calls asks for an answer instead of failing the whole reply.
+  it("answers from the results when the tool budget runs out", async () => {
+    const app = await runtime();
+    for (const host of ["one", "two", "three", "four"])
+      app.complete.mockResolvedValueOnce({
+        content: call("web_fetch", { url: `https://${host}.test/` }),
+      });
+    app.complete.mockResolvedValueOnce({
+      content: "none of those pages loaded",
+    });
+    await app.run();
+    expect(JSON.stringify(app.complete.mock.calls.at(-1))).toContain(
+      "tool calls for this message are used up",
+    );
+    expect(
+      JSON.stringify(
+        app.rest.post.mock.calls.filter(([route]) =>
+          route.endsWith("/messages"),
+        ),
+      ),
+    ).toContain("none of those pages loaded");
+  });
+
+  // Proves retrying the same source cannot schedule another side effect when the model omits an earlier read.
+  it("retains mutation identity across reordered generation retries", async () => {
+    const app = await runtime();
+    const args = {
+      at: new Date(Date.now() + 60_000).toISOString(),
+      text: "check in",
+    };
+    app.complete
+      .mockResolvedValueOnce({
+        content: call("web_fetch", { url: "https://example.com/" }),
+      })
+      .mockResolvedValueOnce({ content: call("schedule_followup", args) })
+      .mockResolvedValueOnce({ content: "scheduled" });
+    await app.run();
+    app.complete
+      .mockResolvedValueOnce({ content: call("schedule_followup", args) })
+      .mockResolvedValueOnce({ content: "still scheduled" });
+    await app.run();
+    expect(app.store.followups(CHANNEL)).toHaveLength(1);
+  });
+  // Proves a failed thinking call cannot start a fallback request or send failure text after its inputs are fenced.
+  it("cancels a thinking transport fallback after source invalidation", async () => {
+    const app = await runtime(false, true);
+    app.complete.mockRestore();
+    app.config.llmTemperature = 0;
+    app.config.llmEnableThinking = true;
+    app.config.llmThinkingMaxTokens = 128;
+    app.config.remoraObservationStartId = "1000000000000000000";
+    let posts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/capabilities"))
+          return Response.json({
+            ...evidenceCapabilities,
+            features: { ...evidenceCapabilities.features, thinking: true },
+          });
+        posts++;
+        app.store.invalidateConversationData();
+        return Response.json({ error: "invented failure" }, { status: 503 });
+      }),
+    );
+    await app.llm.initializeRemora();
+    await app.run([toConversationMessage(app.message, BOT)]);
+    expect(posts).toBe(1);
+    expect(
+      app.rest.post.mock.calls.filter(([route]) => route.endsWith("/messages")),
+    ).toEqual([]);
+  });
+  // Proves revision retirement cancels presentation independently of decoder-reference eligibility and between split sends.
+  it.each(["rejected", "untracked_dependencies"] as const)(
+    "cancels revised consumed sources for outcome %s",
+    async (outcome) => {
+      for (const duringInference of [true, false]) {
+        const app = await runtime(false, true);
+        app.complete.mockRestore();
+        app.config.llmTemperature = 0;
+        app.config.remoraObservationStartId = "1000000000000000000";
+        const revise = () =>
+          app.store.advanceObservationRevision(
+            observationNamespace(app.config.llmBaseUrl, app.config.llmApiKey),
+            `discord:user:${HUMAN}`,
+            `discord:message:${CURRENT}`,
+            1,
+          );
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (url: string, init?: RequestInit) => {
+            if (url.endsWith("/capabilities"))
+              return Response.json(evidenceCapabilities);
+            const batch: ObservationBatch = JSON.parse(String(init?.body))
+              .remora.observations;
+            if (duringInference) revise();
+            return Response.json(
+              observationReply(batch, "first<split />second", 1, outcome),
+            );
+          }),
+        );
+        const sent: string[] = [];
+        app.rest.post.mockImplementation(async (route, options) => {
+          if (!route.endsWith("/messages")) return;
+          const body = options?.body;
+          const text =
+            body && typeof body === "object" && "content" in body
+              ? String(body.content)
+              : "";
+          sent.push(text);
+          revise();
+          return app.packet("1000000000000000020", BOT, text);
+        });
+        await app.llm.initializeRemora();
+        await app.run([toConversationMessage(app.message, BOT)]);
+        expect(sent).toEqual(duringInference ? [] : ["first"]);
+      }
+    },
+  );
+
+  // Proves a casual two-line reply goes out as two Discord messages with no second model call.
+  it("sends each line of a casual burst as its own message without a repair call", async () => {
+    const app = await runtime(true);
+    app.complete.mockResolvedValue({ content: "first\nsecond" });
+    await app.run();
+    expect(app.complete).toHaveBeenCalledTimes(1);
+    expect(
+      app.rest.post.mock.calls
+        .filter(([route]) => route === `/channels/${CHANNEL}/messages`)
+        .map(([, options]) => options?.body),
+    ).toEqual([
+      expect.objectContaining({ content: "first" }),
+      expect.objectContaining({ content: "second" }),
+    ]);
+  });
+  // Proves a fenced in-flight response cannot execute an action or present either private text or a fallback message.
+  it.each([
+    "private text",
+    "HTTP503",
+    call("react", { message_id: CURRENT, emoji: "x" }),
+  ])("abandons a response invalidated during HTTP: %s", async (content) => {
+    const app = await runtime(false, true);
+    app.complete.mockRestore();
+    app.config.llmTemperature = 0;
+    app.config.remoraObservationStartId = "1000000000000000000";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/capabilities"))
+          return Response.json(evidenceCapabilities);
+        app.store.invalidateConversationData();
+        if (content === "HTTP503")
+          return Response.json({ error: "invented failure" }, { status: 503 });
+        const batch: ObservationBatch = JSON.parse(String(init?.body)).remora
+          .observations;
+        const receipt = {
+          saved: [],
+          superseded: [],
+          status: "not_admitted",
+          replayed: false,
+          admission_identity: "a".repeat(64),
+        };
+        const attempt = `generation-${"a".repeat(32)}`;
+        return Response.json({
+          choices: [{ message: { content } }],
+          remora: {
+            version: 1,
+            backend: "transformers",
+            read_banks: [`discord:user:${HUMAN}`],
+            selected: [],
+            writes: null,
+            cache: {
+              requested: true,
+              reused_tokens: 0,
+              evaluated_tokens: 1,
+              invalidated: null,
+            },
+            observations: {
+              inputs: batch.inputs.map((input) => ({
+                source_id: input.id,
+                revision: input.revision,
+                outcome: "rejected",
+                receipt,
+              })),
+              generated: [
+                {
+                  source_id: `${attempt}:output`,
+                  revision: 0,
+                  outcome: "rejected",
+                  receipt,
+                },
+              ],
+              attempt_id: attempt,
+              input_replayed: false,
+            },
+          },
+        });
+      }),
+    );
+    await app.llm.initializeRemora();
+    await app.run([toConversationMessage(app.message, BOT)]);
+    expect(app.rest.put).not.toHaveBeenCalled();
+    expect(
+      app.rest.post.mock.calls.filter(([route]) => route.endsWith("/messages")),
+    ).toEqual([]);
+  });
+
+  // Proves native assistant dialogue stays literal while exact references and transformed chunks retain order and ancestry.
+  it("selects the final mixed assistant chunk as the indirect-answer context", async () => {
+    const app = await runtime(false, true);
+    const remora = buildRemoraRequest(app.config, app.message);
+    if (!remora) throw new Error("Missing scope");
+    const mapper = new ConversationObservations({
+      store: app.store,
+      remora,
+      message: app.message,
+      botUserId: BOT,
+      startId: "1000000000000000000",
+      limits: evidenceCapabilities.limits,
+    });
+    const tea = {
+      id: "generation-tea:output",
+      revision: 0,
+      text: 'Do you like "tea"?',
+    };
+    const coffee = {
+      id: "generation-coffee:output",
+      revision: 0,
+      text: "Do you like 😀 coffee?",
+    };
+    const base = toConversationMessage(app.message, BOT);
+    const old = {
+      ...base,
+      id: "1000000000000000021",
+      authorId: BOT,
+      authorIsBot: true,
+      content: tea.text,
+      source: { text: tea.text, revision: 0 },
+    };
+    const recent = {
+      ...old,
+      id: "1000000000000000022",
+      content: "Do you like coffee?",
+      source: { text: "Do you like coffee?", revision: 0 },
+    };
+    for (const [source, display] of [
+      [tea, old],
+      [coffee, recent],
+    ] as const) {
+      app.store.captureGeneration("", mapper.bank, source, true, mapper.epoch);
+      mapper.associate(display, source);
+    }
+    const rendered = formatTranscriptMessages(
+      buildTranscript([old, recent], BOT),
+      CURRENT,
+      (block) => mapper.humanSource(block),
+      (block) => mapper.assistantBody(block),
+    );
+    expect(rendered.find((item) => item.role === "assistant")?.content).toBe(
+      'Do you like "tea"?<|message_split|>Do you like coffee?',
+    );
+    const batch = mapper.request([
+      ...rendered,
+      mapper.currentMessage(),
+    ]).observations;
+    expect(
+      batch?.inputs.find((input) => input.id === `discord:message:${CURRENT}`)
+        ?.context,
+    ).toEqual([coffee.id]);
+  });
+
+  // Proves the atomiser learns who spoke, whom they answered and when, without labels becoming identity.
+  it("names speakers, reply targets and times when the backend supports labels", async () => {
+    const app = await runtime(false, true);
+    const remora = buildRemoraRequest(app.config, app.message);
+    if (!remora) throw new Error("Missing scope");
+    const mapper = new ConversationObservations({
+      store: app.store,
+      remora,
+      message: app.message,
+      botUserId: BOT,
+      startId: "1000000000000000000",
+      limits: {
+        ...evidenceCapabilities.limits,
+        max_observation_labels: 128,
+        max_observation_label_chars: 128,
+      },
+    });
+    const base = toConversationMessage(app.message, BOT);
+    const question = {
+      ...base,
+      id: "1000000000000000021",
+      authorId: "1000000000000000031",
+      authorName: "Noor\nthe​sister",
+      content: "who has the keys?",
+      source: { text: "who has the keys?", revision: 0 },
+      timestamp: new Date("2026-11-12T20:00:00Z"),
+    };
+    const answer = {
+      ...base,
+      id: "1000000000000000022",
+      content: "i do",
+      source: { text: "i do", revision: 0 },
+      timestamp: new Date("2026-11-12T20:01:00Z"),
+      replyTo: { channelId: base.channelId, messageId: question.id },
+    };
+    const transcript = buildTranscript([question, answer, base], BOT);
+    const rendered = formatTranscriptMessages(
+      transcript,
+      CURRENT,
+      (block) => mapper.humanSource(block),
+      (block) => mapper.assistantBody(block),
+    );
+    const current = transcript.blocks.find((block) => block.id === CURRENT);
+    if (current) mapper.noteSpeaker(current);
+    const batch = mapper.request([
+      ...rendered,
+      mapper.currentMessage(),
+    ]).observations;
+    const noor = {
+      bank: mapper.bank,
+      role: "human",
+      id: "discord:user:1000000000000000031",
+    };
+    const reply = batch?.inputs.find(
+      (input) => input.id === `discord:message:${answer.id}`,
+    );
+    expect(reply?.at).toBe("2026-11-12T20:01:00.000Z");
+    expect(reply?.replying_to).toEqual(noor);
+    expect(batch?.labels).toContainEqual({
+      actor: noor,
+      label: "Noor the sister",
+    });
+    expect(batch?.labels).toContainEqual({
+      actor: {
+        bank: mapper.bank,
+        role: "human",
+        id: `discord:user:${base.authorId}`,
+      },
+      label: base.authorName,
+    });
+    // Patch's own name is sent even though none of her messages are in view.
+    expect(batch?.labels).toContainEqual({
+      actor: {
+        bank: mapper.bank,
+        role: "assistant",
+        id: `discord:user:${BOT}`,
+      },
+      label: getBotIdentity().name,
+    });
+  });
+
+  // Proves marker text inside Patch's own sent message stays inert in history and claims no generated ancestry.
+  it("escapes a sent message split literal and leaves it unattributed", async () => {
+    const app = await runtime(false, true);
+    const remora = buildRemoraRequest(app.config, app.message);
+    if (!remora) throw new Error("Missing scope");
+    const mapper = new ConversationObservations({
+      store: app.store,
+      remora,
+      message: app.message,
+      botUserId: BOT,
+      startId: "1000000000000000000",
+      limits: evidenceCapabilities.limits,
+    });
+    const text = "the marker is `<|message_split|>`";
+    const generation = { id: "generation-literal:output", revision: 0, text };
+    const sent = {
+      ...toConversationMessage(app.message, BOT),
+      id: "1000000000000000021",
+      authorId: BOT,
+      authorIsBot: true,
+      content: text,
+      source: { text, revision: 0 },
+    };
+    app.store.captureGeneration(
+      "",
+      mapper.bank,
+      generation,
+      true,
+      mapper.epoch,
+    );
+    mapper.associate(sent, generation);
+
+    const assistant = formatTranscriptMessages(
+      buildTranscript([sent], BOT),
+      CURRENT,
+      (block) => mapper.humanSource(block),
+      (block) => mapper.assistantBody(block),
+    ).find((item) => item.role === "assistant");
+
+    expect(assistant?.content).toBe(
+      "the marker is `<|message_split_escaped|>`",
+    );
+    expect(assistant?.observationReferences).toEqual([]);
+    expect(assistant?.observationSources).toEqual([]);
+    expect(assistant?.observationUnknown).toEqual([
+      { start: 0, end: assistant?.content.length },
+    ]);
+  });
+
+  // Proves trusted edit versions retire local descendants even when new text is blank or no longer has a qualified raw parent.
+  it.each(["blank human", "changed display"] as const)(
+    "retires omitted source revisions: %s",
+    async (kind) => {
+      const app = await runtime(false, true);
+      const remora = buildRemoraRequest(app.config, app.message);
+      if (!remora) throw new Error("Missing scope");
+      const mapper = new ConversationObservations({
+        store: app.store,
+        remora,
+        message: app.message,
+        botUserId: BOT,
+        startId: "1000000000000000000",
+        limits: evidenceCapabilities.limits,
+      });
+      const id = "1000000000000000021";
+      const source = { id: `discord:message:${id}`, revision: 0 };
+      const parent = {
+        id: "generation-parent:output",
+        revision: 0,
+        text: "raw reply",
+      };
+      const child = {
+        id: "generation-child:output",
+        revision: 0,
+        text: "derived from the old view",
+      };
+      app.store.captureGeneration("", mapper.bank, parent, true, mapper.epoch);
+      app.store.captureGeneration("", mapper.bank, child, true, mapper.epoch, [
+        source,
+      ]);
+      const prior = {
+        ...toConversationMessage(app.message, BOT),
+        id,
+        authorId: kind === "blank human" ? HUMAN : BOT,
+        authorIsBot: kind !== "blank human",
+        content: "old",
+        source: { text: "old", revision: 0 },
+      };
+      if (kind === "changed display") mapper.associate(prior, parent);
+      const edited = {
+        ...prior,
+        content: kind === "blank human" ? "" : "edited",
+        source: { text: kind === "blank human" ? "" : "edited", revision: 1 },
+      };
+      const transcript = buildTranscript([edited], BOT);
+      formatTranscriptMessages(
+        transcript,
+        CURRENT,
+        (block) => mapper.humanSource(block),
+        (block) => mapper.assistantBody(block),
+      );
+      expect(app.store.generation("", mapper.bank, child.id)).toBeUndefined();
+    },
+  );
+  // Proves restored immutable dependencies cannot replace the latest visible assistant question as an indirect answer's context.
+  it("binds an indirect answer to visible dialogue after restoring older dependencies", async () => {
+    const app = await runtime(false, true);
+    const remora = buildRemoraRequest(app.config, app.message);
+    if (!remora) throw new Error("Missing scope");
+    const mapper = new ConversationObservations({
+      store: app.store,
+      remora,
+      message: app.message,
+      botUserId: BOT,
+      startId: "1000000000000000000",
+      limits: evidenceCapabilities.limits,
+    });
+    const older = {
+      id: "generation-older:output",
+      revision: 0,
+      text: "Do you like tea?",
+    };
+    const latest = {
+      id: "generation-latest:output",
+      revision: 0,
+      text: "Do you like coffee?",
+    };
+    for (const source of [older, latest])
+      app.store.captureGeneration("", mapper.bank, source, true, mapper.epoch);
+    const historical: LlmMessage = {
+      role: "user",
+      content: "a transformed old answer",
+      observationSources: [
+        {
+          source: {
+            id: "discord:message:1000000000000000001",
+            revision: 0,
+            origin: "unattributed_input",
+          },
+          start: 0,
+          end: 24,
+          context: [older.id],
+        },
+      ],
+      observationParents: [older],
+    };
+    mapper.request([historical]);
+    const visible: LlmMessage = {
+      role: "assistant",
+      content: latest.text,
+      observationReferences: [
+        {
+          source: latest,
+          start: 0,
+          end: latest.text.length,
+          source_start: 0,
+          source_end: latest.text.length,
+        },
+      ],
+    };
+    app.message.content = "yes, coffee";
+    const batch = mapper.request([
+      { ...historical, observationParents: [] },
+      visible,
+      mapper.currentMessage(),
+    ]).observations;
+    expect(
+      batch?.inputs.find((input) => input.id === `discord:message:${CURRENT}`)
+        ?.context,
+    ).toEqual([latest.id]);
+    expect(
+      batch?.inputs.find((input) => input.id.endsWith("0001"))?.context,
+    ).toEqual([older.id]);
+  });
+  // Proves full SYSTEM/tool coverage, every raw decoder attempt and actual formatted SDK display re-entry with dependent voice-preserving lineage.
+  it.each([
+    call("web_fetch", { url: "https://fictional-release.example/aurora" }),
+    "<tool_call>web_fetch{url:https://fictional-release.example/aurora}</tool_call>",
+  ])("re-enters a formatted web reply after %s", async (toolOutput) => {
+    const app = await runtime(false, true);
+    app.complete.mockRestore();
+    app.config.llmTemperature = 0;
+    app.config.remoraObservationStartId = "1000000000000000000";
+    app.config.llmMaxTokens = 256;
+    const bank = `discord:user:${HUMAN}`;
+    const history = [toConversationMessage(app.message, BOT)];
+    const sent: ReturnType<typeof app.packet>[] = [];
+    const originalGet = app.rest.get.getMockImplementation();
+    app.rest.get.mockImplementation(async (route, options) => {
+      const item = sent.find(
+        (item) => route === `/channels/${CHANNEL}/messages/${item.id}`,
+      );
+      return item ?? originalGet?.(route, options);
+    });
+    app.rest.post.mockImplementation(async (route, options) => {
+      if (!route.endsWith("/messages")) return undefined;
+      const item = app.packet(
+        `10000000000000000${20 + sent.length}`,
+        BOT,
+        String(
+          options?.body &&
+            typeof options.body === "object" &&
+            "content" in options.body
+            ? options.body.content
+            : "",
+        ),
+      );
+      sent.push(item);
+      return item;
+    });
+    const bodies: Array<{
+      messages: { role: string; content: string }[];
+      remora: { observations: ObservationBatch };
+    }> = [];
+    const outputs = [toolOutput, "😀 the page is clear", "yes, that page"];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/capabilities"))
+          return Response.json(evidenceCapabilities);
+        const body = JSON.parse(String(init?.body));
+        bodies.push(body);
+        const observations: ObservationBatch = body.remora.observations;
+        expect(body.remora.turn).toBeUndefined();
+        for (const [index, message] of body.messages.entries()) {
+          const occupied = [
+            ...observations.inputs.flatMap((input) => input.views),
+            ...(observations.references ?? []).flatMap(
+              (reference) => reference.views,
+            ),
+          ].filter((view) => view.message_index === index);
+          expect(
+            Array.from(message.content as string).every(
+              (char, offset) =>
+                !char.trim() ||
+                occupied.some(
+                  (view) => offset >= view.start && offset < view.end,
+                ),
+            ),
+          ).toBe(true);
+          expect(message.observationSources).toBeUndefined();
+          expect(message.observationReferences).toBeUndefined();
+          expect(message.observationUnknown).toBeUndefined();
+          expect(message.observationParents).toBeUndefined();
+        }
+        const receipt = {
+          saved: [],
+          superseded: [],
+          status: "not_admitted",
+          replayed: false,
+          admission_identity: "a".repeat(64),
+        };
+        const attempt = `generation-${String(bodies.length).repeat(32)}`;
+        return Response.json({
+          choices: [{ message: { content: outputs[bodies.length - 1] } }],
+          remora: {
+            version: 1,
+            backend: "transformers",
+            read_banks: [bank],
+            selected: [],
+            writes: null,
+            cache: {
+              requested: true,
+              reused_tokens: 0,
+              evaluated_tokens: 100,
+              invalidated: null,
+            },
+            observations: {
+              inputs: [
+                ...observations.inputs.map((input) => ({
+                  source_id: input.id,
+                  revision: input.revision,
+                  outcome: "rejected",
+                  receipt,
+                })),
+                ...(observations.references ?? []).map((input) => ({
+                  source_id: input.id,
+                  revision: input.revision,
+                  outcome: "referenced",
+                  receipt: { ...receipt, replayed: true },
+                })),
+              ],
+              generated: [
+                {
+                  source_id: `${attempt}:output`,
+                  revision: 0,
+                  outcome: "rejected",
+                  receipt,
+                },
+              ],
+              attempt_id: attempt,
+              input_replayed: false,
+            },
+          },
+        });
+      }),
+    );
+    await app.llm.initializeRemora();
+    await app.run(history);
+    expect(bodies).toHaveLength(2);
+    expect(
+      app.store.generation(
+        observationNamespace(app.config.llmBaseUrl, app.config.llmApiKey),
+        bank,
+        `generation-${"1".repeat(32)}:output`,
+      )?.text,
+    ).toBe(toolOutput);
+    expect(
+      bodies[1]?.remora.observations.inputs
+        .filter((input) => input.origin === "external_observation")
+        .map((input) => input.url),
+    ).toEqual([
+      "https://fictional-release.example/aurora",
+      "https://fictional-release.example/aurora",
+    ]);
+    expect(
+      bodies[0]?.remora.observations.inputs.some(
+        (input) =>
+          input.origin === "system_input" &&
+          input.views.some((view) => view.message_index === 0),
+      ),
+    ).toBe(true);
+    expect(sent[0]?.content).toContain(
+      "\n-# [fictional-release.example](https://fictional-release.example/aurora)",
+    );
+    expect(sent[0]?.content).not.toContain("😀");
+    const adapter = new DiscordJsAdapter(app.client, BOT);
+    const displayed = await adapter.fetchMessage({
+      channelId: CHANNEL,
+      messageId: sent[0]?.id ?? "",
+    });
+    app.message.id = "1000000000000000030";
+    app.message.content = "what did that page say?";
+    await app.run([
+      ...history,
+      displayed,
+      toConversationMessage(app.message, BOT),
+    ]);
+    expect(bodies).toHaveLength(3);
+    const third = bodies[2]?.remora.observations;
+    const derived = third?.inputs.find(
+      (input) => input.id === `discord:message:${displayed.id}`,
+    );
+    expect(derived).toMatchObject({
+      origin: "unattributed_input",
+      context: [`generation-${"2".repeat(32)}:output`],
+    });
+    expect(derived?.actor).toBeUndefined();
+    expect(third?.references).toContainEqual({
+      id: `generation-${"2".repeat(32)}:output`,
+      revision: 0,
+      text: outputs[1],
+      views: [],
+    });
+  });
+
+  // Proves the real responder negotiates evidence, binds raw SDK text and web excerpts, and never sends caller metadata or legacy writes over HTTP.
+  it("observes raw human and web sources through the real tool continuation", async () => {
+    const app = await runtime(false, true);
+    app.complete.mockRestore();
+    app.config.llmTemperature = 0;
+    app.config.remoraObservationStartId = "1000000000000000000";
+    app.message.content = `  <@${BOT}> A😀 & <response>raw</response>\r\n`;
+    const bank = `discord:user:${HUMAN}`;
+    const requests: Array<{
+      messages: Array<{ role: string; content: string }>;
+      remora: { observations: ObservationBatch; read_banks: string[] };
+    }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/capabilities"))
+          return Response.json(evidenceCapabilities);
+        expect(url).toBe("http://remora.test/v1/chat/completions");
+        const body = JSON.parse(String(init?.body));
+        requests.push(body);
+        const attempt = `generation-${String(requests.length).repeat(32)}`;
+        return Response.json({
+          choices: [
+            {
+              message: {
+                content:
+                  requests.length === 1
+                    ? call("web_fetch", { url: "https://example.com/" })
+                    : "found that page",
+              },
+            },
+          ],
+          remora: {
+            version: 1,
+            backend: "transformers",
+            read_banks: [bank],
+            selected: [],
+            writes: null,
+            cache: {
+              requested: true,
+              reused_tokens: 0,
+              evaluated_tokens: 100,
+              invalidated: null,
+            },
+            observations: {
+              inputs: body.remora.observations.inputs.map(
+                (input: { id: string; revision: number }) => ({
+                  source_id: input.id,
+                  revision: input.revision,
+                  outcome: "rejected",
+                  receipt: {
+                    saved: [],
+                    superseded: [],
+                    status: "not_admitted",
+                    replayed: false,
+                    admission_identity: "a".repeat(64),
+                  },
+                }),
+              ),
+              generated: [
+                {
+                  source_id: `${attempt}:output`,
+                  revision: 0,
+                  outcome: "untracked_dependencies",
+                  receipt: {
+                    saved: [],
+                    superseded: [],
+                    status: "not_admitted",
+                    replayed: false,
+                    admission_identity: null,
+                  },
+                },
+              ],
+              attempt_id: attempt,
+              input_replayed: false,
+            },
+          },
+        });
+      }),
+    );
+    await app.llm.initializeRemora();
+    await app.run();
+    expect(requests).toHaveLength(2);
+    for (const request of requests) {
+      expect(request.remora).not.toHaveProperty("turn");
+      expect(request.remora).not.toHaveProperty("write_bank");
+      expect(request.remora).not.toHaveProperty("identity");
+      expect(
+        request.messages.every(
+          (message) => !Object.hasOwn(message, "observationSources"),
+        ),
+      ).toBe(true);
+      expect(
+        request.messages.filter(
+          (m) => m.content === `Mia [Mia]: ${app.message.content}`,
+        ),
+      ).toHaveLength(1);
+      const human = request.remora.observations.inputs.find(
+        (input) => input.id === `discord:message:${CURRENT}`,
+      );
+      expect(human).toMatchObject({
+        origin: "human_input",
+        actor: { bank, role: "human", id: `discord:user:${HUMAN}` },
+      });
+      expect(
+        request.remora.observations.inputs.some(
+          (input) => input.origin === "assistant_output",
+        ),
+      ).toBe(false);
+    }
+    const second = requests[1];
+    const external =
+      second?.remora.observations.inputs.filter(
+        (input) => input.origin === "external_observation",
+      ) ?? [];
+    expect(external).toHaveLength(2);
+    expect(
+      external.every(
+        (input) =>
+          input.tool === "web_fetch" &&
+          input.url === "https://example.com/" &&
+          !input.actor,
+      ),
+    ).toBe(true);
+    const excerpts = external.flatMap((input) =>
+      input.views.map((view) =>
+        decodeObservationView(
+          Array.from(second?.messages[view.message_index]?.content ?? "")
+            .slice(view.start, view.end)
+            .join(""),
+          view.encoding,
+        ),
+      ),
+    );
+    expect(excerpts).toContain("A real fixture page.");
+    expect(
+      external.every((input) =>
+        input.context?.includes(`discord:message:${CURRENT}`),
+      ),
+    ).toBe(true);
+    expect(requests[0]?.remora.observations.id).not.toBe(
+      second?.remora.observations.id,
+    );
+    expect(
+      app.rest.post.mock.calls.filter(([route]) => route.endsWith("/messages")),
+    ).toHaveLength(1);
+  });
+
+  // Proves raw and escaped views remain one source, context manifests survive rerendering, and missing original dependencies cannot silently change them.
+  it("reuses exact history identities and omits sources with changed original context", async () => {
+    const app = await runtime(false, true);
+    const remora = buildRemoraRequest(app.config, app.message);
+    if (!remora) throw new Error("Missing fixture memory scope");
+    const mapper = new ConversationObservations({
+      store: app.store,
+      remora,
+      message: app.message,
+      botUserId: BOT,
+      startId: "1000000000000000000",
+      limits: evidenceCapabilities.limits,
+    });
+    const raw = `  <@${BOT}> A😀 & <response>hi</response>\r\n`;
+    const current = toConversationMessage(app.message, BOT);
+    const older: ConversationMessage = {
+      ...current,
+      id: "1000000000000000001",
+      content: "normalized",
+      source: { text: raw, revision: 10 },
+    };
+    const transcript = buildTranscript([older, current], BOT);
+    const history = formatTranscriptMessages(transcript, CURRENT, (block) =>
+      mapper.humanSource(block),
+    );
+    const first = mapper.request([...history, mapper.currentMessage()]);
+    expect(
+      first.observations?.inputs.filter(
+        (input) => input.origin === "human_input",
+      ),
+    ).toHaveLength(2);
+    const olderInput = first.observations?.inputs.find(
+      (input) => input.id === `discord:message:${older.id}`,
+    );
+    const view = olderInput?.views[0];
+    if (!view) throw new Error("Missing source view");
+    expect(
+      decodeObservationView(
+        Array.from(history[view.message_index]?.content ?? "")
+          .slice(view.start, view.end)
+          .join(""),
+        view.encoding,
+      ),
+    ).toBe(raw);
+    expect(
+      first.observations?.inputs.find(
+        (input) => input.id === `discord:message:${CURRENT}`,
+      )?.context,
+    ).toEqual([`discord:message:${older.id}`]);
+    const rerendered = formatTranscriptMessages(
+      buildTranscript([{ ...older, authorName: "renamed 😀" }, current], BOT),
+      CURRENT,
+      (block) => mapper.humanSource(block),
+    );
+    const renamed = mapper.request([...rerendered, mapper.currentMessage()]);
+    expect(
+      renamed.observations?.inputs
+        .filter((input) => input.origin === "human_input")
+        .map(({ views: _, ...input }) => input),
+    ).toEqual(
+      first.observations?.inputs
+        .filter((input) => input.origin === "human_input")
+        .map(({ views: _, ...input }) => input),
+    );
+    expect(
+      mapper.request([
+        { role: "user", content: "\n" },
+        ...history,
+        mapper.currentMessage(),
+      ]).observations?.id,
+    ).toBe(first.observations?.id);
+    expect(
+      mapper.request([mapper.currentMessage()]).observations?.inputs,
+    ).toEqual([]);
+    const revised = new ConversationObservations({
+      store: app.store,
+      remora,
+      message: app.message,
+      botUserId: BOT,
+      startId: "1000000000000000000",
+      limits: evidenceCapabilities.limits,
+    });
+    const edited = formatTranscriptMessages(
+      buildTranscript(
+        [{ ...older, source: { text: "changed", revision: 11 } }, current],
+        BOT,
+      ),
+      CURRENT,
+      (block) => revised.humanSource(block),
+    );
+    expect(() => mapper.request([...edited, mapper.currentMessage()])).toThrow(
+      "source revision",
+    );
+    expect(
+      revised
+        .request([...edited, revised.currentMessage()])
+        .observations?.inputs.filter((input) => input.origin === "human_input")
+        .map((input) => input.id),
+    ).toEqual([`discord:message:${older.id}`]);
+  });
+
+  // Proves a fresh post-reset human source does not inherit an unavailable historical context chain.
+  it("admits a fresh source independently of omitted historical dependencies", async () => {
+    const app = await runtime(false, true);
+    const remora = buildRemoraRequest(app.config, app.message);
+    if (!remora) throw new Error("Missing fixture memory scope");
+    const options = {
+      store: app.store,
+      remora,
+      message: app.message,
+      botUserId: BOT,
+      startId: "1000000000000000000",
+      limits: evidenceCapabilities.limits,
+    };
+    const mapper = new ConversationObservations(options);
+    const first = mapper.request([mapper.currentMessage()]);
+    const old = toConversationMessage(app.message, BOT);
+    // A second turn freezes the first source as its context.
+    app.message.id = "1000000000000000010";
+    app.message.content = "second turn";
+    const second = new ConversationObservations({
+      ...options,
+      remora: buildRemoraRequest(app.config, app.message) ?? remora,
+    });
+    const secondHistory = formatTranscriptMessages(
+      buildTranscript([old], BOT),
+      app.message.id,
+      (block) => second.humanSource(block),
+    );
+    expect(
+      second
+        .request([...secondHistory, second.currentMessage()])
+        .observations?.inputs.find(
+          (input) => input.id === `discord:message:${app.message.id}`,
+        )?.context,
+    ).toEqual([first.observations?.inputs[0]?.id]);
+    const middle = toConversationMessage(app.message, BOT);
+    // A rollover removes the first turn, so the second cannot replay its exact original context.
+    app.message.id = "1000000000000000011";
+    app.message.content = "an independent new detail";
+    const third = new ConversationObservations({
+      ...options,
+      remora: buildRemoraRequest(app.config, app.message) ?? remora,
+    });
+    const recentHistory = formatTranscriptMessages(
+      buildTranscript([middle], BOT),
+      app.message.id,
+      (block) => third.humanSource(block),
+    );
+    const result = third.request([...recentHistory, third.currentMessage()]);
+    expect(
+      result.observations?.inputs
+        .filter((input) => input.origin === "human_input")
+        .map((input) => ({
+          id: input.id,
+          context: input.context,
+        })),
+    ).toEqual([{ id: `discord:message:${app.message.id}`, context: [] }]);
+  });
+
+  // Proves pre-cutover edits, foreign-channel history and transformed assistant display cannot become independent evidence.
+  it("requires a cutover and excludes old or unqualified history", async () => {
+    const app = await runtime(false, true);
+    const remora = buildRemoraRequest(app.config, app.message);
+    if (!remora) throw new Error("Missing fixture memory scope");
+    const options = {
+      store: app.store,
+      remora,
+      message: app.message,
+      botUserId: BOT,
+      limits: evidenceCapabilities.limits,
+    };
+    expect(
+      () => new ConversationObservations({ ...options, startId: "" }),
+    ).toThrow("REMORA_OBSERVATION_START_ID");
+    const mapper = new ConversationObservations({
+      ...options,
+      startId: CURRENT,
+    });
+    const human = toConversationMessage(app.message, BOT);
+    const { source: _, ...withoutSource } = human;
+    for (const row of [
+      {
+        ...human,
+        source: { text: "an old message edited today", revision: 200 },
+      },
+      { ...human, id: PREVIOUS, channelId: "foreign" },
+      { ...human, id: PREVIOUS, authorId: BOT, authorIsBot: true },
+      { ...withoutSource, id: PREVIOUS },
+    ]) {
+      const block = buildTranscript([row], BOT).blocks[0];
+      if (!block) throw new Error("Missing fixture block");
+      expect(mapper.humanSource(block)).toBeUndefined();
+    }
+    expect(
+      mapper.request([mapper.currentMessage()]).observations?.inputs,
+    ).toEqual([]);
+    expect(
+      () => new ConversationObservations({ ...options, startId: "1" }),
+    ).toThrow("durable bank boundary");
+  });
+
+  // Proves regrouping exchanges preserves the original external source IDs and generated-call dependencies.
+  it("keeps result provenance when exchanges become summaries", () => {
+    const results = [
+      {
+        name: "web_fetch",
+        completed: true,
+        output: { text: "one", url: "https://one.test/" },
+      },
+      {
+        name: "web_fetch",
+        completed: true,
+        output: { text: "two😀", url: "https://two.test/" },
+      },
+    ];
+    const parents = [
+      { id: "generation-one:output", revision: 0, text: "raw call one" },
+      { id: "generation-two:output", revision: 0, text: "raw call two" },
+    ];
+    const summary = toolResultMessage(results, "summary\n", "turn", parents);
+    const second = toolResultMessage(
+      results.slice(1),
+      "second\n",
+      "turn",
+      parents.slice(1),
+      1,
+    );
+    expect(second.observationParents).toEqual([parents[1]]);
+    for (const segment of second.observationSources ?? []) {
+      expect(segment.source.origin).toBe("external_observation");
+      expect(segment.context).toEqual([parents[1]?.id]);
+      expect(summary.observationSources).toContainEqual(
+        expect.objectContaining({
+          source: segment.source,
+          context: segment.context,
+        }),
+      );
+    }
+  });
+
+  // Proves a web page cannot inject a message boundary token while its bound source view still decodes exactly.
+  it("escapes message split literals in tool JSON without changing source text", () => {
+    const text = "page <|message_split|> text";
+    const rendered = toolResultMessage(
+      [
+        {
+          name: "web_fetch",
+          completed: true,
+          output: { text, url: "https://page.test/" },
+        },
+      ],
+      "",
+      "turn-1",
+    );
+
+    expect(rendered.content).not.toContain("<|message_split|>");
+    expect(
+      (rendered.observationSources ?? []).map((segment) =>
+        decodeObservationView(
+          rendered.content.slice(segment.start, segment.end),
+          segment.encoding,
+        ),
+      ),
+    ).toContain(text);
+  });
+
+  // Proves duplicate snippets retain their own URL, while recalled facts, replayable scratch data and truncated receipts stay untracked.
+  it("binds tool JSON values by path rather than matching their text", () => {
+    const results = [
+      {
+        name: "web_search",
+        completed: true,
+        output: {
+          results: [
+            { title: "same", snippet: "same😀", url: "https://one.test/" },
+            { title: "same", snippet: "same😀", url: "https://two.test/" },
+          ],
+        },
+      },
+      {
+        name: "memory_search",
+        completed: true,
+        output: { text: "same😀", url: "https://forbidden.test/" },
+      },
+      {
+        name: "scratch_read",
+        completed: true,
+        output: { text: "same😀", url: "https://forbidden.test/" },
+      },
+      {
+        name: "web_fetch",
+        completed: true,
+        truncated: true,
+        output: { text: "partial", url: "https://forbidden.test/" },
+      },
+    ];
+    const rendered = toolResultMessage(results, "prefix😀\n", "turn-1");
+    expect(rendered.content).toBe(`prefix😀\n${JSON.stringify(results)}`);
+    const segments = rendered.observationSources ?? [];
+    expect(segments).toHaveLength(6);
+    expect(new Set(segments.map(({ source }) => source.id)).size).toBe(6);
+    expect(segments.map(({ source }) => source.url)).toEqual([
+      "https://one.test/",
+      "https://one.test/",
+      "https://one.test/",
+      "https://two.test/",
+      "https://two.test/",
+      "https://two.test/",
+    ]);
+    expect(
+      segments.map((segment) =>
+        decodeObservationView(
+          rendered.content.slice(segment.start, segment.end),
+          segment.encoding,
+        ),
+      ),
+    ).toEqual([
+      "same",
+      "same😀",
+      "https://one.test/",
+      "same",
+      "same😀",
+      "https://two.test/",
+    ]);
+  });
+
+  // Proves an opted-in shared conversation uses channel/server recall, never private extras, with source-bound roles and tools intact.
+  it("uses shared banks and preserves speakers in the configured guild channel", async () => {
+    const app = await runtime(true, true);
+    app.config.discordTrialDmChannelId = "1000000000000000090";
+    app.config.discordTrialGuild = { guildId: GUILD, channelIds: [CHANNEL] };
+    app.config.remoraReadBanks = ["discord:dm:private"];
+    app.complete
+      .mockResolvedValueOnce({
+        content: call("web_fetch", { url: "https://example.com/" }),
+      })
+      .mockResolvedValueOnce({ content: "found that page" });
+    const current = toConversationMessage(app.message, BOT);
+    await app.run([
+      {
+        ...current,
+        id: "1000000000000000008",
+        authorId: "1000000000000000009",
+        authorName: "Robin",
+        content: "I play cello.",
+        source: { text: "I play cello.", revision: 0 },
+      },
+      {
+        ...current,
+        id: PREVIOUS,
+        authorId: BOT,
+        authorName: "Patch",
+        authorIsBot: true,
+        content: "that's cool",
+      },
+      current,
+    ]);
+    const first = app.complete.mock.calls[0]?.[0];
+    expect(first?.remora).toEqual({
+      read_banks: [`discord:channel:${CHANNEL}`, `discord:guild:${GUILD}`],
+      write_bank: `discord:channel:${CHANNEL}`,
+      turn: {
+        id: `discord:message:${CURRENT}`,
+        revision: 0,
+        speaker_id: `discord:user:${HUMAN}`,
+        text: "look that up",
+      },
+    });
+    expect(first?.messages.at(-1)).toEqual({
+      role: "user",
+      content: "look that up",
+    });
+    expect(first?.messages).toContainEqual({
+      role: "assistant",
+      content: "that's cool",
+    });
+    expect(
+      first?.messages.some(
+        (message) =>
+          message.role === "user" &&
+          message.content === "Robin [Mia]: I play cello.",
+      ),
+    ).toBe(true);
+    const second = app.complete.mock.calls[1]?.[0];
+    expect(second?.remora?.read_banks).toEqual(first?.remora?.read_banks);
+    expect(second?.remora?.write_bank).toBeUndefined();
+    expect(second?.remora?.turn).toBeUndefined();
+    expect(
+      second?.messages.some((message) =>
+        message.content.includes("A real fixture page."),
+      ),
+    ).toBe(true);
+    expect(
+      app.rest.post.mock.calls.filter(([route]) => route.endsWith("/messages")),
+    ).toHaveLength(1);
+  });
+
+  // Proves explicit recall returns qualified facts through the model loop without rewriting the human source or widening selected banks.
+  it("searches caller-selected banks through Protocord and continues read-only", async () => {
+    const app = await runtime(false, true);
+    app.config.remoraReadBanks = ["place:extra"];
+    const contract: {
+      capabilities_example: ReturnType<typeof parseRemoraCapabilities>;
+    } = JSON.parse(
+      readFileSync(
+        new URL("../../spec/fixtures/remora-contract-v1.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    await app.memory.initialize(
+      parseRemoraCapabilities({
+        ...contract.capabilities_example,
+        features: {
+          ...contract.capabilities_example.features,
+          memory_search: true,
+        },
+        limits: {
+          ...contract.capabilities_example.limits,
+          max_search_results: 2,
+          max_search_banks: 2,
+          max_search_query_chars: 2048,
+          max_search_query_tokens: 256,
+        },
+      }),
+    );
+    const bank = `discord:user:${HUMAN}`;
+    const marker = `@{${"a".repeat(64)}}`;
+    const hit = {
+      bank,
+      id: 2,
+      text: `${marker} has a dog named Aster.`,
+      kind: "fact",
+      source: "user",
+      subjects: { [marker]: { principal: "test", entity: "another-person" } },
+      source_actor: {
+        principal: "test",
+        actor: { bank, role: "human", id: "original-speaker" },
+      },
+      score: 0.8,
+    };
+    const request = vi.fn(async (_url: string, _init: RequestInit) =>
+      Response.json({
+        object: "remora.memory.search",
+        version: 1,
+        query: "dog ownership",
+        read_banks: [bank, "place:extra"],
+        data: [hit],
+        revisions: { [bank]: "a".repeat(64), "place:extra": "b".repeat(64) },
+      }),
+    );
+    vi.stubGlobal("fetch", request);
+    app.complete
+      .mockResolvedValueOnce({
+        content: call("memory_search", { query: "dog ownership" }),
+      })
+      .mockResolvedValueOnce({ content: "found the ownership record" });
+    await app.run();
+    expect(request.mock.calls[0]).toEqual([
+      "http://remora.test/v1/remora/memories/search",
+      expect.objectContaining({ method: "POST" }),
+    ]);
+    expect(JSON.parse(String(request.mock.calls[0]?.[1].body))).toEqual({
+      query: "dog ownership",
+      read_banks: [bank, "place:extra"],
+      limit: 2,
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    const second = app.complete.mock.calls[1]?.[0];
+    expect(app.complete.mock.calls[0]?.[0].remora?.turn?.text).toBe(
+      "look that up",
+    );
+    expect(second?.remora?.turn).toBeUndefined();
+    expect(second?.remora?.write_bank).toBeUndefined();
+    expect(second?.messages).toContainEqual({
+      role: "user",
+      content: "look that up",
+    });
+    expect(second?.messages.at(-1)?.content).toContain("Harness tool results");
+    const results = second?.messages
+      .find((message) => message.content.startsWith("Harness tool results"))
+      ?.content.split("\n")
+      .slice(1)
+      .join("\n");
+    expect(JSON.parse(results ?? "[]")[0]?.output.data).toEqual([hit]);
+  });
+
+  // Proves absent capability, absent scope and model-provided bank arguments cannot reach the recall endpoint.
+  it.each(["disabled", "no_scope", "widen"] as const)(
+    "blocks memory search for %s",
+    async (failure) => {
+      const app = await runtime(false, failure !== "no_scope");
+      const contract: {
+        capabilities_example: ReturnType<typeof parseRemoraCapabilities>;
+      } = JSON.parse(
+        readFileSync(
+          new URL(
+            "../../spec/fixtures/remora-contract-v1.json",
+            import.meta.url,
+          ),
+          "utf8",
+        ),
+      );
+      await app.memory.initialize(
+        parseRemoraCapabilities({
+          ...contract.capabilities_example,
+          features: {
+            ...contract.capabilities_example.features,
+            memory_search: failure !== "disabled",
+          },
+          limits: {
+            ...contract.capabilities_example.limits,
+            max_search_results: 2,
+            max_search_banks: 2,
+            max_search_query_chars: 2048,
+            max_search_query_tokens: 256,
+          },
+        }),
+      );
+      const request = vi.fn();
+      vi.stubGlobal("fetch", request);
+      app.complete.mockResolvedValue({
+        content: call("memory_search", {
+          query: "dog ownership",
+          ...(failure === "widen"
+            ? { read_banks: ["another-persons-bank"] }
+            : {}),
+        }),
+      });
+      await app.run();
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+  // Proves plain model output stays ordinary in guilds, while an explicit reply targets the message being answered without pinging.
+  it.each([false, true])(
+    "opts into a reply only when requested: %s",
+    async (reply) => {
+      const app = await runtime(true);
+      app.complete.mockResolvedValue({
+        content: `${reply ? "<reply />\n" : ""}yeah, exactly`,
+      });
+      await app.run();
+      const sent = app.rest.post.mock.calls.find(
+        ([route]) => route === `/channels/${CHANNEL}/messages`,
+      );
+      expect(sent?.[1]?.body).toMatchObject({
+        content: "yeah, exactly",
+        allowed_mentions: { replied_user: false },
+        enforce_nonce: true,
+        nonce: expect.any(String),
+      });
+      if (reply)
+        expect(sent?.[1]?.body).toHaveProperty(
+          "message_reference.message_id",
+          CURRENT,
+        );
+      else
+        expect(JSON.parse(JSON.stringify(sent?.[1]?.body))).not.toHaveProperty(
+          "message_reference",
+        );
+    },
+  );
+
+  // Proves reaction-only turns preserve emoji, send no extra text, and retry without a second Discord mutation.
+  it("reacts silently and replays an already completed action", async () => {
+    const app = await runtime();
+    app.complete.mockResolvedValue({
+      content: call("react", { message_id: CURRENT, emoji: "😂" }),
+    });
+    await app.run();
+    await app.run();
+    expect(app.rest.put).toHaveBeenCalledTimes(1);
+    expect(app.rest.put.mock.calls[0]?.[0]).toContain("%F0%9F%98%82");
+    expect(
+      app.rest.post.mock.calls.filter(([route]) => route.endsWith("/messages")),
+    ).toHaveLength(0);
+  });
+
+  // Proves text after an action passes the link check, and its rewrite never repeats the action.
+  it("withholds a dead link after a reaction and rewrites without reacting again", async () => {
+    const app = await runtime();
+    missingHost();
+    app.complete
+      .mockResolvedValueOnce({
+        content: `${call("react", { message_id: CURRENT, emoji: "😂" })}here: https://dead.example/song`,
+      })
+      .mockResolvedValueOnce({ content: "can't find that song" });
+    await app.run();
+    expect(app.rest.put).toHaveBeenCalledTimes(1);
+    expect(
+      app.rest.post.mock.calls
+        .filter(([route]) => route.endsWith("/messages"))
+        .map(
+          ([, options]) => JSON.parse(JSON.stringify(options?.body)).content,
+        ),
+    ).toEqual(["can't find that song"]);
+    expect(JSON.stringify(app.complete.mock.calls[1]?.[0].messages)).toContain(
+      "https://dead.example/song",
+    );
+  });
+
+  // Proves a source rejected in the model's draft is not re-attached to its rewrite.
+  it("does not append a rejected source after the rewrite removes it", async () => {
+    const app = await runtime();
+    const url = "https://fictional-release.example/aurora";
+    app.complete
+      .mockResolvedValueOnce({ content: call("web_fetch", { url }) })
+      .mockImplementationOnce(async () => {
+        missingHost();
+        return { content: `read it here: ${url}` };
+      })
+      .mockResolvedValueOnce({ content: "that page has gone missing" });
+    await app.run();
+    expect(app.complete).toHaveBeenCalledTimes(3);
+    expect(
+      app.rest.post.mock.calls
+        .filter(([route]) => route.endsWith("/messages"))
+        .map(
+          ([, options]) => JSON.parse(JSON.stringify(options?.body)).content,
+        ),
+    ).toEqual(["that page has gone missing"]);
+  });
+
+  // Proves authorship protection remains in force even when a model requests an edit.
+  it("refuses editing a human message and can delete Patch's own visible message", async () => {
+    const app = await runtime();
+    app.complete
+      .mockResolvedValueOnce({
+        content: call("edit_message", {
+          message_id: CURRENT,
+          text: "rewritten",
+        }),
+      })
+      .mockResolvedValueOnce({ content: "i can't edit your message" });
+    await app.run();
+    expect(app.rest.patch).not.toHaveBeenCalled();
+    app.complete.mockResolvedValue({
+      content: call("delete_message", { message_id: PREVIOUS }),
+    });
+    await app.run();
+    expect(app.rest.delete).toHaveBeenCalledWith(
+      `/channels/${CHANNEL}/messages/${PREVIOUS}`,
+    );
+  });
+
+  // Proves native duplicate reads retain distinct call IDs and both paired results.
+  it("keeps native same-batch read behavior unchanged", async () => {
+    const app = await runtime();
+    if (!app.harness) throw new Error("Missing harness");
+    app.config.llmToolMode = "native";
+    const read = vi.spyOn(app.harness.web, "fetch");
+    app.complete
+      .mockResolvedValueOnce({
+        content: "",
+        toolCalls: ["first", "second"].map((id) => ({
+          id,
+          type: "function" as const,
+          name: "web_fetch",
+          arguments: '{"url":"https://example.com/"}',
+        })),
+      })
+      .mockResolvedValueOnce({ content: "found it" });
+    await app.run();
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(
+      app.complete.mock.calls[1]?.[0].messages
+        .filter((m) => m.role === "tool")
+        .map((m) => m.tool_call_id),
+    ).toEqual(["first", "second"]);
+  });
+
+  // Proves native tool selection receives properly paired native result messages.
+  it("continues native read tools with their exact call IDs", async () => {
+    const app = await runtime();
+    app.config.llmToolMode = "native";
+    app.complete
+      .mockResolvedValueOnce({
+        content: "",
+        toolCalls: [
+          {
+            id: "call-real-id",
+            type: "function",
+            name: "web_fetch",
+            arguments: '{"url":"https://example.com/"}',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ content: "found it" });
+    await app.run();
+    const messages = app.complete.mock.calls[1]?.[0].messages;
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        tool_calls: [expect.objectContaining({ id: "call-real-id" })],
+      }),
+    );
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "tool",
+        tool_call_id: "call-real-id",
+        content: expect.stringContaining("A real fixture page."),
+      }),
+    );
+  });
+
+  // Proves an uncertain mutation cannot repeat even when generation for the same turn is retried.
+  it("reports uncertain reactions without repeating the Discord request", async () => {
+    const app = await runtime();
+    app.rest.put.mockRejectedValue(
+      new Error("connection closed after acceptance"),
+    );
+    const reaction = call("react", { message_id: CURRENT, emoji: "😂" });
+    app.complete
+      .mockResolvedValueOnce({ content: reaction })
+      .mockResolvedValueOnce({ content: "couldn't confirm that reaction" })
+      .mockResolvedValueOnce({ content: reaction })
+      .mockResolvedValueOnce({ content: "still can't confirm it" });
+    await app.run();
+    await app.run();
+    expect(app.rest.put).toHaveBeenCalledTimes(1);
+    expect(
+      app.complete.mock.calls[3]?.[0].messages.some((message) =>
+        message.content.includes("uncertain"),
+      ),
+    ).toBe(true);
+  });
+
+  // Proves a cancellation arriving during target lookup prevents the later Discord mutation.
+  it("does not react after cancellation during channel lookup", async () => {
+    const app = await runtime();
+    const controller = new AbortController();
+    const channel = await app.client.channels.fetch(CHANNEL);
+    vi.spyOn(app.client.channels, "fetch").mockImplementation(async () => {
+      controller.abort();
+      return channel;
+    });
+    await expect(
+      runToolTurn({
+        messages: [{ role: "user", content: "react" }],
+        generate: async () => ({
+          content: call("react", { message_id: CURRENT, emoji: "😂" }),
+        }),
+        registry: app.registry,
+        context: app,
+        message: app.message,
+        visibleMessageIds: new Set([CURRENT]),
+        allowedTools: new Set(["react"]),
+        maxCalls: 1,
+        maxInputChars: 16_000,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow();
+    expect(app.rest.put).not.toHaveBeenCalled();
+  });
+
+  // Proves long native tool arguments cannot accumulate beyond the conversation plus tool budget.
+  it("prunes completed native exchanges before their arguments overflow context", async () => {
+    const app = await runtime();
+    app.config.llmToolMode = "native";
+    app.config.llmContextTokens = 9_216;
+    app.config.llmToolContextTokens = 512;
+    app.config.llmMaxTokens = 2048;
+    const sizes: number[] = [];
+    const callIds: string[][] = [];
+    let turn = 0;
+    app.complete.mockImplementation(async (request) => {
+      sizes.push(
+        Math.ceil(
+          (request.messages.reduce(
+            (sum, message) =>
+              sum +
+              message.content.length +
+              JSON.stringify(message.tool_calls ?? []).length,
+            0,
+          ) +
+            JSON.stringify(request.tools).length) /
+            4,
+        ) +
+          1024 +
+          2048,
+      );
+      callIds.push(
+        request.messages.flatMap(
+          (message) => message.tool_calls?.map((call) => call.id) ?? [],
+        ),
+      );
+      turn++;
+      return turn > 3
+        ? { content: "saved the notes" }
+        : {
+            content: "",
+            toolCalls: [
+              {
+                id: `write-${turn}`,
+                type: "function",
+                name: "scratch_write",
+                arguments: JSON.stringify({
+                  path: `note-${turn}.md`,
+                  text: "x".repeat(6000),
+                  expected_revision: null,
+                }),
+              },
+            ],
+          };
+    });
+    await app.run();
+    expect(app.complete).toHaveBeenCalledTimes(4);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(9_216 + 512);
+    expect(callIds[3]?.length).toBeLessThan(3);
+    expect(app.store.listNotes(CHANNEL)).toHaveLength(3);
+  });
+
+  // Proves successful edits preserve text but cannot ping users or roles through it.
+  it("edits its own visible message without enabling mentions", async () => {
+    const app = await runtime();
+    app.complete.mockResolvedValue({
+      content: call("edit_message", {
+        message_id: PREVIOUS,
+        text: "fixed @everyone",
+      }),
+    });
+    await app.run();
+    expect(app.rest.patch).toHaveBeenCalledWith(
+      `/channels/${CHANNEL}/messages/${PREVIOUS}`,
+      expect.objectContaining({
+        body: expect.objectContaining({
+          content: "fixed @everyone",
+          allowed_mentions: expect.objectContaining({ parse: [] }),
+        }),
+      }),
+    );
+  });
+
+  // Proves tools work without visible IDs: reactions hit the message being answered, deletion hits Patch's latest message.
+  it("defaults omitted message IDs to the current and own latest message", async () => {
+    const app = await runtime();
+    app.complete
+      .mockResolvedValueOnce({
+        content: call("react", { emoji: "😂" }) + call("delete_message", {}),
+      })
+      .mockResolvedValueOnce({ content: "" });
+    await app.run();
+    expect(app.rest.put.mock.calls[0]?.[0]).toContain(
+      `/channels/${CHANNEL}/messages/${CURRENT}/reactions/`,
+    );
+    expect(app.rest.delete).toHaveBeenCalledWith(
+      `/channels/${CHANNEL}/messages/${PREVIOUS}`,
+    );
+  });
+
+  // Proves an `@username` for someone in the conversation reaches Discord as a real ping, and nobody else can be pinged.
+  it("turns a participant's @username into a ping", async () => {
+    const app = await runtime(true);
+    app.complete.mockResolvedValue({ content: "@mia look, not @ghost" });
+    await app.run();
+    const sent = app.rest.post.mock.calls.find(
+      ([route]) => route === `/channels/${CHANNEL}/messages`,
+    );
+    expect(sent?.[1]?.body).toMatchObject({
+      content: `<@${HUMAN}> look, not @ghost`,
+      allowed_mentions: { parse: [], users: [HUMAN] },
+    });
+  });
+
+  // Proves a bad second action cannot cause the first action to execute from a partially accepted batch.
+  it.each([
+    call("not_registered", {}),
+    "<tool_call>not_registered{url:https://example.com/}</tool_call>",
+    "<tool_call>web_fetch{offset:0}</tool_call>",
+    "<tool_call>web_fetch{url:https://example.com/,offset:0}</tool_call>",
+  ])(
+    "rejects a forged tool batch before its first side effect: %s",
+    async (invalid) => {
+      const app = await runtime();
+      app.complete.mockResolvedValue({
+        content: call("react", { message_id: CURRENT, emoji: "😂" }) + invalid,
+      });
+      await app.run();
+      expect(app.rest.put).not.toHaveBeenCalled();
+    },
+  );
+
+  // Proves web/notes round trips preserve exactly one raw human source and every continuation is read-only.
+  it.each([
+    call("web_fetch", { url: "https://example.com/" }),
+    "<tool_call>web_fetch{url:https://example.com/}</tool_call>",
+  ])(
+    "uses fetched data and persistent notes without re-writing the human source: %s",
+    async (toolOutput) => {
+      const app = await runtime(false, true);
+      app.complete
+        .mockResolvedValueOnce({
+          content: toolOutput,
+        })
+        .mockResolvedValueOnce({
+          content: call("scratch_write", {
+            path: "research.md",
+            text: "A real fixture page.",
+            expected_revision: null,
+          }),
+        })
+        .mockResolvedValueOnce({ content: "found it" });
+      await app.run();
+      expect(app.complete).toHaveBeenCalledTimes(3);
+      const requests = app.complete.mock.calls.map(([request]) => request);
+      expect(requests[0]?.remora?.turn?.text).toBe("look that up");
+      for (const request of requests.slice(1)) {
+        expect(request.remora?.write_bank).toBeUndefined();
+        expect(request.remora?.turn).toBeUndefined();
+        expect(request.remora?.speaker).toEqual({
+          bank: `discord:user:${HUMAN}`,
+          id: `discord:user:${HUMAN}`,
+        });
+        expect(request.messages).toContainEqual({
+          role: "user",
+          content: "look that up",
+        });
+        expect(request.messages.at(-1)?.content).toContain(
+          "Harness tool results",
+        );
+        expect(
+          request.messages.filter((m) => m.content === "look that up"),
+        ).toHaveLength(1);
+        expect(request.tools).toEqual([]);
+      }
+      expect(app.store.readNote(CHANNEL, "research.md").text).toBe(
+        "A real fixture page.",
+      );
+      expect(
+        app.rest.post.mock.calls.find(([route]) =>
+          route.endsWith("/messages"),
+        )?.[1]?.body,
+      ).toMatchObject({
+        content: expect.stringContaining("https://example.com/"),
+      });
+    },
+  );
+
+  // Proves classifier-supplied history still reserves space for the actual tool catalogue and results.
+  it("rolls supplied history forward when tool instructions fill its budget", async () => {
+    const app = await runtime(false, true);
+    app.config.llmContextTokens = 6_656;
+    app.config.llmMaxTokens = 256;
+    const current = toConversationMessage(app.message, BOT);
+    app.complete.mockResolvedValue({ content: "hey" });
+    await app.run([
+      {
+        ...current,
+        id: "1000000000000000000",
+        content: `OLD_HISTORY ${"x".repeat(8000)}`,
+        source: { text: `OLD_HISTORY ${"x".repeat(8000)}`, revision: 0 },
+      },
+      current,
+    ]);
+    expect(
+      app.complete.mock.calls[0]?.[0].messages.some((message) =>
+        message.content.includes("OLD_HISTORY"),
+      ),
+    ).toBe(false);
+    expect(app.contextStore.getStart(CHANNEL)).toBe(CURRENT);
+  });
+
+  // Proves server threads, native polls, asset reads and stickers actually cross the SDK action seam.
+  it("runs the approved group actions through Protocord", async () => {
+    const app = await runtime(true);
+    app.config.maxToolCalls = 5;
+    app.complete.mockResolvedValueOnce({
+      content: call("start_thread", { message_id: CURRENT, name: "tangent" }),
+    });
+    await app.run();
+    expect(app.rest.post).toHaveBeenCalledWith(
+      `/channels/${CHANNEL}/messages/${CURRENT}/threads`,
+      expect.objectContaining({
+        body: expect.objectContaining({ name: "tangent" }),
+      }),
+    );
+    app.complete.mockResolvedValueOnce({
+      content: call("create_poll", {
+        question: "Which one?",
+        answers: ["A", "B"],
+        duration_hours: 1,
+      }),
+    });
+    await app.run();
+    expect(
+      app.rest.post.mock.calls.some(
+        ([, options]) =>
+          options?.body &&
+          typeof options.body === "object" &&
+          "poll" in options.body,
+      ),
+    ).toBe(true);
+    app.complete
+      .mockResolvedValueOnce({ content: call("channel_assets", {}) })
+      .mockResolvedValueOnce({
+        content: call("send_sticker", { sticker_id: "1000000000000000011" }),
+      });
+    await app.run();
+    expect(
+      app.rest.post.mock.calls.some(
+        ([, options]) =>
+          options?.body &&
+          typeof options.body === "object" &&
+          "sticker_ids" in options.body,
+      ),
+    ).toBe(true);
+  });
+
+  // Proves retries inside the Discord SDK can deduplicate every tool-created message using a stable enforced nonce.
+  it.each([
+    [
+      "create_poll",
+      { question: "Which one?", answers: ["A", "B"], duration_hours: 1 },
+    ],
+    [
+      "start_thread",
+      { message_id: CURRENT, name: "tangent", text: "over here" },
+    ],
+    ["send_sticker", { sticker_id: "1000000000000000011" }],
+  ])("deduplicates SDK message retries for %s", async (name, args) => {
+    const nonces: unknown[] = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const app = await runtime(true);
+      app.complete.mockResolvedValue({ content: call(String(name), args) });
+      await app.run();
+      const sent = app.rest.post.mock.calls.find(([route]) =>
+        route.endsWith("/messages"),
+      );
+      expect(sent?.[1]?.body).toMatchObject({
+        enforce_nonce: true,
+        nonce: expect.stringMatching(/^[a-f0-9]{25}$/),
+      });
+      const body = sent?.[1]?.body;
+      nonces.push(
+        body && typeof body === "object" && "nonce" in body ? body.nonce : null,
+      );
+    }
+    expect(nonces[1]).toBe(nonces[0]);
+  });
+
+  // Proves escaping-heavy tool data stays within the serialized result budget, preserving the latest read in either protocol.
+  it.each([false, true])(
+    "bounds escaped tool results in native mode %s",
+    async (native) => {
+      const app = await runtime();
+      app.config.llmToolMode = native ? "native" : "tagged";
+      const text = '\\"'.repeat(2000);
+      app.store.writeNote(CHANNEL, "large.md", text, null);
+      const args = { path: "large.md" };
+      const observed: Array<string | undefined> = [];
+      let calls = 0;
+      app.complete.mockImplementation(async (request) => {
+        if (calls > 0)
+          observed.push(
+            native
+              ? `[${request.messages
+                  .filter((message) => message.role === "tool")
+                  .map((message) => message.content)
+                  .join(",")}]`
+              : JSON.stringify(
+                  request.messages
+                    .filter(
+                      (message) =>
+                        message.content.startsWith("Harness tool results") &&
+                        message.content.includes("\n"),
+                    )
+                    .flatMap((message) =>
+                      JSON.parse(
+                        message.content.slice(
+                          message.content.indexOf("\n") + 1,
+                        ),
+                      ),
+                    ),
+                ),
+          );
+        calls++;
+        if (calls === 4) return { content: "read it" };
+        return native
+          ? {
+              content: "",
+              toolCalls: [
+                {
+                  id: `call-escape-${calls}`,
+                  type: "function",
+                  name: "scratch_read",
+                  arguments: JSON.stringify(args),
+                },
+              ],
+            }
+          : { content: call("scratch_read", args) };
+      });
+      await app.run();
+      expect(app.complete).toHaveBeenCalledTimes(4);
+      for (const serialized of observed) {
+        expect(serialized).toBeDefined();
+        expect(serialized?.length).toBeLessThanOrEqual(6000);
+        const results = JSON.parse(serialized ?? "[]");
+        expect(results.at(-1)?.output_excerpt).toContain("\\");
+        if (results.length > 1)
+          expect(results[0]).toEqual({
+            name: "scratch_read",
+            completed: true,
+            truncated: true,
+          });
+      }
+    },
+  );
+
+  // Proves pruning old result data cannot turn an uncertain action into a success receipt.
+  it("keeps failures visible when older result data is pruned", async () => {
+    const app = await runtime();
+    app.store.writeNote(CHANNEL, "large.md", '\\"'.repeat(2000), null);
+    app.rest.put.mockRejectedValue(
+      new Error("connection closed after acceptance"),
+    );
+    app.complete
+      .mockResolvedValueOnce({
+        content: call("react", { message_id: CURRENT, emoji: "😂" }),
+      })
+      .mockResolvedValueOnce({
+        content: call("scratch_read", { path: "large.md" }),
+      })
+      .mockResolvedValueOnce({ content: "read it; the reaction is uncertain" });
+    await app.run();
+    const data = app.complete.mock.calls[2]?.[0].messages
+      .find((message) => message.content.startsWith("Harness tool results"))
+      ?.content.split("\n")
+      .slice(1)
+      .join("\n");
+    expect(JSON.parse(data ?? "[]")[0]).toEqual({
+      name: "react",
+      completed: false,
+      truncated: true,
+      error: "connection closed after acceptance",
+    });
+  });
+
+  // Proves scheduled text delivers once without another model call.
+  it.each([false, true])(
+    "delivers a scoped durable follow-up once, guild=%s",
+    async (guild) => {
+      const app = await runtime(guild);
+      app.config.discordTrialDmChannelId = guild
+        ? "1000000000000000090"
+        : CHANNEL;
+      app.config.discordTrialGuild = {
+        guildId: GUILD,
+        channelIds: [guild ? CHANNEL : "1000000000000000091"],
+      };
+      app.store.schedule(CHANNEL, 2000, "checking in", 1000);
+      app.store.schedule("1000000000000000092", 2000, "out of scope", 1000);
+      await deliverFollowups(app);
+      await deliverFollowups(app);
+      expect(
+        app.rest.post.mock.calls.filter(([route]) =>
+          route.endsWith("/messages"),
+        ),
+      ).toHaveLength(1);
+      expect(app.complete).not.toHaveBeenCalled();
+      expect(app.store.followups(CHANNEL)).toEqual([]);
+    },
+  );
+});

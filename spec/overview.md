@@ -200,7 +200,7 @@ Reserved protocol/control tokens include at least:
 - `<tool_call>` / `</tool_call>`
 - `<tool_result>` / `</tool_result>`
 - `<bot_action>` / `</bot_action>`
-- `<split />`
+- `<|message_split|>` (escaped as `<|message_split_escaped|>`) and legacy `<split />`
 - any future structured response/action tags
 
 Patch must not mention `@everyone`, `@here`, or roles. Discord sends should use restrictive `allowedMentions`.
@@ -241,7 +241,7 @@ The system prompt must explain:
 - In DMs, Patch sends normal messages instead of Discord replies.
 - Final visible answers must be raw Discord-flavored Markdown only.
 - Final visible answers must not include XML tags, JSON wrappers, or transcript metadata.
-- If semantic split hints are enabled, Patch may include the harness-only `<split />` control token in generated text. The harness strips it before posting to Discord.
+- Patch may write the harness-only `<|message_split|>` token directly between Discord messages. The harness splits there, outside code, and strips it before posting. History joins Patch's consecutive messages with the same token and no added newlines. Legacy `<split />` output is still accepted.
 
 ## Discord adapter boundary
 

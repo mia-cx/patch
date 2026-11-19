@@ -1,0 +1,3 @@
+[submodule "protocord"]
+	path = vendor/protocord
+	url = https://github.com/mia-cx/protocord.git
