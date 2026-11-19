@@ -132,13 +132,21 @@ export const selfAction: Action<typeof SelfArgs.Type, string | undefined> = {
     if (input.operation === "add")
       return add(rawEvent, input.statement, self, context);
     if (input.operation === "list") return list(rawEvent, self, context);
-    const page = await self.listEvidence(SELF_BANK);
-    const result = await self.forgetEvidence({
-      bank: SELF_BANK,
-      ids: [input.id],
-      request_id: rawEvent.id,
-      expected_revision: page.revision,
-    });
+    // Every conversation reads this bank: hold generations until the deletion settles,
+    // so no reply recalls the fact after the confirmation.
+    const result = await context.queue.add(
+      async () => {
+        const page = await self.listEvidence(SELF_BANK);
+        return self.forgetEvidence({
+          bank: SELF_BANK,
+          ids: [input.id],
+          request_id: rawEvent.id,
+          expected_revision: page.revision,
+        });
+      },
+      { exclusive: true },
+    );
+    if (!result) throw new Error("Self forget was dropped by the queue");
     context.logger.info(
       { userId: rawEvent.user.id, deleted: result.deleted_ids },
       "forgot self fact",

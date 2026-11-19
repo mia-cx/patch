@@ -365,7 +365,7 @@ describe("Patch's Protocord integration", () => {
       allowed_mentions: { parse: [], replied_user: false },
     });
     expect(body).toMatchObject({
-      content: expect.stringContaining('#1 "my dog"'),
+      content: expect.stringContaining('evidence #1 "my dog"'),
     });
     expect(app.rest.post.mock.calls[0]?.[1]?.body).toMatchObject({
       data: { flags: MessageFlags.Ephemeral },

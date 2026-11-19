@@ -393,9 +393,10 @@ async function presentMemories(
       `${evidence === undefined ? "" : "fact "}#${memory.id} ${escapeMarkdown(memory.text)}`,
   );
   // The saved facts (or the quote when Remora kept no atoms) and a web page's URL; the file has the rest.
+  // Fact and evidence IDs overlap, and `/memory forget` defaults to facts: label both.
   const quotations = (evidence ?? []).map(({ id, atoms, text, source }) =>
     [
-      `#${id}`,
+      `evidence #${id}`,
       atoms?.length
         ? atoms.map((atom) => escapeMarkdown(atom)).join(" ")
         : `"${escapeMarkdown(text)}"`,
