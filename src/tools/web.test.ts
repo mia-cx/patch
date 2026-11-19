@@ -220,6 +220,11 @@ describe("public web reading", () => {
       '<feed><title>Atom news</title><entry><title>Tram stops</title><link href="https://example.com/t"/><updated>2026-11-13T00:00:00Z</updated></entry></feed>',
       "- Tram stops (https://example.com/t) — 2026-11-13T00:00:00Z",
     ],
+    [
+      "application/atom+xml",
+      '<feed><title>Podcast</title><entry><title>Episode</title><link rel="enclosure" href="https://example.com/e.mp3"/><link rel="alternate" href="https://example.com/e"/></entry></feed>',
+      "- Episode (https://example.com/e)",
+    ],
   ])("reads %s feeds as headlines", async (type, body, line) => {
     const request = vi.fn(async () => ({
       status: 200,
@@ -246,6 +251,26 @@ describe("public web reading", () => {
       "nu.nl redirects to a cookie consent page (myprivacy.dpgmedia.nl), so its content is unavailable. Try the site's RSS feed",
     );
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  // Proves an article whose slug mentions consent is followed, not mistaken for a gate.
+  it("follows a redirect to an article about consent", async () => {
+    const request = vi.fn(async (url: URL) =>
+      url.pathname === "/a"
+        ? {
+            status: 301,
+            headers: { location: "https://example.com/news/gdpr-explained" },
+            body: "",
+          }
+        : {
+            status: 200,
+            headers: { "content-type": "text/plain" },
+            body: "article",
+          },
+    );
+    const web = new WebClient({ resolve: publicDNS, request });
+    const page = await web.fetch("https://example.com/a");
+    expect(page.text).toBe("article");
   });
 
   // Proves a slang lookup returns Urban Dictionary's first three senses, cleaned, each cited by its permalink so memory can keep it.

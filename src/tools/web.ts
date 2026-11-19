@@ -8,8 +8,8 @@ import { DOMParser, parseHTML } from "linkedom";
 
 const MAX_BYTES = 2_000_000;
 const PAGE_CHARS = 4_000;
-/** Redirect targets that are cookie/privacy gates rather than the requested page. */
-const CONSENT_WALL = /consent|privacy-gate|cookie-?wall|gdpr/i;
+/** A hostname label or path segment naming a cookie/privacy gate rather than the requested page. */
+const CONSENT_WALL = /^(?:consent|privacy-gate|cookie-?wall|gdpr)$/i;
 const FEED_TYPES = new Set([
   "application/rss+xml",
   "application/atom+xml",
@@ -29,9 +29,15 @@ function feedText(xml: string) {
     title: text(document.documentElement, "title"),
     text: items
       .map((item) => {
+        // RSS puts the URL in the text; Atom in `href`, where a missing rel means alternate.
         const link =
           text(item, "link") ||
-          item.querySelector("link")?.getAttribute("href") ||
+          [...item.querySelectorAll("link")]
+            .find(
+              (node) =>
+                (node.getAttribute("rel") ?? "alternate") === "alternate",
+            )
+            ?.getAttribute("href") ||
           "";
         const date = text(item, "pubDate") || text(item, "updated");
         return `- ${text(item, "title")}${link ? ` (${link})` : ""}${date ? ` — ${date}` : ""}`;
@@ -365,7 +371,11 @@ export class WebClient {
             throw new Error("Redirect has no location");
           const next = this.validateURL(new URL(location, url).href);
           // A consent gate holds no page content; say so instead of returning the gate.
-          if (CONSENT_WALL.test(`${next.hostname}${next.pathname}`))
+          if (
+            [...next.hostname.split("."), ...next.pathname.split("/")].some(
+              (part) => CONSENT_WALL.test(part),
+            )
+          )
             throw new Error(
               `${initial.hostname} redirects to a cookie consent page (${next.hostname}), so its content is unavailable. Try the site's RSS feed (often /rss) or another source.`,
             );
