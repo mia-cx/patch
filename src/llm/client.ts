@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 import type { Config } from "../config.js";
+import { SELF_BANK } from "../conversation/remora.js";
 import type { ModelSettingProvider } from "../settings/store.js";
 import {
   type CompletedGeneration,
@@ -176,14 +177,14 @@ export class LlmClient {
         "This Remora backend requires ACTIVITY_UPDATES_ENABLED=false; activity requests use sampling",
       );
     // Mirrors remoraRequest: a DM reads user + legacy DM + configured + self banks,
-    // a guild channel reads channel + guild + self.
-    const self = this.config.remoraSelfApiKey ? 1 : 0;
+    // a guild channel reads channel + guild + self. Only the user bank is never configured.
+    const self = this.config.remoraSelfApiKey ? [SELF_BANK] : [];
+    const legacy = this.config.discordTrialDmChannelId
+      ? [`discord:dm:${this.config.discordTrialDmChannelId}`]
+      : [];
     const bankCount = Math.max(
-      new Set(this.config.remoraReadBanks).size +
-        1 +
-        (this.config.discordTrialDmChannelId ? 1 : 0) +
-        self,
-      this.config.discordTrialGuild ? 2 + self : 0,
+      new Set([...legacy, ...this.config.remoraReadBanks, ...self]).size + 1,
+      this.config.discordTrialGuild ? 2 + self.length : 0,
     );
     if (
       bankCount > limits.max_read_banks ||

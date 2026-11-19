@@ -103,6 +103,37 @@ describe("Remora contract over the LLM HTTP interface", () => {
     expect(requests[1]?.remora).toBeUndefined();
   });
 
+  // Proves startup budgets the distinct banks a DM request reads: user, legacy DM, configured, self.
+  it.each([
+    ["patch:self,discord:dm:123,a,b,c,d,e", true],
+    ["a,b,c,d,e", true],
+    ["a,b,c,d,e,f", false],
+  ])("checks read-bank capacity for %s", async (banks, fits) => {
+    const config = loadConfig({
+      DISCORD_TOKEN: "test",
+      DISCORD_CLIENT_ID: "test",
+      LLM_TEMPERATURE: "0",
+      DISCORD_TRIAL_DM_CHANNEL_ID: "123",
+      REMORA_SELF_API_KEY: "self",
+      REMORA_READ_BANKS: banks,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          ...contract.capabilities_example,
+          limits: {
+            ...contract.capabilities_example.limits,
+            max_read_banks: 8,
+          },
+        }),
+      ),
+    );
+    const startup = new LlmClient(config).initializeRemora();
+    if (fits) await expect(startup).resolves.not.toThrow();
+    else await expect(startup).rejects.toThrow("exceeds backend bank");
+  });
+
   // Proves a read-only caller can bind the current human without creating a write source.
   it("transports the canonical read-only speaker and accepts no write receipt", async () => {
     const config = loadConfig({
